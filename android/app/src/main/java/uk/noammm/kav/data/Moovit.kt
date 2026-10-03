@@ -280,7 +280,7 @@ object Moovit {
 
     private fun get(base: String, path: String, headers: Map<String, String>): Pair<Int, ByteArray> {
         repeat(2) { attempt ->
-            val url = path.replace(Regex("metro_revision=\\d+"), "metro_revision=$metroRev")
+            val url = path.replace(Regex("(metro_revision|metroRevisionNumber)=\\d+"), "$1=$metroRev")
             val c = (URL(base + url).openConnection() as HttpURLConnection).apply {
                 requestMethod = "GET"; connectTimeout = 20000; readTimeout = 25000
                 for ((k, v) in withRev(headers)) setRequestProperty(k, v)
@@ -401,21 +401,94 @@ object Moovit {
         )
     }
 
-    @Suppress("UNCHECKED_CAST")
     fun agencyRouteType(s: MoovitSession, agencyId: Int): Int {
         agencyMode[agencyId]?.let { return it }
-        val metro = entity(s, 10, s.metroId)?.get(4) as? Map<Int, Any?> ?: return 3
-        val agencies = metro[3] as? List<Any?> ?: return 3
+        loadAgencies(s)
+        return agencyMode[agencyId] ?: 3
+    }
+
+    @Suppress("UNCHECKED_CAST")
+    private fun loadAgencies(s: MoovitSession) {
+        val metro = entity(s, 10, s.metroId)?.get(4) as? Map<Int, Any?> ?: return
+        val agencies = metro[3] as? List<Any?> ?: return
         for (a in agencies) {
             val m = a as? Map<Int, Any?> ?: continue
             val id = m[1] as? Int ?: continue
             agencyMode[id] = (m[3] as? Int) ?: 3
             (m[2] as? String)?.takeIf { it.isNotBlank() }?.let { agencyNames[id] = it }
         }
-        return agencyMode[agencyId] ?: 3
     }
 
     fun agencyName(agencyId: Int): String? = agencyNames[agencyId]
+
+    class LineGroup(
+        val id: Int,
+        val number: String,
+        val name: String,
+        val cities: String,
+        val agencyId: Int,
+        val routeType: Int,
+    )
+
+    private const val STATIC = "https://static.moovitapp.com/v4/"
+
+    // Every line Moovit knows, from the file its own app searches. The name follows the
+    // metro revision, so loading the agencies first brings the revision up to date.
+    @Suppress("UNCHECKED_CAST")
+    fun lineCatalogue(s: MoovitSession): List<LineGroup> {
+        loadAgencies(s)
+        var (code, raw) = get(STATIC, "$metroRev/0/line_search_data_${s.metroId}.gz", emptyMap())
+        if (code != 200) {
+            entity(s, 10, s.metroId)
+            val again = get(STATIC, "$metroRev/0/line_search_data_${s.metroId}.gz", emptyMap())
+            code = again.first; raw = again.second
+        }
+        if (code != 200) throw java.io.IOException("line catalogue HTTP $code")
+        val data = if (raw.size > 2 && raw[0] == 0x1f.toByte() && raw[1] == 0x8b.toByte()) {
+            GZIPInputStream(raw.inputStream()).readBytes()
+        } else raw
+        val r = TReader(data)
+        val out = ArrayList<LineGroup>()
+        repeat(r.i32()) {
+            val section = r.readStruct()
+            val type = section[1] as? Int ?: 3
+            val agency = section[2] as? Int ?: -1
+            for (item in section[3] as? List<Any?> ?: emptyList()) {
+                val m = item as? Map<Int, Any?> ?: continue
+                val id = m[1] as? Int ?: continue
+                val cities = (m[4] as? List<Any?>).orEmpty()
+                    .mapNotNull { (it as? Map<Int, Any?>)?.get(1) as? String }.joinToString(" ")
+                val number = (m[8] as? String)?.ifBlank { null } ?: (m[6] as? String).orEmpty()
+                out.add(LineGroup(id, number, (m[7] as? String).orEmpty(), cities, agency, type))
+            }
+        }
+        return out
+    }
+
+    class LineTrips(val lineId: Int, val patternId: Int, val shapeId: Int, val departures: List<Long>)
+
+    // The trips of one line group on one service day (yyyyMMdd), one entry per trip group:
+    // its line (direction), stop pattern, shape and departures in epoch seconds.
+    @Suppress("UNCHECKED_CAST")
+    fun lineGroupTrips(s: MoovitSession, groupId: Int, serviceDate: String): List<LineTrips> {
+        val qs = "V4/GetLineGroupTrips?serviceDate=$serviceDate&lineGroupId=$groupId&metroAreaId=${s.metroId}" +
+            "&metroRevisionNumber=$metroRev&osTypeId=2&protocolVersionId=4"
+        val (code, raw) = get(APP4CDN, qs, authHeaders(s))
+        if (code != 200) throw java.io.IOException("GetLineGroupTrips HTTP $code")
+        val out = ArrayList<LineTrips>()
+        for (lt in TReader(raw).readStruct()[1] as? List<Any?> ?: emptyList()) {
+            val line = lt as? Map<Int, Any?> ?: continue
+            val lineId = line[1] as? Int ?: continue
+            val patterns = (line[3] as? List<Any?>).orEmpty().mapNotNull { it as? Map<Int, Any?> }
+                .associate { (it[1] as? Int) to ((it[2] as? Int) ?: -1) }
+            for (g in line[2] as? List<Any?> ?: emptyList()) {
+                val group = g as? Map<Int, Any?> ?: continue
+                val departures = (group[3] as? List<Any?>).orEmpty().mapNotNull { (it as? Long)?.div(1000) }
+                out.add(LineTrips(lineId, patterns[group[1] as? Int] ?: -1, (group[2] as? Int) ?: -1, departures))
+            }
+        }
+        return out
+    }
 
     class Place(
         val name: String,

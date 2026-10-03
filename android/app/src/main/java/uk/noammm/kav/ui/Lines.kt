@@ -59,15 +59,20 @@ fun LinesScreen(model: KavModel) {
 
 @Composable
 private fun LinesBody(model: KavModel, net: Net) {
-    androidx.activity.compose.BackHandler(model.lineRoute >= 0) { model.lineRoute = -1 }
+    androidx.activity.compose.BackHandler(model.lineRoute >= 0 || model.moovitLine != null) {
+        model.lineRoute = -1; model.moovitLine = null
+    }
     androidx.compose.animation.AnimatedContent(
-        targetState = model.lineRoute,
+        targetState = model.lineRoute to model.moovitLine,
         modifier = Modifier.fillMaxSize(),
-        transitionSpec = { if (targetState >= 0) forward() else backward() },
+        transitionSpec = { if (targetState.first >= 0 || targetState.second != null) forward() else backward() },
         label = "line",
-    ) { route ->
-        if (route >= 0) LineDetail(model, net, route) { model.lineRoute = -1 }
-        else LineList(model, net)
+    ) { (route, online) ->
+        when {
+            route >= 0 -> LineDetail(model, net, route) { model.lineRoute = -1 }
+            online != null -> OnlineLineDetail(online) { model.moovitLine = null }
+            else -> LineList(model, net)
+        }
     }
 }
 
@@ -84,6 +89,11 @@ private fun LineList(model: KavModel, net: Net) {
     LaunchedEffect(net, q, types, endpoints) {
         sections = withContext(Dispatchers.Default) { foldLines(net, q, types, endpoints) }
     }
+    var online by remember { mutableStateOf(onlineLines) }
+    LaunchedEffect(net) {
+        if (online == null) online = runCatching { missingLines(net) }.getOrNull()?.also { onlineLines = it }
+    }
+    val extra = remember(online, q, types) { shownOnline(online.orEmpty(), q, types) }
     var lead by remember(net) { mutableStateOf(emptyList<Pair<String, List<LineRow>>>()) }
     LaunchedEffect(Unit) {
         if (model.here == null && uk.noammm.kav.hasLocationPermission(ctx)) {
@@ -124,7 +134,7 @@ private fun LineList(model: KavModel, net: Net) {
                 }
             }
             item(key = "count") {
-                val total = sections.sumOf { it.second.size }
+                val total = sections.sumOf { it.second.size } + extra.sumOf { it.second.size }
                 Text(
                     T("$total lines · choose a line to see its stops", "$total קווים · בחרו קו כדי לראות את התחנות שלו"),
                     fontSize = 12.sp, color = K.dim,
@@ -140,6 +150,10 @@ private fun LineList(model: KavModel, net: Net) {
                     SectionLabel(operatorLabel(operator))
                 }
                 items(rows, key = { it.route }) { row -> LineRowCard(model, net, row) }
+            }
+            extra.forEach { (operator, lines) ->
+                item(key = "online-op-$operator") { SectionLabel(operator) }
+                items(lines, key = { "online-${it.id}" }) { g -> OnlineLineCard(g) { model.moovitLine = g } }
             }
         }
         ScrollEdge(listState.canScrollBackward)
@@ -175,7 +189,7 @@ private fun LineRowCard(model: KavModel, net: Net, row: LineRow) {
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(K.gap3),
     ) {
-        LineIdentity(net, row.route)
+        LineIdentity(net.rType[row.route], net.rShort[row.route])
         LineSpan(net, row, Modifier.weight(1f))
         Text(T.onward, fontSize = 22.sp, color = K.dim)
     }
@@ -313,13 +327,11 @@ private fun LineSpan(net: Net, row: LineRow, modifier: Modifier = Modifier) {
 }
 
 @Composable
-private fun LineIdentity(net: Net, route: Int) {
-    val rt = net.rType[route]
+private fun LineIdentity(rt: Int, number: String) {
     val marked = rt == 711 || isRail(rt, -1) || modeOf(rt) == Mode.FUNICULAR ||
         modeOf(rt) == Mode.CABLE || modeOf(rt) == Mode.GONDOLA
     val logoOnly = modeOf(rt) == Mode.FUNICULAR || modeOf(rt) == Mode.CABLE ||
         modeOf(rt) == Mode.GONDOLA
-    val number = net.rShort[route]
     Column(Modifier.widthIn(min = 54.dp, max = 88.dp), horizontalAlignment = Alignment.CenterHorizontally) {
         if (marked) {
             AgencyMark(rt, -1, K.muted, if (number.isBlank() || logoOnly) 26.dp else 17.dp)
@@ -368,7 +380,7 @@ internal fun LineDetail(model: KavModel, net: Net, route: Int, onBack: () -> Uni
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(K.gap3),
         ) {
-            LineIdentity(net, route)
+            LineIdentity(net.rType[route], net.rShort[route])
             LineDirection(net, stops?.takeIf { it.isNotEmpty() }?.let { it.first() to it.last() }, Modifier.weight(1f))
         }
         val list = stops
@@ -479,9 +491,16 @@ private suspend fun lineLive(net: Net, stops: List<Int>, number: String): LineLi
 
 @Composable
 private fun LineMap(net: Net, route: Int, stops: List<Int>, live: LineLive, modifier: Modifier) {
-    val shape = rememberLineRoute(live.shapeId)
-    val tint = plateFor(net.rType[route])?.fill ?: K.route
     val calls = remember(stops) { stops.map { net.lat[it] to net.lon[it] } }
+    LineRouteMap(calls, rememberLineRoute(live.shapeId), net.rType[route], live.vehicles, modifier)
+}
+
+@Composable
+private fun LineRouteMap(
+    calls: List<Pair<Double, Double>>, shape: List<Pair<Double, Double>>, rt: Int,
+    vehicles: List<Moovit.Arrival>, modifier: Modifier,
+) {
+    val tint = plateFor(rt)?.fill ?: K.route
     val path = shape.ifEmpty { calls }
     val geometry = remember(path, calls, tint, K.light) {
         val start = onRoute(calls.first(), path)
@@ -499,10 +518,10 @@ private fun LineMap(net: Net, route: Int, stops: List<Int>, live: LineLive, modi
             ),
         )
     }
-    val mode = modeOf(net.rType[route])
+    val mode = modeOf(rt)
     TileMap(
         path, modifier, geometry = geometry,
-        live = vehicleGeometry(live.vehicles.map { it to mode }),
+        live = vehicleGeometry(vehicles.map { it to mode }),
     )
 }
 
@@ -554,6 +573,228 @@ private fun startLabel(at: Long): String {
         else -> {
             val day = java.util.Calendar.getInstance().apply { add(java.util.Calendar.DAY_OF_YEAR, days) }
             java.text.SimpleDateFormat("EEEE", T.locale).format(day.time) + " " + time
+        }
+    }
+}
+
+// Lines Moovit has and the national timetable does not: municipal services such as Na'im
+// BaSofash, and shuttles. Kept for the run, since the file only changes with Moovit's data.
+private var onlineLines: List<Moovit.LineGroup>? = null
+
+private const val NAIM = 2910830
+
+private fun flat(s: String) = s.lowercase().filter { it.isLetterOrDigit() }
+
+private fun words(s: String) = s.lowercase().split(Regex("[^\\p{L}\\p{N}]+")).filter { it.isNotEmpty() }
+
+// An operator is in the timetable when its name, or its English alias in brackets, is one
+// of the timetable's, or one of those appears in it as whole words ("... - תבל - ...").
+private fun inTimetable(name: String, flats: Set<String>, runs: List<List<String>>): Boolean {
+    val alias = name.substringAfter("(", "").substringBefore(")")
+    if (listOf(name, name.substringBefore(" ("), alias).any { flat(it).let { f -> f.isNotEmpty() && f in flats } }) return true
+    val w = words(name)
+    return runs.any { k -> k.isNotEmpty() && w.windowed(k.size).any { it == k } }
+}
+
+private suspend fun missingLines(net: Net): List<Moovit.LineGroup> = withContext(Dispatchers.IO) {
+    val all = Moovit.lineCatalogue(Online.open())
+    val flats = net.agency.map(::flat).toSet()
+    val runs = net.agency.map(::words)
+    val known = HashMap<Int, Boolean>()
+    all.filter { g ->
+        val name = Moovit.agencyName(g.agencyId) ?: return@filter false
+        !known.getOrPut(g.agencyId) { inTimetable(name, flats, runs) }
+    }
+}
+
+// Moovit files these shuttles as type 7, which in the timetable is the Carmelit.
+private fun onlineType(g: Moovit.LineGroup) = if (g.routeType == 7) 711 else g.routeType
+
+private fun operatorOf(g: Moovit.LineGroup): String =
+    if (g.agencyId == NAIM) T("Na'im BaSofash", "נעים בסופ״ש") else Moovit.agencyName(g.agencyId).orEmpty()
+
+// Found by either name in either language, typed with or without the gershayim.
+private fun aliases(g: Moovit.LineGroup): String =
+    if (g.agencyId == NAIM) "na'im naim basofash נעים בסופ״ש בסופ\"ש בסופש" else Moovit.agencyName(g.agencyId).orEmpty()
+
+private fun shownOnline(lines: List<Moovit.LineGroup>, q: String, types: IntArray): List<Pair<String, List<Moovit.LineGroup>>> {
+    val need = q.trim().lowercase().split(Regex("\\s+")).filter { it.isNotEmpty() }
+    return lines.filter { g ->
+        (types.isEmpty() || onlineType(g) in types) &&
+            "${g.number} ${g.name} ${g.cities} ${operatorOf(g)} ${aliases(g)}".lowercase().let { h -> need.all { it in h } }
+    }.groupBy(::operatorOf).mapValues { (_, gs) ->
+        gs.sortedWith(compareBy({ it.number.toIntOrNull() ?: Int.MAX_VALUE }, { it.number }, { it.cities }))
+    }.toList()
+}
+
+@Composable
+private fun OnlineLineCard(g: Moovit.LineGroup, onClick: () -> Unit) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .padding(vertical = K.gap1)
+            .panel(K.rControl)
+            .clickable(onClick = onClick)
+            .padding(K.gap3),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(K.gap3),
+    ) {
+        LineIdentity(onlineType(g), g.number)
+        Column(Modifier.weight(1f)) {
+            Text(
+                g.cities.ifBlank { g.name }, fontSize = 15.sp, lineHeight = 21.sp, fontWeight = FontWeight.Medium,
+                color = K.text, maxLines = 2, overflow = TextOverflow.Ellipsis,
+            )
+            if (g.cities.isNotBlank() && g.name.isNotBlank()) Text(
+                g.name, fontSize = 12.sp, lineHeight = 17.sp, color = K.dim, maxLines = 2, overflow = TextOverflow.Ellipsis,
+            )
+        }
+        Text(T.onward, fontSize = 22.sp, color = K.dim)
+    }
+}
+
+private class OnlineDirection(
+    val lineId: Int,
+    val stops: List<Moovit.StopInfo>,
+    val shape: List<Pair<Double, Double>>,
+    val departures: List<Long>,
+)
+
+private class OnlineLine(val directions: List<OnlineDirection>, val failed: Boolean = false)
+
+// The line's trips on the first day within a week that still has a departure to come,
+// one direction per Moovit line, with the stops and shape of its usual trip.
+private suspend fun loadOnlineLine(g: Moovit.LineGroup): OnlineLine = withContext(Dispatchers.IO) {
+    val s = Online.open()
+    val now = System.currentTimeMillis() / 1000
+    val day = java.text.SimpleDateFormat("yyyyMMdd", java.util.Locale.US)
+        .apply { timeZone = java.util.TimeZone.getTimeZone("Asia/Jerusalem") }
+    var trips = emptyList<Moovit.LineTrips>()
+    for (k in 0..7) {
+        val found = Moovit.lineGroupTrips(s, g.id, day.format(java.util.Date((now + k * 86_400L) * 1000)))
+        if (found.isEmpty()) continue
+        if (trips.isEmpty()) trips = found
+        if (found.any { t -> t.departures.any { it >= now } }) { trips = found; break }
+    }
+    val directions = trips.groupBy { it.lineId }.map { (lineId, ts) ->
+        async {
+            val usual = ts.maxBy { it.departures.size }
+            val ids = Moovit.tripPattern(s, usual.patternId)
+            val stops = ids.chunked(6).flatMap { batch ->
+                batch.map { id -> async { runCatching { Moovit.stopInfo(s, id) }.getOrNull() } }.awaitAll()
+            }.filterNotNull().filter { it.point != null }
+            val shape = runCatching { Moovit.tripShape(s, usual.shapeId) }.getOrDefault(emptyList())
+            OnlineDirection(lineId, stops, shape, ts.flatMap { it.departures }.sorted())
+        }
+    }.awaitAll().filter { it.stops.size >= 2 }
+    OnlineLine(directions)
+}
+
+@Composable
+internal fun OnlineLineDetail(g: Moovit.LineGroup, onBack: () -> Unit) {
+    val line by produceState<OnlineLine?>(null, g.id) {
+        value = try { loadOnlineLine(g) } catch (e: kotlinx.coroutines.CancellationException) { throw e } catch (e: Exception) {
+            OnlineLine(emptyList(), failed = true)
+        }
+    }
+    var pick by remember(g.id) { mutableIntStateOf(0) }
+    val dir = line?.directions?.getOrNull(pick)
+    Column(Modifier.fillMaxSize().background(K.bg)) {
+        ScreenHeader(T("Line", "קו"), g.number, back = onBack)
+        Row(
+            Modifier.padding(horizontal = K.gap4).fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(K.gap3),
+        ) {
+            LineIdentity(onlineType(g), g.number)
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(K.gap1)) {
+                val to = dir?.stops?.lastOrNull()?.name
+                Text(
+                    if (to != null) T("To \u2068$to\u2069", "אל \u2068$to\u2069") else g.cities.ifBlank { g.name },
+                    fontSize = 15.sp, lineHeight = 20.sp, fontWeight = FontWeight.Medium, color = K.text,
+                    maxLines = 2, overflow = TextOverflow.Ellipsis,
+                )
+                Text(operatorOf(g), fontSize = 12.sp, color = K.dim, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
+        }
+        val directions = line?.directions.orEmpty()
+        if (directions.size > 1) Row(
+            Modifier.padding(horizontal = K.gap3).padding(top = K.gap3).horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(K.gap2),
+        ) {
+            directions.forEachIndexed { i, d ->
+                Chip(T("To ${d.stops.last().name}", "אל ${d.stops.last().name}"), i == pick) { pick = i }
+            }
+        }
+        when {
+            line == null -> LoadingBlock(T("Loading the line", "טוענים את הקו…"))
+            dir == null -> Note(
+                if (line?.failed == true) T("Couldn't load this line from Moovit.", "לא ניתן היה לטעון את הקו הזה מ-Moovit.")
+                else T("This line has no trips in the coming week.", "אין לקו הזה נסיעות בשבוע הקרוב."),
+                Modifier.padding(K.gap4),
+            )
+            else -> OnlineDirectionView(dir)
+        }
+    }
+}
+
+@Composable
+private fun OnlineDirectionView(dir: OnlineDirection) {
+    val live by produceState(LineLive(checked = false), dir.lineId) {
+        while (true) {
+            value = try {
+                withContext(Dispatchers.IO) {
+                    val arrivals = Moovit.stopArrivals(Online.open(), dir.stops.map { it.id }.take(60)).first.values
+                    LineLive(
+                        checked = true,
+                        vehicles = arrivals.filter { it.lineId == dir.lineId && it.hasLocation }
+                            .groupBy { it.tripId }.values.map { at -> at.minBy { it.departure().timeUtc } },
+                    )
+                }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                if (value.checked && !value.failed) value else LineLive(checked = true, failed = true)
+            }
+            delay(20_000)
+        }
+    }
+    val calls = remember(dir) { dir.stops.mapNotNull { it.point } }
+    LineRouteMap(
+        calls, dir.shape, 3, live.vehicles,
+        Modifier.padding(horizontal = K.gap3).padding(top = K.gap3).fillMaxWidth().height(210.dp).panel(K.rCard),
+    )
+    val next = remember(dir) {
+        val now = System.currentTimeMillis() / 1000
+        dir.departures.firstOrNull { it >= now }?.let { at ->
+            val from = dir.stops.first().name
+            val label = startLabel(at - (now - nowSec()))
+            T("Next departure from $from: $label", "היציאה הבאה מ-$from: $label")
+        }
+    }
+    LineLiveNote(live, next)
+    Text(
+        T("${dir.stops.size} stops · full route", "${dir.stops.size} תחנות · המסלול המלא"),
+        fontSize = 11.sp, color = K.dim, modifier = Modifier.padding(horizontal = K.gap4, vertical = K.gap2),
+    )
+    LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(
+        start = K.gap2, end = K.gap2, bottom = LocalBottomBarInset.current,
+    )) {
+        items(dir.stops.size) { i ->
+            val ends = i == 0 || i == dir.stops.lastIndex
+            Row(
+                Modifier.fillMaxWidth().padding(horizontal = K.gap3, vertical = 9.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Box(Modifier.width(18.dp), contentAlignment = Alignment.Center) {
+                    Box(Modifier.size(7.dp).clip(RoundedCornerShape(999.dp)).background(if (ends) K.text else K.surface4))
+                }
+                Spacer(Modifier.width(K.gap3))
+                Text(
+                    dir.stops[i].name, fontSize = 13.sp, color = if (ends) K.text else K.muted,
+                    maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f),
+                )
+            }
         }
     }
 }

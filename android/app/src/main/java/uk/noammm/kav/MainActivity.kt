@@ -218,6 +218,7 @@ class KavModel(net: Net? = null, ctx: Context? = null) : ViewModel() {
 
     var stationStop by mutableIntStateOf(-1)
     var lineRoute by mutableIntStateOf(-1)
+    var moovitLine by mutableStateOf<Moovit.LineGroup?>(null)
 
     var stopQuery by mutableStateOf("")
     var lineQuery by mutableStateOf("")
@@ -541,7 +542,7 @@ private fun Shell(model: KavModel) {
         when {
             model.settingsOpen -> { model.settingsOpen = false; model.tab = Tab.Directions }
             model.tab != Tab.Directions -> {
-                model.stationStop = -1; model.lineRoute = -1
+                model.stationStop = -1; model.lineRoute = -1; model.moovitLine = null
                 model.tab = Tab.Directions
             }
             else -> exitAsk = true
@@ -763,7 +764,7 @@ private fun TabBar(model: KavModel) {
                 selected = on,
                 onClick = {
                     model.settingsOpen = false
-                    if (on) { model.stationStop = -1; model.lineRoute = -1 }
+                    if (on) { model.stationStop = -1; model.lineRoute = -1; model.moovitLine = null }
                     if (t == Tab.Directions) model.returnHome = true
                     model.tab = t
                 },
