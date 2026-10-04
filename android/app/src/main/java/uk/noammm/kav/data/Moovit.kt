@@ -87,27 +87,44 @@ object Moovit {
         stop()
     }.bytes()
 
-    fun register(lat: Double = NEUTRAL.first, lon: Double = NEUTRAL.second): MoovitSession {
-        val (la, lo) = if (shareLocation) lat to lon else standIn() ?: NEUTRAL
-        val h = mapOf(
-            "Content-Type" to "application/octet", "Accept" to "application/json",
-            "Accept-Encoding" to "gzip", "User-Agent" to "ktor-client",
-            "api_key" to APP_ID, "client_version" to CLIENT_VERSION, "phone_type" to "2",
-        )
-        // Moovit's CDN refuses a new user asked for with a revision; the answer names the current one.
-        val (code, raw) = post(APP4, "UserAuth/CreateUser", createUserBody(la, lo), h, revision = false)
-        if (code != 200) throw RuntimeException("CreateUser HTTP $code")
-        val rec = JSONObject(String(raw, Charsets.UTF_8)).getJSONObject("1").getJSONObject("rec")
-        val tokens = rec.getJSONObject("7").getJSONObject("rec").getJSONObject("1").getJSONObject("rec")
+    private val userHeaders = mapOf(
+        "Content-Type" to "application/octet", "Accept" to "application/json",
+        "Accept-Encoding" to "gzip", "User-Agent" to "Dalvik/2.1.0",
+        "api_key" to APP_ID, "client_version" to CLIENT_VERSION, "phone_type" to "2",
+    )
+
+    private fun sessionOf(userKey: String, metroId: Int, tokens: JSONObject): MoovitSession {
         val access = tokens.getJSONObject("1").getJSONObject("rec")
         val refresh = tokens.getJSONObject("2").getJSONObject("rec")
         return MoovitSession(
-            userKey = rec.getJSONObject("1").getString("str"),
+            userKey = userKey,
             accessToken = access.getJSONObject("3").getString("str"),
             accessExpiresUtc = access.getJSONObject("2").getLong("i64") / 1000,
             refreshToken = refresh.getJSONObject("3").getString("str"),
-            metroId = rec.getJSONObject("3").getInt("i16"),
+            metroId = metroId,
         )
+    }
+
+    fun register(lat: Double = NEUTRAL.first, lon: Double = NEUTRAL.second): MoovitSession {
+        val (la, lo) = if (shareLocation) lat to lon else standIn() ?: NEUTRAL
+        // Moovit's CDN refuses a new user asked for with a revision, or by "ktor-client"; the answer
+        // names the current revision.
+        val (code, raw) = post(APP4, "UserAuth/CreateUser", createUserBody(la, lo), userHeaders, revision = false)
+        if (code != 200) throw RuntimeException("CreateUser HTTP $code")
+        val rec = JSONObject(String(raw, Charsets.UTF_8)).getJSONObject("1").getJSONObject("rec")
+        return sessionOf(
+            rec.getJSONObject("1").getString("str"), rec.getJSONObject("3").getInt("i16"),
+            rec.getJSONObject("7").getJSONObject("rec").getJSONObject("1").getJSONObject("rec"),
+        )
+    }
+
+    // Another day of access for the same user, the way Moovit's app renews its own. The refresh
+    // token lasts for years.
+    fun renew(s: MoovitSession): MoovitSession {
+        val body = TWriter().apply { strField(1, s.refreshToken); stop() }.bytes()
+        val (code, raw) = post(APP4, "UserAuth/RefreshTokens", body, userHeaders, revision = false)
+        if (code != 200) throw RuntimeException("RefreshTokens HTTP $code")
+        return sessionOf(s.userKey, s.metroId, JSONObject(String(raw, Charsets.UTF_8)).getJSONObject("1").getJSONObject("rec"))
     }
 
     private fun authHeaders(s: MoovitSession) = mapOf(

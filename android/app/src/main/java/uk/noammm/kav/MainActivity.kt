@@ -136,6 +136,7 @@ class MainActivity : ComponentActivity() {
         Moovit.shareLocation = !Prefs.privateSearch(this)
         MapFile.init(this)
         StopPhotos.init(this)
+        Online.init(this)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             addOnPictureInPictureModeChangedListener { Pip.active = it.isInPictureInPictureMode }
         }
