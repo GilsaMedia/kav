@@ -6,11 +6,14 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.repeatOnLifecycle
 import kotlinx.coroutines.flow.collect
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -62,6 +65,7 @@ private fun LinesBody(model: KavModel, net: Net) {
     androidx.activity.compose.BackHandler(model.lineRoute >= 0 || model.moovitLine != null) {
         model.lineRoute = -1; model.moovitLine = null
     }
+    val list = remember(net) { LineListState() }
     androidx.compose.animation.AnimatedContent(
         targetState = model.lineRoute to model.moovitLine,
         modifier = Modifier.fillMaxSize(),
@@ -71,18 +75,29 @@ private fun LinesBody(model: KavModel, net: Net) {
         when {
             route >= 0 -> LineDetail(model, net, route) { model.lineRoute = -1 }
             online != null -> OnlineLineDetail(online) { model.moovitLine = null }
-            else -> LineList(model, net)
+            else -> LineList(model, net, list)
         }
     }
 }
 
+// Kept while a line is open, so coming back lands where the list was.
+private class LineListState {
+    var types by mutableStateOf(FILTERS[0].second)
+    val scroll = LazyListState()
+    var scrolled by mutableStateOf(false)
+    var sections by mutableStateOf(emptyList<Pair<String, List<LineRow>>>())
+    var endpoints by mutableStateOf(emptyMap<Int, Pair<Int, Int>>())
+    var lead by mutableStateOf(emptyList<Pair<String, List<LineRow>>>())
+}
+
 @Composable
-private fun LineList(model: KavModel, net: Net) {
+private fun LineList(model: KavModel, net: Net, list: LineListState) {
     val ctx = androidx.compose.ui.platform.LocalContext.current
     var q by model::lineQuery
-    var types by remember { mutableStateOf(FILTERS[0].second) }
-    var sections by remember(net) { mutableStateOf(emptyList<Pair<String, List<LineRow>>>()) }
-    var endpoints by remember(net) { mutableStateOf(emptyMap<Int, Pair<Int, Int>>()) }
+    var types by list::types
+    val listState = list.scroll
+    var sections by list::sections
+    var endpoints by list::endpoints
     LaunchedEffect(net) {
         endpoints = withContext(Dispatchers.Default) { lineEndpoints(net) }
     }
@@ -91,13 +106,14 @@ private fun LineList(model: KavModel, net: Net) {
     }
     var online by remember { mutableStateOf(onlineLines) }
     LaunchedEffect(net) {
-        if (online == null) online = runCatching { missingLines(net) }.getOrNull()?.also { onlineLines = it }
+        if (online == null) online = runCatching { missingLines(net) }.getOrNull()
+            ?.also { if (it.isNotEmpty()) onlineLines = it }
     }
     val extra = remember(online, q, types) { shownOnline(online.orEmpty(), q, types) }
-    var lead by remember(net) { mutableStateOf(emptyList<Pair<String, List<LineRow>>>()) }
+    var lead by list::lead
     LaunchedEffect(Unit) {
         if (model.here == null && uk.noammm.kav.hasLocationPermission(ctx)) {
-            uk.noammm.kav.requestLocationOnce(ctx) { model.here = it }
+            uk.noammm.kav.requestLocationOnce(ctx) { model.locate(it.first, it.second) }
         }
     }
     LaunchedEffect(net, endpoints, model.here, q, types) {
@@ -107,8 +123,7 @@ private fun LineList(model: KavModel, net: Net) {
 
     Column(Modifier.fillMaxSize()) {
         ScreenHeader(T("Browse the", "עיינו"), T("lines", "בקווים"))
-        val listState = rememberLazyListState()
-        var scrolled by remember(net) { mutableStateOf(false) }
+        var scrolled by list::scrolled
         LaunchedEffect(listState) {
             snapshotFlow { listState.isScrollInProgress }.collect { if (it) scrolled = true }
         }
@@ -318,7 +333,7 @@ private fun LineSpan(net: Net, row: LineRow, modifier: Modifier = Modifier) {
     val text = when {
         a == b -> "⁨$a⁩"
         row.both -> "⁨$a⁩ ↔ ⁨$b⁩"
-        else -> "⁨$a⁩ → ⁨$b⁩"
+        else -> T("⁨$a⁩ → ⁨$b⁩", "⁨$a⁩ ← ⁨$b⁩")
     }
     Text(
         text, fontSize = 15.sp, lineHeight = 21.sp, fontWeight = FontWeight.Medium,
@@ -450,17 +465,20 @@ private class LineLive(
 
 @Composable
 private fun rememberLineLive(net: Net, route: Int, stops: List<Int>): LineLive {
-    val live by produceState(LineLive(checked = false), route, stops) {
-        val number = net.rShort[route].trim()
-        while (true) {
-            value = try {
-                withContext(Dispatchers.IO) { lineLive(net, stops, number) }
-            } catch (e: kotlinx.coroutines.CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                if (value.checked && !value.failed) value else LineLive(checked = true, failed = true)
+    val lifecycle = LocalLifecycleOwner.current.lifecycle
+    val live by produceState(LineLive(checked = false), route, stops, lifecycle) {
+        lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
+            val number = net.rShort[route].trim()
+            while (true) {
+                value = try {
+                    withContext(Dispatchers.IO) { lineLive(net, stops, number) }
+                } catch (e: kotlinx.coroutines.CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    if (value.checked && !value.failed) value else LineLive(checked = true, failed = true)
+                }
+                delay(20_000)
             }
-            delay(20_000)
         }
     }
     return live
@@ -549,7 +567,7 @@ private fun LineLiveNote(live: LineLive, next: String?) {
 
 // Seconds from today's midnight.
 private fun nextStart(net: Net, route: Int): Pair<Int, Long>? {
-    val today = java.util.Calendar.getInstance().get(java.util.Calendar.DAY_OF_WEEK) - 1
+    val today = java.util.Calendar.getInstance(ISRAEL).get(java.util.Calendar.DAY_OF_WEEK) - 1
     val now = nowSec()
     var best = -1
     var bestAt = Long.MAX_VALUE
@@ -571,8 +589,8 @@ private fun startLabel(at: Long): String {
         0 -> T("today $time", "היום $time")
         1 -> T("tomorrow $time", "מחר $time")
         else -> {
-            val day = java.util.Calendar.getInstance().apply { add(java.util.Calendar.DAY_OF_YEAR, days) }
-            java.text.SimpleDateFormat("EEEE", T.locale).format(day.time) + " " + time
+            val day = java.util.Calendar.getInstance(ISRAEL).apply { add(java.util.Calendar.DAY_OF_YEAR, days) }
+            java.text.SimpleDateFormat("EEEE", T.locale).apply { timeZone = ISRAEL }.format(day.time) + " " + time
         }
     }
 }
@@ -670,12 +688,14 @@ private suspend fun loadOnlineLine(g: Moovit.LineGroup): OnlineLine = withContex
     val day = java.text.SimpleDateFormat("yyyyMMdd", java.util.Locale.US)
         .apply { timeZone = java.util.TimeZone.getTimeZone("Asia/Jerusalem") }
     var trips = emptyList<Moovit.LineTrips>()
-    for (k in 0..7) {
+    var fallback = emptyList<Moovit.LineTrips>()
+    for (k in -1..7) {
         val found = Moovit.lineGroupTrips(s, g.id, day.format(java.util.Date((now + k * 86_400L) * 1000)))
         if (found.isEmpty()) continue
-        if (trips.isEmpty()) trips = found
+        if (k >= 0 && fallback.isEmpty()) fallback = found
         if (found.any { t -> t.departures.any { it >= now } }) { trips = found; break }
     }
+    if (trips.isEmpty()) trips = fallback
     val directions = trips.groupBy { it.lineId }.map { (lineId, ts) ->
         async {
             val usual = ts.maxBy { it.departures.size }
@@ -740,23 +760,26 @@ internal fun OnlineLineDetail(g: Moovit.LineGroup, onBack: () -> Unit) {
 
 @Composable
 private fun OnlineDirectionView(dir: OnlineDirection) {
-    val live by produceState(LineLive(checked = false), dir.lineId) {
-        while (true) {
-            value = try {
-                withContext(Dispatchers.IO) {
-                    val arrivals = Moovit.stopArrivals(Online.open(), dir.stops.map { it.id }.take(60)).first.values
-                    LineLive(
-                        checked = true,
-                        vehicles = arrivals.filter { it.lineId == dir.lineId && it.hasLocation }
-                            .groupBy { it.tripId }.values.map { at -> at.minBy { it.departure().timeUtc } },
-                    )
+    val lifecycle = LocalLifecycleOwner.current.lifecycle
+    val live by produceState(LineLive(checked = false), dir.lineId, lifecycle) {
+        lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
+            while (true) {
+                value = try {
+                    withContext(Dispatchers.IO) {
+                        val arrivals = Moovit.stopArrivals(Online.open(), dir.stops.map { it.id }.take(60)).first.values
+                        LineLive(
+                            checked = true,
+                            vehicles = arrivals.filter { it.lineId == dir.lineId && it.hasLocation }
+                                .groupBy { it.tripId }.values.map { at -> at.minBy { it.departure().timeUtc } },
+                        )
+                    }
+                } catch (e: kotlinx.coroutines.CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    if (value.checked && !value.failed) value else LineLive(checked = true, failed = true)
                 }
-            } catch (e: kotlinx.coroutines.CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                if (value.checked && !value.failed) value else LineLive(checked = true, failed = true)
+                delay(20_000)
             }
-            delay(20_000)
         }
     }
     val calls = remember(dir) { dir.stops.mapNotNull { it.point } }

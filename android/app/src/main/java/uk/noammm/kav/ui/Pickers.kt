@@ -1,6 +1,5 @@
 package uk.noammm.kav.ui
 
-import android.Manifest
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
@@ -33,6 +32,7 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import uk.noammm.kav.LOCATION_PERMISSIONS
 import uk.noammm.kav.hasLocationPermission
 import uk.noammm.kav.requestLocationOnce
 import uk.noammm.kav.data.Moovit
@@ -117,7 +117,7 @@ fun PlacePicker(
     title: String,
     here: Pair<Double, Double>?,
     allowMyLocation: Boolean,
-    onMyLocation: () -> Unit,
+    onMyLocation: (Pair<Double, Double>) -> Unit,
     onPick: (Moovit.Place) -> Unit,
     onDismiss: () -> Unit,
     initialSetting: Favourite? = null,
@@ -176,9 +176,7 @@ fun PlacePicker(
         val near = async(kotlinx.coroutines.Dispatchers.Default) {
             try {
                 val n = net ?: uk.noammm.kav.loadNet(ctx)
-                n.stopsMatching(q, at) { modeName(modeOf(it)) }.also { StopPhotos.prefetchNet(n, it) }.map { i ->
-                    placeOf(n, i, at?.let { Math.round(metres(it.first, it.second, n.lat[i], n.lon[i])).toInt() } ?: -1)
-                }
+                n.stopsMatching(q, at) { modeName(modeOf(it)) }.also { StopPhotos.prefetchNet(n, it) }.map { placeOf(n, it) }
             } catch (e: kotlinx.coroutines.CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -215,11 +213,25 @@ fun PlacePicker(
     val leave: () -> Unit = { if (setting != null && initialSetting == null) setting = null else onDismiss() }
     androidx.activity.compose.BackHandler(onBack = leave)
     var locating by remember { mutableStateOf(false) }
+    var locateFailed by remember { mutableStateOf(false) }
+    var shown by remember { mutableStateOf(true) }
+    DisposableEffect(Unit) { onDispose { shown = false } }
+    fun startLocating() {
+        locating = true; locateFailed = false
+        var used = false
+        requestLocationOnce(ctx, onFail = { locating = false; locateFailed = true }) {
+            onLocate(it)
+            if (!used && shown) { used = true; onMyLocation(it) }
+            locating = false
+        }
+    }
     val askHere = rememberLauncherForActivityResult(
-        ActivityResultContracts.RequestPermission(),
-    ) { ok ->
-        if (ok) { locating = true; requestLocationOnce(ctx) { onLocate(it); locating = false } }
-        else locating = false
+        ActivityResultContracts.RequestMultiplePermissions(),
+    ) { granted ->
+        if (granted.values.any { it }) startLocating() else locating = false
+    }
+    LaunchedEffect(here == null) {
+        if (allowMyLocation && here == null && hasLocationPermission(ctx)) requestLocationOnce(ctx, onResult = onLocate)
     }
     val showRecents = q.isBlank() && recents.isNotEmpty()
     val found = q.isNotBlank() && (places.isNotEmpty() || stations.isNotEmpty())
@@ -264,13 +276,9 @@ fun PlacePicker(
                 Modifier.fillMaxWidth().padding(horizontal = K.gap3, vertical = K.gap2).heightIn(min = 48.dp)
                     .glassSurface(24.dp)
                     .clickable(role = Role.Button) {
-                        if (ready) onMyLocation()
-                        else if (hasLocationPermission(ctx)) {
-                            locating = true
-                            requestLocationOnce(ctx) { onLocate(it); locating = false }
-                        } else {
-                            askHere.launch(Manifest.permission.ACCESS_COARSE_LOCATION)
-                        }
+                        if (ready) here?.let(onMyLocation)
+                        else if (hasLocationPermission(ctx)) startLocating()
+                        else askHere.launch(LOCATION_PERMISSIONS)
                     }
                     .padding(horizontal = K.gap4, vertical = K.gap3),
                 verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(K.gap2),
@@ -280,10 +288,13 @@ fun PlacePicker(
                         .background(if (ready) K.live else K.dim),
                 )
                 Text(
-                    if (ready) T("My location", "המיקום שלי") else if (locating) T("Finding you…", "מאתרים אתכם…") else T("Use my location", "השתמשו במיקום שלי"),
+                    if (ready) T("My location", "המיקום שלי")
+                    else if (locating) T("Finding you…", "מאתרים אתכם…")
+                    else if (locateFailed) T("Couldn't find your location", "לא הצלחנו למצוא את המיקום שלכם")
+                    else T("Use my location", "השתמשו במיקום שלי"),
                     fontSize = 15.sp, color = if (ready) K.live else K.muted,
                 )
-                if (!ready && !locating) Text(
+                if (!ready && !locating && !locateFailed && !hasLocationPermission(ctx)) Text(
                     T("location is off", "המיקום כבוי"),
                     fontSize = 12.sp, color = K.dim, modifier = Modifier.padding(start = K.gap1),
                 )
@@ -316,12 +327,12 @@ fun PlacePicker(
                     }
                 }
             }
-            items(recents) { p -> Box(Modifier.padding(horizontal = K.gap2)) { PlaceRow(p) { pick(p) } } }
+            items(recents) { p -> Box(Modifier.padding(horizontal = K.gap2)) { PlaceRow(p, here) { pick(p) } } }
         } else if (found) {
             if (places.isNotEmpty()) item { Box(Modifier.padding(horizontal = K.gap2)) { SectionTitle(T("Places", "מקומות")) } }
-            items(places) { p -> Box(Modifier.padding(horizontal = K.gap2)) { PlaceRow(p) { pick(p) } } }
+            items(places) { p -> Box(Modifier.padding(horizontal = K.gap2)) { PlaceRow(p, here) { pick(p) } } }
             if (stations.isNotEmpty()) item { Box(Modifier.padding(horizontal = K.gap2)) { SectionTitle(T("Stations", "תחנות")) } }
-            items(stations) { p -> Box(Modifier.padding(horizontal = K.gap2)) { PlaceRow(p) { pick(p) } } }
+            items(stations) { p -> Box(Modifier.padding(horizontal = K.gap2)) { PlaceRow(p, here) { pick(p) } } }
         }
     }
     }
@@ -383,7 +394,7 @@ fun StopMapPicker(
     androidx.activity.compose.BackHandler { onDismiss() }
     val ctx = androidx.compose.ui.platform.LocalContext.current
     LaunchedEffect(here == null) {
-        if (here == null && hasLocationPermission(ctx)) requestLocationOnce(ctx, onLocate)
+        if (here == null && hasLocationPermission(ctx)) requestLocationOnce(ctx, onResult = onLocate)
     }
     var loaded by remember { mutableStateOf(net) }
     var loadError by remember { mutableStateOf<String?>(null) }
@@ -585,7 +596,7 @@ private fun SectionTitle(text: String) {
 }
 
 @Composable
-private fun PlaceRow(p: Moovit.Place, onClick: () -> Unit) {
+private fun PlaceRow(p: Moovit.Place, here: Pair<Double, Double>?, onClick: () -> Unit) {
     Row(
         Modifier.fillMaxWidth().padding(vertical = K.gap1).heightIn(min = 48.dp).panel(K.rControl)
             .clickable(role = Role.Button, onClick = onClick)
@@ -596,8 +607,10 @@ private fun PlaceRow(p: Moovit.Place, onClick: () -> Unit) {
             Modifier.width(56.dp), horizontalAlignment = Alignment.CenterHorizontally,
         ) {
             PlaceGlyph(p.type)
-            if (p.meters >= 0) Text(
-                distanceLabel(p.meters.toDouble()), fontSize = 14.sp, color = K.dim,
+            // Measured on the phone: Moovit's own figure is from wherever it was told you are.
+            val away = here?.let { metres(it.first, it.second, p.lat, p.lon) }?.takeIf { !it.isNaN() }
+            if (away != null) Text(
+                distanceLabel(away), fontSize = 14.sp, color = K.dim,
                 modifier = Modifier.padding(top = 2.dp),
             )
         }

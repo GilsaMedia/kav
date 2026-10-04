@@ -1,8 +1,10 @@
 package uk.noammm.kav.ui
 
-import android.Manifest
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.repeatOnLifecycle
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.SizeTransform
 import androidx.compose.animation.core.FastOutSlowInEasing
@@ -27,6 +29,9 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.selected
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.layout.onSizeChanged
@@ -42,6 +47,7 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import uk.noammm.kav.KavModel
+import uk.noammm.kav.LOCATION_PERMISSIONS
 import uk.noammm.kav.data.Moovit
 import uk.noammm.kav.data.MoovitSession
 import uk.noammm.kav.data.nearestStops
@@ -58,26 +64,45 @@ object Online {
     @Volatile var session: MoovitSession? = null
     private val opening = kotlinx.coroutines.sync.Mutex()
     private var failedAt = 0L
+    private var failures = 0
+    @Volatile private var generation = 0
+
+    // After a change to what Moovit may be told: the next call registers afresh, and a registration
+    // already under way is not kept.
+    fun reset() {
+        generation++
+        session = null
+    }
+
+    // Renewed a minute before it expires.
+    private fun fresh(s: MoovitSession?) = s != null && s.accessExpiresUtc - System.currentTimeMillis() / 1000 > 60
 
     // One Moovit session for the whole app. Callers that arrive together share it, or its failure.
-    suspend fun open(at: Pair<Double, Double>? = null): MoovitSession = session ?: opening.withLock {
-        session ?: run {
-            if (System.currentTimeMillis() - failedAt < 10_000) throw java.io.IOException("Moovit is unreachable")
+    suspend fun open(at: Pair<Double, Double>? = null): MoovitSession = session.takeIf(::fresh) ?: opening.withLock {
+        session.takeIf(::fresh) ?: run {
+            // Each failure waits twice as long, up to five minutes: Moovit refuses new sessions from
+            // an address that keeps asking.
+            val wait = 10_000L shl (failures - 1).coerceIn(0, 5)
+            if (failures > 0 && System.currentTimeMillis() - failedAt < minOf(wait, 300_000L)) {
+                throw java.io.IOException("Moovit is unreachable")
+            }
             try {
+                val gen = generation
                 withContext(Dispatchers.IO) {
                     if (at == null) Moovit.register() else Moovit.register(at.first, at.second)
-                }.also { session = it }
+                }.also { if (gen == generation) session = it; failures = 0 }
             } catch (e: kotlinx.coroutines.CancellationException) {
                 throw e
             } catch (e: Exception) {
                 failedAt = System.currentTimeMillis()
+                failures++
                 throw e
             }
         }
     }
 }
 
-private val hm = SimpleDateFormat("HH:mm", Locale.US)
+private val hm = SimpleDateFormat("HH:mm", Locale.US).apply { timeZone = ISRAEL }
 
 private const val LOOK_REACH_KM = 3.5
 
@@ -104,17 +129,24 @@ fun LiveScreen(model: KavModel) {
     val ctx = LocalContext.current
     val here = model.here ?: (32.0759 to 34.7745)
     val located = model.here != null
-    val ask = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { ok ->
-        if (ok) requestLocationOnce(ctx) { model.here = it }
-    }
-    LaunchedEffect(Unit) {
-        if (!hasLocationPermission(ctx)) {
-            if (model.here == null) ask.launch(Manifest.permission.ACCESS_COARSE_LOCATION)
-            return@LaunchedEffect
+    var locGranted by remember { mutableStateOf(hasLocationPermission(ctx)) }
+    val ask = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { granted ->
+        if (granted.values.any { it }) {
+            locGranted = true
+            requestLocationOnce(ctx) { model.locate(it.first, it.second) }
         }
-        while (true) {
-            requestLocationOnce(ctx) { model.here = it }
-            delay(120_000)
+    }
+    val lifecycle = LocalLifecycleOwner.current.lifecycle
+    LaunchedEffect(Unit) {
+        if (!locGranted && model.here == null) ask.launch(LOCATION_PERMISSIONS)
+    }
+    LaunchedEffect(locGranted, lifecycle) {
+        if (!locGranted) return@LaunchedEffect
+        lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
+            while (true) {
+                requestLocationOnce(ctx) { model.locate(it.first, it.second) }
+                delay(120_000)
+            }
         }
     }
     var look by remember { mutableStateOf<Pair<Pair<Double, Double>, Double>?>(null) }
@@ -126,6 +158,7 @@ fun LiveScreen(model: KavModel) {
     var loading by remember { mutableStateOf(true) }
     var arrivals by remember { mutableStateOf<Map<Moovit.ArrivalKey, Moovit.Arrival>>(emptyMap()) }
     var near by remember { mutableStateOf<List<Moovit.Stop>>(emptyList()) }
+    var unmatched by remember { mutableStateOf<List<Int>>(emptyList()) }
     var lines by remember { mutableStateOf<Map<Int, Moovit.LineInfo?>>(emptyMap()) }
     var modes by remember { mutableStateOf<Map<Int, Int>>(emptyMap()) }
     var pollSecs by remember { mutableIntStateOf(20) }
@@ -133,7 +166,11 @@ fun LiveScreen(model: KavModel) {
     var picked by remember { mutableStateOf<Tracked?>(null) }
     var farStop by remember { mutableStateOf<Moovit.Stop?>(null) }
     var now by remember { mutableLongStateOf(System.currentTimeMillis() / 1000) }
-    LaunchedEffect(Unit) { while (true) { delay(1000); now = System.currentTimeMillis() / 1000 } }
+    LaunchedEffect(lifecycle) {
+        lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
+            while (true) { delay(1000); now = System.currentTimeMillis() / 1000 }
+        }
+    }
 
     // Moovit's stop list misses about half the stops, so they come from the timetable.
     LaunchedEffect(look?.first ?: here, look?.second) {
@@ -145,28 +182,41 @@ fun LiveScreen(model: KavModel) {
                 .map { it.first }
         }
         fun stopOf(g: Int, id: Int) = Moovit.Stop(id, net.lat[g], net.lon[g], net.name[g])
-        val known = ArrayList<Moovit.Stop>()
-        val unknown = ArrayList<Int>()
-        for (g in inView) StopPhotos.idNow(net, g)?.let { known += stopOf(g, it) } ?: unknown.add(g)
-        near = known.distinctBy { it.id }
-        wake.trySend(Unit)
-        matching = 0 to unknown.size
-        for (batch in unknown.chunked(8)) {
-            val found = coroutineScope { batch.map { g -> async { g to StopPhotos.idOf(net, g) } }.awaitAll() }
-            val first = near.isEmpty()
-            known += found.mapNotNull { (g, id) -> id?.let { stopOf(g, it) } }
-            matching = (matching.first + batch.size) to unknown.size
+        while (true) {
+            val known = ArrayList<Moovit.Stop>()
+            val unknown = ArrayList<Int>()
+            for (g in inView) StopPhotos.idNow(net, g)?.let { known += stopOf(g, it) } ?: unknown.add(g)
             near = known.distinctBy { it.id }
-            if (first && near.isNotEmpty()) wake.trySend(Unit)
+            unmatched = emptyList()
+            wake.trySend(Unit)
+            matching = 0 to unknown.size
+            val missed = ArrayList<Int>()
+            for (batch in unknown.chunked(8)) {
+                val found = coroutineScope { batch.map { g -> async { g to StopPhotos.idOf(net, g) } }.awaitAll() }
+                val first = near.isEmpty()
+                known += found.mapNotNull { (g, id) -> id?.let { stopOf(g, it) } }
+                missed += found.filter { it.second == null }.map { it.first }
+                matching = (matching.first + batch.size) to unknown.size
+                near = known.distinctBy { it.id }
+                if (first && near.isNotEmpty()) wake.trySend(Unit)
+            }
+            matching = 0 to 0
+            unmatched = missed
+            wake.trySend(Unit)
+            if (near.isNotEmpty()) break
+            loading = false
+            // Every lookup failing, rather than coming back empty, means Moovit is out of reach.
+            if (missed.isEmpty() || missed.any { StopPhotos.knownMissing(net, it) }) {
+                status = T("No stops around here", "אין תחנות באזור הזה")
+                break
+            }
+            status = T("Can't reach Moovit · trying again shortly", "אין חיבור ל-Moovit · ננסה שוב בקרוב")
+            delay(30_000)
         }
-        matching = 0 to 0
-        if (near.isEmpty()) { loading = false; status = T("No stops around here", "אין תחנות באזור הזה") }
-        wake.trySend(Unit)
     }
 
-    LaunchedEffect(Unit) {
-        try {
-            val s = Online.open(here)
+    LaunchedEffect(lifecycle) {
+        lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
             while (coroutineContext.isActive) {
                 val ids = (near.map { it.id } + listOfNotNull(farStop?.id)).distinct()
                 if (ids.isEmpty()) {
@@ -175,8 +225,31 @@ fun LiveScreen(model: KavModel) {
                     continue
                 }
                 try {
+                    val s = Online.open(here)
                     val (found, poll) = withContext(Dispatchers.IO) { Moovit.stopArrivals(s, ids) }
                     arrivals = found; pollSecs = poll.coerceIn(10, 60); loading = false
+                    // A name search can't tell same-named stops apart and finds no id for others. The lines
+                    // through the stops already found list every stop on them, each with its code.
+                    val net = model.net
+                    if (net != null && unmatched.isNotEmpty()) {
+                        val routes = found.values.map { it.patternId }.distinct().filter { it > 0 }
+                        val learned = withContext(Dispatchers.IO) {
+                            routes.chunked(8).flatMap { batch ->
+                                batch.map { p -> async { runCatching { Moovit.patternStops(s, p) }.getOrDefault(emptyList()) } }
+                                    .awaitAll().flatten()
+                            }
+                        }
+                        StopPhotos.learn(learned)
+                        val byCode = learned.associateBy { it.code }
+                        val added = unmatched.mapNotNull { g ->
+                            net.code.getOrElse(g) { 0 }.takeIf { it > 0 }?.let { byCode[it.toString()] }?.let { g to it.id }
+                        }
+                        if (added.isNotEmpty()) {
+                            unmatched = unmatched - added.map { it.first }.toSet()
+                            near = (near + added.map { (g, id) -> Moovit.Stop(id, net.lat[g], net.lon[g], net.name[g]) }).distinctBy { it.id }
+                            wake.trySend(Unit)
+                        }
+                    }
                     val tracked = found.values.filter { it.hasLocation }
                     status = if (tracked.isEmpty()) {
                         T("No tracked vehicles right now", "אין כרגע כלי רכב במעקב")
@@ -206,11 +279,6 @@ fun LiveScreen(model: KavModel) {
                 }
                 kotlinx.coroutines.withTimeoutOrNull(pollSecs * 1000L) { wake.receive() }
             }
-        } catch (e: kotlinx.coroutines.CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            loading = false
-            status = T("online error: ${e.message ?: e.javaClass.simpleName}", "שגיאת רשת: ${e.message ?: e.javaClass.simpleName}")
         }
     }
 
@@ -233,7 +301,7 @@ fun LiveScreen(model: KavModel) {
     LaunchedEffect(focus) { if (focus == null) farStop = null }
     LaunchedEffect(farStop?.id) {
         val f = farStop ?: return@LaunchedEffect
-        val s = Online.session ?: return@LaunchedEffect
+        val s = runCatching { Online.open() }.getOrNull() ?: return@LaunchedEffect
         runCatching { withContext(Dispatchers.IO) { Moovit.stopArrivals(s, listOf(f.id)).first } }
             .onSuccess { found -> arrivals = arrivals + found }
     }
@@ -245,7 +313,7 @@ fun LiveScreen(model: KavModel) {
     val patternId = focusVehicle?.arrival?.patternId ?: -1
     val pattern by produceState(emptyList<Int>(), patternId) {
         value = emptyList()
-        val s = Online.session ?: return@produceState
+        val s = runCatching { Online.open() }.getOrNull() ?: return@produceState
         if (patternId > 0) value = withContext(Dispatchers.IO) {
             runCatching { Moovit.tripPattern(s, patternId) }.getOrDefault(emptyList())
         }
@@ -276,8 +344,8 @@ fun LiveScreen(model: KavModel) {
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Chip(T("Use my location", "השתמשו במיקום שלי"), false) {
-                if (hasLocationPermission(ctx)) requestLocationOnce(ctx) { model.here = it }
-                else ask.launch(Manifest.permission.ACCESS_COARSE_LOCATION)
+                if (hasLocationPermission(ctx)) { locGranted = true; requestLocationOnce(ctx) { model.locate(it.first, it.second) } }
+                else ask.launch(LOCATION_PERMISSIONS)
             }
             Text(T("showing central Tel Aviv", "מוצג מרכז תל אביב"), style = DisplayItalic, fontSize = 12.sp, color = K.dim)
         }
@@ -286,7 +354,7 @@ fun LiveScreen(model: KavModel) {
         ) {
             CompositionLocalProvider(LocalLiquidBackdrop provides liveLiquid) {
                 LiveMap(
-                    here, near, vehicles, focus, focusStop, focusVehicle, lineStops,
+                    here, near, vehicles, focus, focusStop, focusVehicle, lineStops, model.liveShow,
                     following = !moved,
                     onLook = { centre, reach ->
                         moved = centre != null
@@ -298,29 +366,32 @@ fun LiveScreen(model: KavModel) {
                     modifier = Modifier.fillMaxSize().glassBackdrop(liveLiquid),
                     onVehicle = { focus = LiveFocus.Vehicle(it.tripId) },
                     onStop = { s -> if (s.id !in stopsById) farStop = s; focus = LiveFocus.Stop(s.id) },
-                )
-                Column(
-                    Modifier.align(Alignment.TopStart).padding(K.gap2).glassSurface(10.dp).padding(6.dp),
-                ) {
-                    val (done, total) = matching
-                    Text(
-                        when {
-                            total > 0 -> T("Loading ${total - done} stops…", "טוענים ${total - done} תחנות…")
-                            zoomedOut -> T("Zoom in to load the stops here", "התקרבו כדי לטעון את התחנות כאן")
-                            else -> status
-                        },
-                        style = Mono, fontSize = 11.sp, color = K.muted,
-                    )
-                    if (total > 0) {
-                        val shown by animateFloatAsState(done.toFloat() / total, tween(300), label = "matching")
-                        Box(
-                            Modifier.padding(top = 4.dp).width(140.dp).height(3.dp)
-                                .clip(RoundedCornerShape(2.dp)).background(K.text.copy(alpha = .15f)),
-                        ) {
-                            Box(Modifier.fillMaxHeight().fillMaxWidth(shown).background(K.accent))
+                    status = {
+                        Column(Modifier.panel(10.dp).padding(6.dp)) {
+                            val (done, total) = matching
+                            Text(
+                                when {
+                                    total > 0 -> T("Loading ${total - done} stops…", "טוענים ${total - done} תחנות…")
+                                    zoomedOut && model.liveShow == LiveShow.TRAFFIC ->
+                                        T("Zoom in to see the vehicles here", "התקרבו כדי לראות את כלי הרכב כאן")
+                                    zoomedOut -> T("Zoom in to load the stops here", "התקרבו כדי לטעון את התחנות כאן")
+                                    else -> status
+                                },
+                                style = Mono, fontSize = 11.sp, color = K.muted,
+                            )
+                            if (total > 0) {
+                                val shown by animateFloatAsState(done.toFloat() / total, tween(300), label = "matching")
+                                Box(
+                                    Modifier.padding(top = 4.dp).width(140.dp).height(3.dp)
+                                        .clip(RoundedCornerShape(2.dp)).background(K.text.copy(alpha = .15f)),
+                                ) {
+                                    Box(Modifier.fillMaxHeight().fillMaxWidth(shown).background(K.accent))
+                                }
+                            }
                         }
-                    }
-                }
+                    },
+                    controls = { LiveShowPicker(model.liveShow) { model.liveShow = it } },
+                )
                 androidx.compose.animation.AnimatedVisibility(
                     visible = focus != null,
                     modifier = Modifier.align(Alignment.BottomCenter),
@@ -418,12 +489,15 @@ private fun LiveMap(
     focusStop: Moovit.Stop?,
     focusVehicle: Tracked?,
     lineStops: List<Moovit.Stop>,
+    show: LiveShow,
     following: Boolean,
     onLook: (Pair<Double, Double>?, Double) -> Unit,
     bottomPadding: Dp,
     modifier: Modifier,
     onVehicle: (Tracked) -> Unit,
     onStop: (Moovit.Stop) -> Unit,
+    status: @Composable () -> Unit,
+    controls: @Composable () -> Unit,
 ) {
     val reach = with(LocalDensity.current) { 22.dp.toPx() }
     val stopReach = with(LocalDensity.current) { 20.dp.toPx() }
@@ -436,10 +510,11 @@ private fun LiveMap(
     val pinned = remember { arrayOf(spot) }
     if (following) pinned[0] = spot
     val where = pinned[0]
-    val points = remember(focus, route.isNotEmpty(), lineStops.isNotEmpty(), stops.isEmpty(), following, where) {
+    val points = remember(focus, route.isNotEmpty(), lineStops.isNotEmpty(), stops.isEmpty(), following, where, show) {
         when {
             focusVehicle != null -> listOfNotNull(focusVehicle.arrival.takeIf { it.hasLocation }?.let { it.lat to it.lon }) +
                 listOfNotNull(from?.let { it.lat to it.lon }) + route.ifEmpty { lineStops.map { it.lat to it.lon } }
+            focusStop != null && show == LiveShow.STOPS -> listOf(focusStop.lat to focusStop.lon)
             focusStop != null -> listOf(focusStop.lat to focusStop.lon) + vehicles
                 .filter { it.arrival.stopId == focusStop.id && it.arrival.hasLocation }
                 .map { it.arrival.lat to it.arrival.lon }
@@ -448,6 +523,8 @@ private fun LiveMap(
         }
     }
     val chosen = focusVehicle?.tripId
+    // Stops only still draws a vehicle picked from the list.
+    val shown = if (show == LiveShow.STOPS) vehicles.filter { it.tripId == chosen } else vehicles
     val tint = focusVehicle?.let { v -> plateFor(v.routeType, v.line?.agencyId ?: -1)?.fill ?: K.route }
     val bus = focusVehicle?.arrival?.takeIf { it.hasLocation }
     val current = remember(chosen, route, lineStops, tint, bus, from) {
@@ -458,11 +535,11 @@ private fun LiveMap(
     val look = current ?: last
     val lineShown = animateFloatAsState(if (chosen != null) 1f else 0f, tween(320), label = "lineView")
     val step by remember { derivedStateOf { (lineShown.value * 10).roundToInt() / 10f } }
-    val geometry = remember(stops, center, K.light, look, step, focusStop) {
+    val geometry = remember(stops, center, K.light, look, step, focusStop, show) {
         val lines = ArrayList<MapLine>()
         val dots = ArrayList<MapDot>()
         val near = 1f - step
-        if (near > 0f) stops.forEach { st ->
+        if (near > 0f && show != LiveShow.TRAFFIC) stops.forEach { st ->
             dots += MapDot(st.lat, st.lon, K.bg.copy(alpha = near), 6f)
             dots += MapDot(st.lat, st.lon, Color.Transparent, 4.2f, K.muted.copy(alpha = near), 1.6f)
         }
@@ -497,20 +574,53 @@ private fun LiveMap(
         geometry = geometry,
         onLook = onLook,
         moved = !following,
-        live = vehicleGeometry(vehicles.map { it.arrival to modeOf(it.routeType) }) { a ->
+        live = vehicleGeometry(shown.map { it.arrival to modeOf(it.routeType) }) { a ->
             if (a.tripId == (chosen ?: look?.tripId)) 1f else 1f - step
         },
         onTap = { at, proj ->
-            val tappable = if (chosen == null) vehicles else vehicles.filter { it.tripId == chosen }
+            val tappable = if (chosen == null) shown else shown.filter { it.tripId == chosen }
             val vehicle = tappable.map { it to (proj.point(it.arrival.lat, it.arrival.lon) - at).getDistance() }
                 .filter { it.second <= reach }.minByOrNull { it.second }?.first
             if (vehicle != null) onVehicle(vehicle)
-            else (if (chosen != null) lineStops else stops)
+            else (if (chosen != null) lineStops else if (show == LiveShow.TRAFFIC) emptyList() else stops)
                 .map { it to (proj.point(it.lat, it.lon) - at).getDistance() }
                 .filter { it.second <= stopReach }.minByOrNull { it.second }?.first
                 ?.let(onStop)
         },
+        keepZoom = show == LiveShow.STOPS && focusStop != null,
+        status = status,
+        controls = controls,
     )
+}
+
+enum class LiveShow { STOPS, TRAFFIC, ALL }
+
+@Composable
+private fun LiveShowPicker(show: LiveShow, onShow: (LiveShow) -> Unit) {
+    Row(Modifier.panel(999.dp).padding(2.dp), verticalAlignment = Alignment.CenterVertically) {
+        for (option in LiveShow.entries) {
+            val on = option == show
+            val tint = if (on) K.text else K.dim
+            val label = when (option) {
+                LiveShow.STOPS -> T("Stops only", "תחנות בלבד")
+                LiveShow.TRAFFIC -> T("Vehicles only", "כלי רכב בלבד")
+                LiveShow.ALL -> T("Stops and vehicles", "תחנות וכלי רכב")
+            }
+            Box(
+                Modifier.clip(RoundedCornerShape(999.dp)).background(if (on) K.plateStrong else Color.Transparent)
+                    .clickable(role = Role.RadioButton) { onShow(option) }
+                    .semantics { contentDescription = label; selected = on }
+                    .height(22.dp).padding(horizontal = 8.dp),
+                contentAlignment = Alignment.Center,
+            ) {
+                when (option) {
+                    LiveShow.STOPS -> uk.noammm.kav.TabGlyph(uk.noammm.kav.Tab.Stations, tint, 15.dp)
+                    LiveShow.TRAFFIC -> ModeGlyph(Mode.BUS, tint, 14.dp)
+                    LiveShow.ALL -> Text(T("All", "הכל"), fontSize = 11.sp, color = tint)
+                }
+            }
+        }
+    }
 }
 
 @Composable
@@ -641,7 +751,7 @@ private fun LiveVehicleCard(v: Tracked?, now: Long, onClose: () -> Unit) {
         LiveFact(T("Arriving", "הגעה"), whenLabel(shown.eta, now))
         if (a.platform.isNotBlank()) LiveFact(T("Platform", "רציף"), a.platform)
         val away = a.stopsAway
-        if (away >= 0) LiveFact(T("Stops away", "תחנות"), if (away == 0) T("at the stop", "בתחנה") else "$away")
+        if (away >= 0) LiveFact(T("Stops away", "מרחק בתחנות"), if (away == 0) T("at the stop", "בתחנה") else "$away")
     }
 }
 
@@ -664,7 +774,7 @@ private fun LiveStopCard(
     var extraModes by remember { mutableStateOf<Map<Int, Int>>(emptyMap()) }
     val lineIds = remember(due) { due.map { it.lineId }.distinct() }
     LaunchedEffect(lineIds) {
-        val s = Online.session ?: return@LaunchedEffect
+        val s = runCatching { Online.open() }.getOrNull() ?: return@LaunchedEffect
         for (batch in lineIds.filter { it !in lines && it !in extraLines }.chunked(8)) {
             val named = withContext(Dispatchers.IO) {
                 batch.map { id -> async { id to runCatching { Moovit.lineInfo(s, id) }.getOrNull() } }.awaitAll().toMap()

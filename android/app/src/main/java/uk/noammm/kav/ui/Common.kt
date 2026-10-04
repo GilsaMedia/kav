@@ -1,6 +1,11 @@
 package uk.noammm.kav.ui
 
 import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.border
@@ -11,11 +16,14 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.*
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.DrawScope
@@ -24,6 +32,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.foundation.Canvas
@@ -36,6 +45,8 @@ import uk.noammm.kav.data.Moovit
 import uk.noammm.kav.data.Net
 
 import java.util.Calendar
+import java.util.Locale
+import java.util.TimeZone
 import kotlin.math.*
 
 val LocalBottomBarInset = staticCompositionLocalOf { 0.dp }
@@ -47,7 +58,10 @@ internal fun bottomCover(): androidx.compose.ui.unit.Dp =
 
 val LocalServiceAlertOpener = staticCompositionLocalOf<(Int, String) -> Unit> { { _, _ -> } }
 
-fun hhmm(s: Int): String = "%02d:%02d".format((s / 3600) % 24, (s / 60) % 60)
+// Timetables and departures are in Israel's time, whatever zone the phone is set to.
+val ISRAEL: TimeZone = TimeZone.getTimeZone("Asia/Jerusalem")
+
+fun hhmm(s: Int): String = "%02d:%02d".format(Locale.US, (s / 3600) % 24, (s / 60) % 60)
 
 fun dur(s: Int): String {
     val m = (s / 60.0).roundToInt()
@@ -56,7 +70,7 @@ fun dur(s: Int): String {
 }
 
 fun nowSec(): Int {
-    val c = Calendar.getInstance()
+    val c = Calendar.getInstance(ISRAEL)
     return c.get(Calendar.HOUR_OF_DAY) * 3600 + c.get(Calendar.MINUTE) * 60 + c.get(Calendar.SECOND)
 }
 
@@ -78,7 +92,7 @@ fun metres(la1: Double, lo1: Double, la2: Double, lo2: Double): Double {
 
 fun distanceLabel(m: Double): String =
     if (m < 1000) T("${m.roundToInt()} m", "${m.roundToInt()} מ'")
-    else T("%.1f km", "%.1f ק\"מ").format(m / 1000)
+    else T("%.1f km", "%.1f ק\"מ").format(Locale.US, m / 1000)
 
 enum class Mode { TRAM, SUBWAY, TRAIN, BUS, FERRY, CABLE, GONDOLA, FUNICULAR, TAXI, OTHER }
 
@@ -284,7 +298,7 @@ fun WithTimetable(model: uk.noammm.kav.KavModel, content: @Composable (Net) -> U
     when {
         net != null -> content(net)
         model.netError != null -> Column(Modifier.padding(K.gap4)) {
-            Note(T("Could not open the offline timetable: ${model.netError}", "לא ניתן היה לפתוח את לוח הזמנים המקוון: ${model.netError}"))
+            Note(T("Could not open the offline timetable: ${model.netError}", "לא ניתן היה לפתוח את לוח הזמנים הלא מקוון: ${model.netError}"))
             Spacer(Modifier.height(K.gap3))
             Chip(T("Retry", "נסו שוב"), false) {
                 model.netError = null
@@ -382,7 +396,7 @@ fun ServiceAlertSheet(groupId: Int, fallbackLabel: String, onDismiss: () -> Unit
     var alerts by remember(groupId) { mutableStateOf<List<Moovit.ServiceAlert>?>(null) }
     var failed by remember(groupId) { mutableStateOf(false) }
     LaunchedEffect(groupId) {
-        val s = Online.session ?: run { failed = true; return@LaunchedEffect }
+        val s = runCatching { Online.open() }.getOrNull() ?: run { failed = true; return@LaunchedEffect }
         runCatching { withContext(Dispatchers.IO) { Moovit.serviceAlerts(s, listOf(groupId)) } }
             .onSuccess { alerts = it }
             .onFailure { failed = true }
@@ -486,7 +500,7 @@ fun BottomSheet(
 }
 
 private fun alertWindow(a: Moovit.ServiceAlert): String? {
-    val day = java.text.SimpleDateFormat("d MMM", T.locale)
+    val day = java.text.SimpleDateFormat("d MMM", T.locale).apply { timeZone = ISRAEL }
     fun at(t: Long) = day.format(java.util.Date(t * 1000))
     return when {
         a.activeFrom > 0 && a.activeTo > 0 -> T("${at(a.activeFrom)} to ${at(a.activeTo)}", "${at(a.activeFrom)} עד ${at(a.activeTo)}")
@@ -504,12 +518,31 @@ private fun alertText(a: Moovit.ServiceAlert): String? {
 }
 
 @Composable
-internal fun StopGlyphOrPhoto(stopId: Int, mode: Mode?, thumb: Dp = 40.dp, mark: Dp = 17.dp) {
+internal fun StopGlyphOrPhoto(stopId: Int, mode: Mode?, thumb: Dp = 40.dp, mark: Dp = 17.dp, resolving: Boolean = false) {
     var bmp by remember(stopId) { mutableStateOf(StopPhotos.thumbNow(stopId)) }
-    LaunchedEffect(stopId) { if (bmp == null && stopId > 0) bmp = StopPhotos.thumb(stopId) }
+    var has by remember(stopId) { mutableStateOf(StopPhotos.hasPhotosNow(stopId)) }
+    var busy by remember(stopId) { mutableStateOf(bmp == null && stopId > 0) }
+    LaunchedEffect(stopId) {
+        if (bmp != null || stopId <= 0) return@LaunchedEffect
+        has = StopPhotos.hasPhotos(stopId)
+        if (has == true) bmp = StopPhotos.thumb(stopId)
+        busy = false
+    }
     val shot = bmp
     if (shot == null) {
-        if (mode != null) StationMark(mode, mark)
+        // A trip step keeps its mode mark unless a photo is on its way.
+        when {
+            (busy || resolving) && (mode == null || has == true) ->
+                PhotoBox(thumb, T("Loading the stop's photo", "טוענים את תמונת התחנה")) { Spinner(thumb * 0.4f) }
+            mode != null -> StationMark(mode, mark)
+            has == null && stopId > 0 -> PhotoBox(thumb, null) {}
+            else -> PhotoBox(thumb, null) {
+                Text(
+                    T("No image", "אין תמונה"), fontSize = 10.sp, lineHeight = 12.sp, color = K.dim,
+                    textAlign = TextAlign.Center, modifier = Modifier.padding(2.dp),
+                )
+            }
+        }
         return
     }
     var open by remember { mutableStateOf(false) }
@@ -528,5 +561,27 @@ internal fun StopGlyphOrPhoto(stopId: Int, mode: Mode?, thumb: Dp = 40.dp, mark:
                 contentScale = ContentScale.FillWidth,
             )
         }
+    }
+}
+
+// Where the stop's photo goes: a spinner until it arrives, or a note when there is none.
+@Composable
+private fun PhotoBox(size: Dp, label: String?, content: @Composable () -> Unit) {
+    Box(
+        Modifier.size(size).panel(10.dp).then(if (label != null) Modifier.semantics { contentDescription = label } else Modifier),
+        contentAlignment = Alignment.Center,
+    ) { content() }
+}
+
+@Composable
+private fun Spinner(size: Dp) {
+    val turn by rememberInfiniteTransition(label = "photo").animateFloat(
+        0f, 360f, infiniteRepeatable(tween(900, easing = LinearEasing)), label = "turn",
+    )
+    Canvas(Modifier.size(size)) {
+        val w = 2.dp.toPx()
+        val box = Size(this.size.width - w, this.size.height - w)
+        drawArc(K.surface4, 0f, 360f, false, Offset(w / 2, w / 2), box, style = Stroke(w))
+        drawArc(K.accent, turn, 100f, false, Offset(w / 2, w / 2), box, style = Stroke(w, cap = StrokeCap.Round))
     }
 }

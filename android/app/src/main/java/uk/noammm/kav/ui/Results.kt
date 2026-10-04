@@ -39,7 +39,7 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
-private val hm = SimpleDateFormat("HH:mm", Locale.US)
+private val hm = SimpleDateFormat("HH:mm", Locale.US).apply { timeZone = ISRAEL }
 
 @Composable
 private fun Chevron(tint: Color = K.surface4, size: androidx.compose.ui.unit.Dp = 12.dp) {
@@ -141,15 +141,6 @@ fun DepMarkGlyph(d: Moovit.Departure, size: androidx.compose.ui.unit.Dp = 11.dp)
 }
 
 @Composable
-private fun PlusGlyph(tint: Color = K.muted) {
-    Canvas(Modifier.size(16.dp)) {
-        val w = size.width
-        drawLine(tint, Offset(w * .5f, w * .18f), Offset(w * .5f, w * .82f), w * .10f, StrokeCap.Round)
-        drawLine(tint, Offset(w * .18f, w * .5f), Offset(w * .82f, w * .5f), w * .10f, StrokeCap.Round)
-    }
-}
-
-@Composable
 private fun Caret(tint: Color = K.muted) {
     Canvas(Modifier.size(10.dp)) {
         val w = size.width; val h = size.height
@@ -179,7 +170,6 @@ fun PlanHeader(
     onFrom: () -> Unit,
     onTo: () -> Unit,
     onSwap: () -> Unit,
-    onAddStop: (() -> Unit)? = null,
     onBack: (() -> Unit)? = null,
 ) {
     Column(Modifier.fillMaxWidth().padding(horizontal = K.gap3, vertical = K.gap2)) {
@@ -193,13 +183,6 @@ fun PlanHeader(
                     Endpoint(to, here = toIsHere, dot = true, onClick = onTo)
                 }
                 SwapControl(Modifier.align(Alignment.CenterEnd).padding(end = K.gap2), onSwap)
-            }
-
-            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                if (onAddStop != null) Box(
-                    Modifier.size(44.dp).semantics { contentDescription = T("Add stop", "הוספת תחנה") }
-                        .clickable(role = Role.Button, onClick = onAddStop), contentAlignment = Alignment.Center,
-                ) { PlusGlyph() }
             }
         }
     }
@@ -272,19 +255,46 @@ private fun MenuPill(label: String, onClick: () -> Unit) {
     }
 }
 
-private class DepLabel(val text: String, val dep: Moovit.Departure)
+private class DepLabel(val text: String, val dep: Moovit.Departure, val isNow: Boolean = false, val isClock: Boolean = false)
 
+// Minutes for the next hour, a clock time after that, with the day when it isn't today
+// (on Shabbat the first bus can be the next evening).
 private fun departLabels(deps: List<Moovit.Departure>, now: Long): Pair<List<DepLabel>, Boolean> {
     val next = deps.sortedBy { it.timeUtc }.filter { it.timeUtc >= now - 60 }.take(3)
-    var allMinutes = next.isNotEmpty()
-    val out = next.map { d ->
-        val m = ((d.timeUtc - now) / 60).toInt()
-        val relative = m in 0..60 && !d.rtDropped
-        val text = if (relative) (if (m <= 0) T("now", "עכשיו") else "$m")
-                   else { allMinutes = false; hm.format(Date(d.timeUtc * 1000)) }
-        DepLabel(text, d)
+    val mins = next.map { d -> ((d.timeUtc - now) / 60).toInt().takeIf { it in 0..60 && !d.rtDropped } }
+    val allMinutes = mins.all { it != null } && mins.any { it != null && it > 0 }
+    var dayShown = 0L
+    val out = next.mapIndexed { i, d ->
+        val m = mins[i]
+        when {
+            m == null -> {
+                val days = daysAhead(d.timeUtc, now).coerceAtLeast(0)
+                DepLabel(clockLabel(d.timeUtc, if (days == dayShown) 0L else days), d, isClock = true).also { dayShown = days }
+            }
+            m <= 0 -> DepLabel(T("now", "עכשיו"), d, isNow = true)
+            allMinutes -> DepLabel("$m", d)
+            else -> DepLabel(T("$m min", "$m דק׳"), d)
+        }
     }
     return out to allMinutes
+}
+
+private fun daysAhead(t: Long, now: Long): Long {
+    val zone = ISRAEL.toZoneId()
+    return java.time.temporal.ChronoUnit.DAYS.between(
+        java.time.Instant.ofEpochSecond(now).atZone(zone).toLocalDate(),
+        java.time.Instant.ofEpochSecond(t).atZone(zone).toLocalDate(),
+    )
+}
+
+private fun clockLabel(t: Long, days: Long): String {
+    val time = hm.format(Date(t * 1000))
+    return when (days) {
+        0L -> time
+        1L -> T("tomorrow $time", "מחר $time")
+        else -> java.time.format.DateTimeFormatter.ofPattern("EEEE", T.locale)
+            .format(java.time.Instant.ofEpochSecond(t).atZone(ISRAEL.toZoneId())) + " " + time
+    }
 }
 
 @Composable
@@ -562,14 +572,16 @@ private fun DepartureLine(it: Moovit.Itinerary, r: Moovit.Resolved, now: Long) {
         r.departures(option, boarding)
     } }.orEmpty()
     val (labels, allMinutes) = departLabels(deps, now)
-    val fare = if (it.fare >= 0) "%s%.2f".format(it.currency.ifBlank { "" }, it.fare / 100.0) else null
+    val fare = if (it.fare >= 0) "%s%.2f".format(Locale.US, it.currency.ifBlank { "" }, it.fare / 100.0) else null
 
     if (labels.isEmpty() && stop == null && fare == null) return
     val lead = labels.firstOrNull()?.dep
     Text(
         buildAnnotatedString {
             if (labels.isNotEmpty()) {
-                withStyle(SpanStyle(color = K.dim)) { append(T("Leaves in ", "יציאה בעוד ")) }
+                val first = labels.first()
+                val prefix = if (first.isNow || first.isClock) T("Leaves ", "יציאה ") else T("Leaves in ", "יציאה בעוד ")
+                withStyle(SpanStyle(color = K.dim)) { append(prefix) }
                 if (lead != null && depMark(lead) != DepMark.NONE) appendInlineContent(MARK, "·")
             }
             labels.forEachIndexed { i, l ->

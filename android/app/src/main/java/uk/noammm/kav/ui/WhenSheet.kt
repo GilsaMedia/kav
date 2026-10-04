@@ -30,6 +30,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -48,11 +50,15 @@ fun WhenSheet(
     onDismiss: () -> Unit,
 ) {
     var mode by remember { mutableStateOf<Int?>(null) }
-    var day by remember { mutableIntStateOf(0) }
+    val today = remember { Calendar.getInstance(ISRAEL) }
+    val openedMinute = remember { System.currentTimeMillis() / 60_000 * 60_000 }
     val start = remember(departAt) {
-        Calendar.getInstance().apply {
+        Calendar.getInstance(ISRAEL).apply {
             timeInMillis = if (departAt > 0L) departAt else System.currentTimeMillis()
         }
+    }
+    var day by remember(departAt) {
+        mutableIntStateOf(if (departAt > 0L) daysBetween(today, start).coerceAtLeast(0) else 0)
     }
     val picker = rememberTimePickerState(
         initialHour = start.get(Calendar.HOUR_OF_DAY),
@@ -87,7 +93,7 @@ fun WhenSheet(
             WhenRow(T("Set desired arrival time", "קביעת שעת הגעה רצויה")) { mode = Moovit.TIME_ARRIVAL }
             WhenRow(T("Latest departure", "היציאה האחרונה")) { close { onPick(0L, Moovit.TIME_LAST) } }
             val resettable = departAt > 0L || timeType == Moovit.TIME_LAST
-            WhenRow(T("+15 min", "+15 דק'"), last = !resettable) {
+            WhenRow(T("+15 min", "${T.ltr("+15")} דק'"), last = !resettable) {
                 close { onPick(System.currentTimeMillis() + 15 * 60_000L, Moovit.TIME_DEPARTURE) }
             }
             if (resettable) WhenRow(T("Leave now", "צאו עכשיו"), tint = K.accent, last = true) { close(onNow) }
@@ -98,19 +104,21 @@ fun WhenSheet(
                 Modifier.fillMaxWidth().panel(K.rControl),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Step(T.backward, day > 0) { day-- }
+                Step(T.backward, day > 0, T("Previous day", "היום הקודם")) { day-- }
                 Text(
-                    dayLabel(start, day),
+                    dayLabel(today, day),
                     fontSize = 15.sp, color = K.text,
                     modifier = Modifier.weight(1f),
                     textAlign = androidx.compose.ui.text.style.TextAlign.Center,
                 )
-                Step(T.onward, day < 14) { day++ }
+                Step(T.onward, day < 14, T("Next day", "היום הבא")) { day++ }
             }
             Spacer(Modifier.height(K.gap3))
-            val picked = chosenMillis(start, day, picker.hour, picker.minute)
-            if (picked <= System.currentTimeMillis()) {
-                Text(T("That time has passed, this will depart now.", "השעה הזו כבר עברה, הנסיעה תצא עכשיו."), fontSize = 13.sp, color = K.dim)
+            val pickedToday = chosenMillis(today, day, picker.hour, picker.minute)
+            val rolled = day == 0 && pickedToday < openedMinute
+            val picked = if (rolled) chosenMillis(today, day + 1, picker.hour, picker.minute) else pickedToday
+            if (rolled) {
+                Text(T("That time has passed today, this will be for tomorrow.", "השעה הזו כבר עברה היום, הנסיעה תתוכנן למחר."), fontSize = 13.sp, color = K.dim)
                 Spacer(Modifier.height(K.gap2))
             }
             Box(
@@ -165,9 +173,10 @@ private fun WhenRow(label: String, tint: Color = K.text, last: Boolean = false, 
 }
 
 @Composable
-private fun Step(glyph: String, enabled: Boolean, onClick: () -> Unit) {
+private fun Step(glyph: String, enabled: Boolean, description: String, onClick: () -> Unit) {
     Box(
         Modifier.size(48.dp).clip(RoundedCornerShape(K.rControl))
+            .semantics { contentDescription = description }
             .clickable(role = Role.Button, enabled = enabled, onClick = onClick),
         contentAlignment = Alignment.Center,
     ) {
@@ -175,22 +184,28 @@ private fun Step(glyph: String, enabled: Boolean, onClick: () -> Unit) {
     }
 }
 
-private fun dayLabel(start: Calendar, offset: Int): String {
-    val c = (start.clone() as Calendar).apply { add(Calendar.DAY_OF_YEAR, offset) }
-    val today = Calendar.getInstance()
+private fun dayLabel(today: Calendar, offset: Int): String {
+    val c = (today.clone() as Calendar).apply { add(Calendar.DAY_OF_YEAR, offset) }
     fun same(a: Calendar, b: Calendar) = a.get(Calendar.YEAR) == b.get(Calendar.YEAR) &&
         a.get(Calendar.DAY_OF_YEAR) == b.get(Calendar.DAY_OF_YEAR)
     if (same(c, today)) return T("Today", "היום")
-    today.add(Calendar.DAY_OF_YEAR, 1)
-    if (same(c, today)) return T("Tomorrow", "מחר")
-    return SimpleDateFormat("EEE d MMM", T.locale).format(Date(c.timeInMillis))
+    val tomorrow = (today.clone() as Calendar).apply { add(Calendar.DAY_OF_YEAR, 1) }
+    if (same(c, tomorrow)) return T("Tomorrow", "מחר")
+    return SimpleDateFormat("EEE d MMM", T.locale).apply { timeZone = ISRAEL }.format(Date(c.timeInMillis))
 }
 
 internal fun clampDepart(pickedMs: Long, timeType: Int, now: Long): Pair<Long, Int> =
     if (pickedMs <= now) 0L to Moovit.TIME_DEPARTURE else pickedMs to timeType
 
-private fun chosenMillis(start: Calendar, offset: Int, hour: Int, minute: Int): Long =
-    (start.clone() as Calendar).apply {
+private fun daysBetween(from: Calendar, to: Calendar): Int {
+    fun midnight(c: Calendar) = (c.clone() as Calendar).apply {
+        set(Calendar.HOUR_OF_DAY, 0); set(Calendar.MINUTE, 0); set(Calendar.SECOND, 0); set(Calendar.MILLISECOND, 0)
+    }.timeInMillis
+    return Math.round((midnight(to) - midnight(from)) / 86_400_000.0).toInt()
+}
+
+private fun chosenMillis(anchor: Calendar, offset: Int, hour: Int, minute: Int): Long =
+    (anchor.clone() as Calendar).apply {
         add(Calendar.DAY_OF_YEAR, offset)
         set(Calendar.HOUR_OF_DAY, hour); set(Calendar.MINUTE, minute)
         set(Calendar.SECOND, 0); set(Calendar.MILLISECOND, 0)

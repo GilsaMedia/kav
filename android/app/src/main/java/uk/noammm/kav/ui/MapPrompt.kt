@@ -17,9 +17,11 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import uk.noammm.kav.data.MapFile
 
+// "Later" lasts until the app restarts.
+private var dismissed by mutableStateOf(false)
+
 @Composable
 fun MapPrompt() {
-    var dismissed by remember { mutableStateOf(false) }
     val state = MapFile.state
     if (dismissed || state is MapFile.State.Ready) return
     val ctx = LocalContext.current

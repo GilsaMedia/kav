@@ -48,7 +48,7 @@ private fun shareTrip(ctx: android.content.Context, trip: Moovit.Itinerary, from
     }
 }
 
-private val hm = SimpleDateFormat("HH:mm", Locale.US)
+private val hm = SimpleDateFormat("HH:mm", Locale.US).apply { timeZone = ISRAEL }
 
 
 @Composable
@@ -167,7 +167,7 @@ private fun Summary(trip: Moovit.Itinerary, r: Moovit.Resolved) {
         FlowRow(horizontalArrangement = Arrangement.spacedBy(K.gap3), verticalArrangement = Arrangement.spacedBy(K.gap1)) {
             Text(T("Arrives ${hm.format(Date(trip.arr * 1000))}", "הגעה ב-${hm.format(Date(trip.arr * 1000))}"), fontSize = 14.sp, color = K.muted)
             if (trip.fare >= 0) {
-                Text("%s%.2f".format(trip.currency, trip.fare / 100.0), fontSize = 14.sp, color = K.muted)
+                Text("%s%.2f".format(Locale.US, trip.currency, trip.fare / 100.0), fontSize = 14.sp, color = K.muted)
             }
         }
         Spacer(Modifier.height(K.gap3))
@@ -215,7 +215,7 @@ private fun depNote(deps: List<Moovit.Departure>): String? {
     return listOfNotNull(state, alert).joinToString(" · ").ifBlank { null }
 }
 
-fun co2(g: Int): String = if (g < 1000) T("$g g CO2e", "$g גרם CO2e") else T("%.2f kg CO2e", "%.2f ק\"ג CO2e").format(g / 1000.0)
+fun co2(g: Int): String = if (g < 1000) T("$g g CO2e", "$g גרם CO2e") else T("%.2f kg CO2e", "%.2f ק\"ג CO2e").format(Locale.US, g / 1000.0)
 
 @Composable
 private fun TripStrip(trip: Moovit.Itinerary, r: Moovit.Resolved) {
@@ -313,7 +313,7 @@ private fun Timeline(
                         }
                     }
                     Rail(Mark.NONE, ride, ride) {
-                        Step(rideLabel(l), if (l.fare >= 0) "%s%.2f".format(l.currency, l.fare / 100.0) else null) {
+                        Step(rideLabel(l), if (l.fare >= 0) "%s%.2f".format(Locale.US, l.currency, l.fare / 100.0) else null) {
                             ModeGlyph(mode, tint, 15.dp)
                         }
                     }

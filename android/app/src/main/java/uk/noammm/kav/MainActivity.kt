@@ -16,6 +16,7 @@ import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.util.Rational
 import android.view.Surface
 import androidx.activity.ComponentActivity
@@ -38,6 +39,7 @@ import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.semantics.Role
@@ -48,6 +50,7 @@ import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.withLink
 import androidx.compose.ui.unit.LayoutDirection
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
@@ -57,6 +60,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.repeatOnLifecycle
+import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -65,6 +69,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -75,6 +80,7 @@ import uk.noammm.kav.data.MapFile
 import uk.noammm.kav.data.Moovit
 import uk.noammm.kav.data.MoovitLink
 import uk.noammm.kav.data.Net
+import uk.noammm.kav.data.nearestStops
 import uk.noammm.kav.data.Updates
 import uk.noammm.kav.ui.*
 
@@ -134,16 +140,21 @@ class MainActivity : ComponentActivity() {
             addOnPictureInPictureModeChangedListener { Pip.active = it.isInPictureInPictureMode }
         }
         T.lang = Prefs.lang(this)
-        if (!PendingBackup.offer(this, intent?.data)) {
+        // Restored, or reopened from Recents: the link or backup was already handled.
+        val fresh = savedInstanceState == null && (intent.flags and Intent.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY) == 0
+        if (fresh && !PendingBackup.offer(this, intent?.data)) {
             MoovitLink.parse(intent?.dataString)?.let { PendingLink.plan = it }
         }
         setContent {
             val light = K.light
+            val bg = K.bg
             val view = androidx.compose.ui.platform.LocalView.current
             androidx.compose.runtime.SideEffect {
                 val bars = androidx.core.view.WindowCompat.getInsetsController(window, view)
                 bars.isAppearanceLightStatusBars = light
                 bars.isAppearanceLightNavigationBars = light
+                // Before Android 10 the navigation bar keeps a light scrim behind dark-theme icons.
+                if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) window.navigationBarColor = bg.toArgb()
             }
             KavTheme {
                 CompositionLocalProvider(
@@ -169,6 +180,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
+        setIntent(intent)
         if (PendingBackup.offer(this, intent.data)) return
         MoovitLink.parse(intent.dataString)?.let { PendingLink.plan = it }
     }
@@ -180,6 +192,8 @@ data class ActiveJourney(
     val fromLabel: String,
     val toLabel: String,
     val chosen: Map<Int, Int> = emptyMap(),
+    val from: Moovit.Place? = null,
+    val to: Moovit.Place? = null,
 )
 
 data class RecentTrip(
@@ -189,6 +203,9 @@ data class RecentTrip(
     val lines: List<Int> = emptyList(),
     val group: Int = -1,
 )
+
+// What Moovit is told about where the user is while private search is on.
+enum class Seen { NONE, CITY, PLACE }
 
 class KavModel(net: Net? = null, ctx: Context? = null) : ViewModel() {
     var net by mutableStateOf(net)
@@ -202,6 +219,7 @@ class KavModel(net: Net? = null, ctx: Context? = null) : ViewModel() {
     var returnHome by mutableStateOf(false)
 
     var navigating by mutableStateOf(false)
+    var liveShow by mutableStateOf(LiveShow.ALL)
 
     var journeyStep by mutableIntStateOf(0)
 
@@ -226,6 +244,8 @@ class KavModel(net: Net? = null, ctx: Context? = null) : ViewModel() {
 
     var fix by mutableStateOf<Fix?>(null)
     var here by mutableStateOf<Pair<Double, Double>?>(null)
+    private var hereAt by mutableLongStateOf(0L)
+    var restored by mutableStateOf(false)
     var heading by mutableStateOf<Float?>(null)
 
     var filters by mutableStateOf(ctx?.let { Prefs.filters(it) } ?: ResultFilter.entries.toSet())
@@ -236,7 +256,11 @@ class KavModel(net: Net? = null, ctx: Context? = null) : ViewModel() {
         Prefs.setFilter(ctx, f, on)
     }
 
+    var prefsVersion by mutableIntStateOf(0)
+        private set
+
     fun reloadPrefs(ctx: Context) {
+        prefsVersion++
         favourites = Prefs.favourites(ctx)
         filters = Prefs.filters(ctx)
         K.accent = Color(Prefs.accent(ctx))
@@ -244,35 +268,100 @@ class KavModel(net: Net? = null, ctx: Context? = null) : ViewModel() {
         K.liquid = Prefs.liquidGlass(ctx)
         Shown.co2 = Prefs.showCo2(ctx)
         Moovit.shareLocation = !Prefs.privateSearch(ctx)
+        seen = Prefs.seen(ctx)
+        seenPlace = Prefs.seenPlace(ctx)
+        Online.reset()
         T.switchTo(Prefs.lang(ctx))
     }
 
-    fun locate(lat: Double, lon: Double, speed: Float = 0f) {
+    // One-off positions for maps and planning; only tracked fixes move a trip's steps on.
+    fun locate(lat: Double, lon: Double) {
         here = lat to lon
-        fix = Fix(lat, lon, System.currentTimeMillis() / 1000, speed)
+        hereAt = System.currentTimeMillis() / 1000
     }
+
+    fun track(lat: Double, lon: Double, speed: Float, at: Long) {
+        here = lat to lon
+        hereAt = at
+        fix = Fix(lat, lon, at, speed)
+    }
+
+    // Recent enough to plan a trip from.
+    val hereFresh: Boolean get() = System.currentTimeMillis() / 1000 - hereAt <= 120
+
+    var seen by mutableStateOf(ctx?.let { Prefs.seen(it) } ?: Seen.CITY)
+        private set
+    var seenPlace by mutableStateOf(ctx?.let { Prefs.seenPlace(it) })
+        private set
+    @Volatile private var city: Moovit.Place? = null
+
+    fun setSeen(ctx: Context, how: Seen, place: Moovit.Place? = seenPlace) {
+        seen = how
+        seenPlace = place
+        Prefs.setSeen(ctx, how, place)
+        Online.reset()
+    }
+
+    fun standIn(ctx: Context): Pair<Double, Double>? = when (seen) {
+        Seen.NONE -> null
+        Seen.CITY -> cityAround(ctx)?.let { it.lat to it.lon }
+        Seen.PLACE -> seenPlace?.let { it.lat to it.lon }
+    }
+
+    // The centre of the town or city the user is in, found on the phone from the nearest stops'
+    // locality, or of the closest one when none of those has a locality. Needs the timetable loaded.
+    fun cityAround(ctx: Context): Moovit.Place? {
+        val net = Loaded.net
+        val at = here
+        if (net != null && at != null) {
+            val own = net.nearestStops(at.first, at.second, k = 8)
+                .firstOrNull { net.cityOf(it.first).isNotBlank() }?.first?.let { net.cityOf[it] }
+            val c = own ?: net.cityCentre.indices.filter { net.cityCentre[it] != null }
+                .minByOrNull { net.cityCentre[it]!!.let { p -> metres(at.first, at.second, p.first, p.second) } }
+            val centre = c?.let { net.cityCentre.getOrNull(it) }
+            if (c != null && centre != null) {
+                val found = Moovit.Place(net.city[c], "", centre.first, centre.second)
+                if (found.name != city?.name) Prefs.setSeenCity(ctx, found)
+                city = found
+                return found
+            }
+        }
+        return lastCity(ctx)
+    }
+
+    fun lastCity(ctx: Context): Moovit.Place? = city ?: Prefs.seenCity(ctx).also { city = it }
 
     var update by mutableStateOf<Updates.Release?>(null)
     var updateDismissed by mutableStateOf(false)
     var updateProgress by mutableStateOf<Float?>(null)
     var updateError by mutableStateOf<String?>(null)
     var updateChecked by mutableStateOf(false)
+    var updateFailed by mutableStateOf(false)
 
     suspend fun checkForUpdate(ctx: Context) {
         try {
             val installed = Updates.installedVersion(ctx)
             val latest = withContext(Dispatchers.IO) { Updates.latest() }
             update = latest.takeIf { Updates.isNewer(it.version, installed) }
+            updateFailed = false
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
             android.util.Log.w("KavUpdate", "update check failed", e)
+            updateFailed = true
         } finally {
             updateChecked = true
         }
     }
 
-    suspend fun installUpdate(ctx: Context) {
+    // Outlives the dialog, so closing it doesn't drop the download.
+    fun startUpdate(ctx: Context) {
+        if (updateProgress != null) return
+        val app = ctx.applicationContext
+        viewModelScope.launch { installUpdate(app) }
+    }
+
+    private suspend fun installUpdate(ctx: Context) {
         val release = update ?: return
         if (!Updates.canInstall(ctx)) { Updates.askInstallPermission(ctx); return }
         updateError = null
@@ -337,22 +426,37 @@ private fun Root() {
 @Composable
 private fun Shell(model: KavModel) {
     val ctx = LocalContext.current
+    DisposableEffect(model) {
+        val app = ctx.applicationContext
+        Moovit.standIn = { model.standIn(app) }
+        onDispose { Moovit.standIn = { null } }
+    }
+    // Keeps the town Moovit sees current. The timetable is only loaded for it when the last town
+    // found is unknown or a few kilometres away.
+    val roughly = model.here?.let { (it.first * 100).toInt() to (it.second * 100).toInt() }
+    LaunchedEffect(model.seen, roughly) {
+        val at = model.here ?: return@LaunchedEffect
+        if (model.seen != Seen.CITY) return@LaunchedEffect
+        val app = ctx.applicationContext
+        val last = model.lastCity(app)
+        if (Loaded.net == null && last != null && metres(at.first, at.second, last.lat, last.lon) < 3_000) return@LaunchedEffect
+        runCatching { loadNet(app) }
+        withContext(Dispatchers.Default) { model.cityAround(app) }
+    }
     val askLocation = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions(),
     ) { granted ->
         if (granted.values.any { it }) requestLocationOnce(ctx) { model.locate(it.first, it.second) }
     }
     LaunchedEffect(Unit) {
-        if (!hasPreciseLocation(ctx)) askLocation.launch(
-            arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION),
-        )
+        if (!hasPreciseLocation(ctx)) askLocation.launch(LOCATION_PERMISSIONS)
     }
     val shellLifecycle = LocalLifecycleOwner.current.lifecycle
     LaunchedEffect(shellLifecycle) {
         shellLifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) {
-            if (model.here == null && hasLocationPermission(ctx)) {
-                requestLocationOnce(ctx) { model.locate(it.first, it.second) }
-            }
+            if (hasLocationPermission(ctx)) requestLocationOnce(ctx) { model.locate(it.first, it.second) }
+            // The trip service can only start tracking while the app is in front.
+            if (model.activeJourney != null) TripService.show(ctx)
         }
     }
 
@@ -381,6 +485,7 @@ private fun Shell(model: KavModel) {
                 model.activeJourney = journey
             }
         }
+        model.restored = true
         snapshotFlow { model.activeJourney to model.journeyStep }.collect { (journey, step) ->
             withContext(Dispatchers.IO) {
                 if (journey == null) JourneyFile.clear(ctx) else JourneyFile.save(ctx, journey, step)
@@ -446,7 +551,7 @@ private fun Shell(model: KavModel) {
     LaunchedEffect(journeyActive, lifecycle) {
         if (!journeyActive) return@LaunchedEffect
         lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
-            val stop = trackLocation(ctx) { model.locate(it.latitude, it.longitude, it.speed) }
+            val stop = trackLocation(ctx) { model.track(it.latitude, it.longitude, it.speed, it.fixTime()) }
             try { awaitCancellation() } finally { stop() }
         }
     }
@@ -457,7 +562,7 @@ private fun Shell(model: KavModel) {
             val current = model.activeJourney?.takeIf { it.trip === journey.trip } ?: break
             val next = journeyProgress(
                 steps, model.journeyStep, current.resolved, current.chosen,
-                System.currentTimeMillis() / 1000, model.fix,
+                System.currentTimeMillis() / 1000, model.fix, canLocate(ctx),
             )
             if (next != model.journeyStep) model.journeyStep = next
             delay(2000)
@@ -466,7 +571,8 @@ private fun Shell(model: KavModel) {
     val askNotice = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission(),
     ) { }
-    LaunchedEffect(journeyActive) {
+    LaunchedEffect(journeyActive, model.restored) {
+        if (!model.restored) return@LaunchedEffect
         if (!journeyActive) { TripService.stop(ctx); return@LaunchedEffect }
         if (Build.VERSION.SDK_INT >= 33 &&
             ContextCompat.checkSelfPermission(ctx, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
@@ -478,53 +584,18 @@ private fun Shell(model: KavModel) {
             }
         }
     }
-    DisposableEffect(Unit) {
-        TripBridge.end = { model.activeJourney = null }
-        TripBridge.journey = { model.activeJourney?.let { it to model.journeyStep } }
-        TripBridge.fix = { model.locate(it.lat, it.lon, it.speed) }
+    DisposableEffect(model.restored) {
+        if (model.restored) {
+            TripBridge.end = { model.activeJourney = null }
+            TripBridge.journey = { model.activeJourney?.let { it to model.journeyStep } }
+            TripBridge.fix = { model.track(it.lat, it.lon, it.speed, it.at) }
+            TripBridge.fixNow = { model.fix }
+        }
         onDispose {
             TripBridge.end = null
             TripBridge.journey = null
             TripBridge.fix = null
-        }
-    }
-    LaunchedEffect(model.activeJourney?.trip) {
-        val journey0 = model.activeJourney ?: return@LaunchedEffect
-        val steps = buildSteps(journey0.trip, journey0.fromLabel, journey0.toLabel)
-        val fired = HashSet<String>()
-        while (true) {
-            val journey = model.activeJourney?.takeIf { it.trip === journey0.trip } ?: break
-            val now = System.currentTimeMillis() / 1000
-            val r = journey.resolved
-            when (val step = steps.getOrNull(model.journeyStep.coerceIn(0, steps.lastIndex))) {
-                is Step.Wait -> {
-                    val (ride, wait) = boardingChoice(step.ride, step.wait, journey.chosen[step.legIndex] ?: 0)
-                    val dep = r.departures(ride, wait).firstOrNull { it.tripId == ride.tripId }
-                    val at = dep?.timeUtc ?: ride.dep
-                    val line = ride.shortName.ifBlank { r.line(ride.lineId)?.number.orEmpty() }
-                    if (at - now in 0..90 && line.isNotBlank() && fired.add("wait-${step.legIndex}")) {
-                        TripService.alert(
-                            ctx, T("$line is arriving", "$line מגיע"),
-                            listOfNotNull(r.stopName(ride.fromStop), whenLabel(at, now)).joinToString(" · "),
-                        )
-                    }
-                }
-                is Step.Ride -> {
-                    val (ride, _) = boardingChoice(step.ride, step.wait, journey.chosen[step.legIndex] ?: 0)
-                    val total = ride.stops.size
-                    val progress = stopsProgress(ride, r.stops, r.arrival(ride), model.fix, now)
-                    val nearEnd = (progress >= 0 && total >= 2 && progress >= total - 1f) ||
-                        (progress < 0 && ride.arr - now in 0..120)
-                    if (nearEnd && fired.add("ride-${step.legIndex}")) {
-                        TripService.alert(
-                            ctx, T("Get off at the next stop", "רדו בתחנה הבאה"),
-                            r.stopName(ride.toStop) ?: journey.toLabel,
-                        )
-                    }
-                }
-                else -> {}
-            }
-            delay(5_000)
+            TripBridge.fixNow = null
         }
     }
     LaunchedEffect(model.navigating, lifecycle) {
@@ -605,7 +676,9 @@ private fun ImportPrompt(model: KavModel) {
     val ctx = LocalContext.current
     val uri = PendingBackup.uri ?: return
     var failed by remember(uri) { mutableStateOf<String?>(null) }
-    Dialog(onDismissRequest = { PendingBackup.uri = null }) {
+    var busy by remember(uri) { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
+    Dialog(onDismissRequest = { if (!busy) PendingBackup.uri = null }) {
         Column(
             Modifier.fillMaxWidth().clip(RoundedCornerShape(K.rCard)).background(K.surface1).padding(K.gap5),
             verticalArrangement = Arrangement.spacedBy(K.gap4),
@@ -623,24 +696,29 @@ private fun ImportPrompt(model: KavModel) {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(K.gap2)) {
                 Box(
                     Modifier.weight(1f).heightIn(min = 46.dp).clip(RoundedCornerShape(K.rPill)).background(K.plateStrong)
-                        .clickable(role = Role.Button) { PendingBackup.uri = null },
+                        .clickable(role = Role.Button) { if (!busy) PendingBackup.uri = null },
                     contentAlignment = Alignment.Center,
                 ) { Text(T("Cancel", "ביטול"), fontSize = 15.sp, color = K.text) }
                 Box(
                     Modifier.weight(1f).heightIn(min = 46.dp).clip(RoundedCornerShape(K.rPill)).background(K.accent)
                         .clickable(role = Role.Button) {
-                            Backup.read(ctx, uri)
-                                .onSuccess { r ->
-                                    model.reloadPrefs(ctx)
-                                    PendingBackup.uri = null
-                                    android.widget.Toast.makeText(
-                                        ctx,
-                                        T("Imported: ${r.favourites} places, ${r.trips} trips, ${r.recents} searches",
-                                          "יובא: ${r.favourites} מקומות, ${r.trips} נסיעות, ${r.recents} חיפושים"),
-                                        android.widget.Toast.LENGTH_LONG,
-                                    ).show()
-                                }
-                                .onFailure { e -> failed = importError(e) }
+                            if (busy) return@clickable
+                            busy = true
+                            scope.launch {
+                                Backup.read(ctx, uri)
+                                    .onSuccess { r ->
+                                        model.reloadPrefs(ctx)
+                                        if (PendingBackup.uri == uri) PendingBackup.uri = null
+                                        android.widget.Toast.makeText(
+                                            ctx,
+                                            T("Imported: ${r.favourites} places, ${r.trips} trips, ${r.recents} searches",
+                                              "יובא: ${r.favourites} מקומות, ${r.trips} נסיעות, ${r.recents} חיפושים"),
+                                            android.widget.Toast.LENGTH_LONG,
+                                        ).show()
+                                    }
+                                    .onFailure { e -> failed = importError(e) }
+                                busy = false
+                            }
                         },
                     contentAlignment = Alignment.Center,
                 ) { Text(T("Import", "ייבוא"), fontSize = 15.sp, color = K.onAccent, fontWeight = FontWeight.Medium) }
@@ -781,8 +859,8 @@ private fun TabBar(model: KavModel) {
 }
 
 @Composable
-private fun TabGlyph(tab: Tab, tint: Color) {
-    Canvas(Modifier.size(18.dp)) {
+internal fun TabGlyph(tab: Tab, tint: Color, side: Dp = 18.dp) {
+    Canvas(Modifier.size(side)) {
         val w = size.width; val h = size.height; val sw = w * 0.09f
         fun line(x1: Float, y1: Float, x2: Float, y2: Float) =
             drawLine(tint, Offset(x1 * w, y1 * h), Offset(x2 * w, y2 * h), sw, StrokeCap.Round)
@@ -816,29 +894,53 @@ fun hasLocationPermission(ctx: Context): Boolean =
         ContextCompat.checkSelfPermission(ctx, Manifest.permission.ACCESS_COARSE_LOCATION) ==
         PackageManager.PERMISSION_GRANTED
 
+fun canLocate(ctx: Context): Boolean {
+    val lm = ctx.getSystemService(Context.LOCATION_SERVICE) as? LocationManager ?: return false
+    return hasLocationPermission(ctx) && androidx.core.location.LocationManagerCompat.isLocationEnabled(lm)
+}
+
 fun hasPreciseLocation(ctx: Context): Boolean =
     ContextCompat.checkSelfPermission(ctx, Manifest.permission.ACCESS_FINE_LOCATION) ==
         PackageManager.PERMISSION_GRANTED
 
-fun lastKnownLocation(ctx: Context): Pair<Double, Double>? {
+val LOCATION_PERMISSIONS = arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION)
+
+private const val GOOD_FIX_M = 50f
+private const val ROUGH_FIX_M = 75f
+
+internal fun Location.fixTime(): Long =
+    System.currentTimeMillis() / 1000 - (SystemClock.elapsedRealtimeNanos() - elapsedRealtimeNanos) / 1_000_000_000
+
+private fun lastKnown(ctx: Context): Location? {
     if (!hasLocationPermission(ctx)) return null
     return try {
         val lm = ctx.getSystemService(Context.LOCATION_SERVICE) as LocationManager
         listOf(LocationManager.NETWORK_PROVIDER, LocationManager.GPS_PROVIDER, LocationManager.PASSIVE_PROVIDER)
             .asSequence()
             .mapNotNull { runCatching { lm.getLastKnownLocation(it) }.getOrNull() }
-            .maxByOrNull { it.time }
-            ?.let { it.latitude to it.longitude }
+            .maxByOrNull { it.elapsedRealtimeNanos }
     } catch (e: SecurityException) { null }
 }
 
-fun requestLocationOnce(ctx: Context, onResult: (Pair<Double, Double>) -> Unit) {
-    if (!hasLocationPermission(ctx)) return
-    lastKnownLocation(ctx)?.let(onResult)
-    val lm = ctx.getSystemService(Context.LOCATION_SERVICE) as? LocationManager ?: return
-    val providers = listOf(LocationManager.GPS_PROVIDER, LocationManager.NETWORK_PROVIDER)
-        .filter { runCatching { lm.isProviderEnabled(it) }.getOrDefault(false) }
-    if (providers.isEmpty()) return
+// A recent fix at once, then better ones until one is within GOOD_FIX_M; onFail if none came.
+fun requestLocationOnce(ctx: Context, onFail: () -> Unit = {}, onResult: (Pair<Double, Double>) -> Unit) {
+    val lm = ctx.getSystemService(Context.LOCATION_SERVICE) as? LocationManager
+    if (lm == null || !hasLocationPermission(ctx)) { onFail(); return }
+    var reported = false
+    var live = false
+    var bestAccuracy = Float.MAX_VALUE
+    fun offer(l: Location, fresh: Boolean) {
+        val accuracy = if (l.hasAccuracy()) l.accuracy else 1_000f
+        if (fresh && !live) {
+            live = true
+        } else if (accuracy >= bestAccuracy) {
+            return
+        }
+        bestAccuracy = accuracy
+        reported = true
+        onResult(l.latitude to l.longitude)
+    }
+    lastKnown(ctx)?.takeIf { System.currentTimeMillis() / 1000 - it.fixTime() <= 120 }?.let { offer(it, false) }
 
     var done = false
     var listener: LocationListener? = null
@@ -846,45 +948,63 @@ fun requestLocationOnce(ctx: Context, onResult: (Pair<Double, Double>) -> Unit) 
         if (done) return
         done = true
         listener?.let { runCatching { lm.removeUpdates(it) } }
+        if (!reported) onFail()
     }
     listener = object : LocationListener {
         override fun onLocationChanged(location: Location) {
             if (done) return
-            stop()
-            onResult(location.latitude to location.longitude)
+            offer(location, true)
+            if (location.hasAccuracy() && location.accuracy <= GOOD_FIX_M) stop()
         }
         override fun onProviderEnabled(provider: String) {}
         override fun onProviderDisabled(provider: String) {}
         @Deprecated("required below API 30")
         override fun onStatusChanged(provider: String?, status: Int, extras: Bundle?) {}
     }
-    try {
-        providers.forEach { lm.requestLocationUpdates(it, 0L, 0f, listener, Looper.getMainLooper()) }
-    } catch (e: SecurityException) { stop(); return }
-    Handler(Looper.getMainLooper()).postDelayed({ stop() }, 25_000)
+    var any = false
+    for (provider in listOf(LocationManager.GPS_PROVIDER, LocationManager.NETWORK_PROVIDER)) {
+        if (!runCatching { lm.isProviderEnabled(provider) }.getOrDefault(false)) continue
+        try {
+            lm.requestLocationUpdates(provider, 0L, 0f, listener, Looper.getMainLooper())
+            any = true
+        } catch (e: SecurityException) {
+        } catch (e: IllegalArgumentException) {
+        }
+    }
+    if (!any) { stop(); return }
+    Handler(Looper.getMainLooper()).postDelayed({ stop() }, 30_000)
 }
 
+// Rough fixes, and network ones while GPS is talking, would move the steps on.
 fun trackLocation(ctx: Context, onFix: (Location) -> Unit): () -> Unit {
     if (!hasLocationPermission(ctx)) return {}
     val lm = ctx.getSystemService(Context.LOCATION_SERVICE) as? LocationManager ?: return {}
+    var lastGps = 0L
     val listener = object : LocationListener {
-        override fun onLocationChanged(location: Location) { onFix(location) }
+        override fun onLocationChanged(location: Location) {
+            if (location.hasAccuracy() && location.accuracy > ROUGH_FIX_M) return
+            val now = SystemClock.elapsedRealtime()
+            if (location.provider == LocationManager.GPS_PROVIDER) lastGps = now
+            else if (now - lastGps < 10_000) return
+            onFix(location)
+        }
         override fun onProviderEnabled(provider: String) {}
         override fun onProviderDisabled(provider: String) {}
         @Deprecated("required below API 30")
         override fun onStatusChanged(provider: String?, status: Int, extras: Bundle?) {}
     }
-    val wanted = listOf(LocationManager.GPS_PROVIDER to 1000L, LocationManager.NETWORK_PROVIDER to 4000L)
+    val providers = runCatching { lm.allProviders }.getOrDefault(emptyList())
     var any = false
-    for ((provider, interval) in wanted) {
-        if (!runCatching { lm.isProviderEnabled(provider) }.getOrDefault(false)) continue
+    for ((provider, interval) in listOf(LocationManager.GPS_PROVIDER to 1000L, LocationManager.NETWORK_PROVIDER to 4000L)) {
+        if (provider !in providers) continue
         try {
             lm.requestLocationUpdates(provider, interval, 2f, listener, Looper.getMainLooper())
             any = true
-        } catch (e: SecurityException) {}
+        } catch (e: SecurityException) {
+        } catch (e: IllegalArgumentException) {
+        }
     }
     if (!any) return {}
-    lastKnownLocation(ctx)?.let { (lat, lon) -> onFix(Location("cached").apply { latitude = lat; longitude = lon }) }
     return { runCatching { lm.removeUpdates(listener) } }
 }
 
@@ -951,7 +1071,7 @@ object Prefs {
 
     fun remember(ctx: Context, p: Moovit.Place) {
         val kept = (listOf(p) + recents(ctx))
-            .distinctBy { "%.5f,%.5f".format(it.lat, it.lon) }
+            .distinctBy { "%.5f,%.5f".format(java.util.Locale.US, it.lat, it.lon) }
             .take(MAX_RECENTS)
         val arr = org.json.JSONArray()
         for (r in kept) arr.put(json(r))
@@ -963,12 +1083,12 @@ object Prefs {
 
     private fun place(o: org.json.JSONObject) = Moovit.Place(
         o.optString("n"), o.optString("d"), o.optDouble("lat"), o.optDouble("lon"),
-        o.optInt("t", 5), o.optInt("m", -1),
+        o.optInt("t", 5),
     )
 
     private fun json(p: Moovit.Place): org.json.JSONObject = org.json.JSONObject()
         .put("n", p.name).put("d", p.detail).put("lat", p.lat).put("lon", p.lon)
-        .put("t", p.type).put("m", p.meters)
+        .put("t", p.type)
 
     fun trips(ctx: Context): List<RecentTrip> = try {
         val raw = store(ctx).getString(TRIPS, "[]")
@@ -986,7 +1106,7 @@ object Prefs {
     } catch (e: Exception) { emptyList() }
 
     private fun tripKey(t: RecentTrip) =
-        "%.4f,%.4f>%.4f,%.4f".format(t.from?.lat ?: 0.0, t.from?.lon ?: 0.0, t.to.lat, t.to.lon)
+        "%.4f,%.4f>%.4f,%.4f".format(java.util.Locale.US, t.from?.lat ?: 0.0, t.from?.lon ?: 0.0, t.to.lat, t.to.lon)
 
     private fun saveTrips(ctx: Context, trips: List<RecentTrip>) {
         val arr = org.json.JSONArray()
@@ -1065,6 +1185,20 @@ object Prefs {
     fun privateSearch(ctx: Context): Boolean = store(ctx).getBoolean("privateSearch", true)
     fun setPrivateSearch(ctx: Context, on: Boolean) = store(ctx).edit().putBoolean("privateSearch", on).apply()
 
+    fun seen(ctx: Context): Seen = Seen.entries.firstOrNull { it.name == store(ctx).getString("seen", null) } ?: Seen.CITY
+    fun seenPlace(ctx: Context): Moovit.Place? = savedPlace(ctx, "seenPlace")
+    fun setSeen(ctx: Context, how: Seen, place: Moovit.Place?) {
+        val e = store(ctx).edit().putString("seen", how.name)
+        if (place != null) e.putString("seenPlace", json(place).toString()) else e.remove("seenPlace")
+        e.apply()
+    }
+    fun seenCity(ctx: Context): Moovit.Place? = savedPlace(ctx, "seenCity")
+    fun setSeenCity(ctx: Context, city: Moovit.Place) = store(ctx).edit().putString("seenCity", json(city).toString()).apply()
+    private fun savedPlace(ctx: Context, key: String): Moovit.Place? =
+        store(ctx).getString(key, null)?.let { runCatching { place(org.json.JSONObject(it)) }.getOrNull() }
+            ?.takeIf(::inIsrael)
+    private fun inIsrael(p: Moovit.Place) = p.lat in 29.0..34.0 && p.lon in 34.0..36.5
+
     fun onboarded(ctx: Context): Boolean = store(ctx).getBoolean("onboarded", false)
     fun setOnboarded(ctx: Context) = store(ctx).edit().putBoolean("onboarded", true).putBoolean("pickSupport", true).apply()
 
@@ -1127,6 +1261,8 @@ object Prefs {
             .put("look", look(ctx).name.lowercase())
             .put("liquidGlass", s.getBoolean("liquidGlass", true))
             .put("privateSearch", privateSearch(ctx))
+            .put("seen", seen(ctx).name)
+            .apply { seenPlace(ctx)?.let { put("seenPlace", json(it)) } }
             .put("filters", org.json.JSONObject().apply { ResultFilter.entries.forEach { put(it.name, it in on) } })
             .put("filtersOff", org.json.JSONArray(off))
             .put("showCo2", showCo2(ctx))
@@ -1144,6 +1280,8 @@ object Prefs {
         o.optString("look").takeIf { it in looks }?.let { e.putString("look", it) }
         if (o.has("liquidGlass")) e.putBoolean("liquidGlass", o.optBoolean("liquidGlass"))
         if (o.has("privateSearch")) e.putBoolean("privateSearch", o.optBoolean("privateSearch"))
+        o.optString("seen").takeIf { n -> Seen.entries.any { it.name == n } }?.let { e.putString("seen", it) }
+        o.optJSONObject("seenPlace")?.let { place(it) }?.takeIf(::inIsrael)?.let { e.putString("seenPlace", json(it).toString()) }
         if (o.has("showCo2")) e.putBoolean("showCo2", o.optBoolean("showCo2"))
         val chosen = o.optJSONObject("filters")
         val oldOff = o.optJSONArray("filtersOff")?.let { a -> (0 until a.length()).map { a.optString(it) }.toSet() }

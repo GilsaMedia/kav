@@ -264,42 +264,6 @@ private fun JourneyCard(model: KavModel, journey: ActiveJourney, onResume: () ->
     }
 }
 
-internal fun stepInstruction(step: Step, journey: ActiveJourney, lastLeg: Boolean, now: Long): Pair<String, String> {
-    val r = journey.resolved
-    fun time(utc: Long) = SimpleDateFormat("HH:mm", Locale.US).format(Date(utc * 1000))
-    fun stop(id: Int) = r.stopName(id)?.takeIf { it.isNotBlank() }
-    fun line(ride: Moovit.Leg): String = ride.shortName.ifBlank {
-        r.line(ride.lineId)?.number.orEmpty()
-    }.ifBlank {
-        T("the ", "ה") + modeName(modeOf(r.routeType(r.line(ride.lineId)?.agencyId ?: -1))).lowercase(Locale.US)
-    }
-    fun nextStop(id: Int) = stop(id) ?: if (lastLeg) journey.toLabel else T("your next stop", "התחנה הבאה שלכם")
-    return when (step) {
-        is Step.Start -> T("Leave at ${time(step.time)}", "יציאה בשעה ${time(step.time)}") to T("Start from ${step.label}", "התחלה מ${step.label}")
-        is Step.Walk -> T("Walk to ${nextStop(step.toStop)}", "הליכה אל ${nextStop(step.toStop)}") to listOfNotNull(
-            T("${step.leg.minutes} min", "${step.leg.minutes} דק׳").takeIf { step.leg.minutes > 0 },
-            distanceLabel(step.leg.meters.toDouble()).takeIf { step.leg.meters > 0 },
-        ).joinToString(" · ").ifBlank { T("Follow the walking route.", "עקבו אחרי מסלול ההליכה.") }
-        is Step.Wait -> {
-            val (ride, wait) = boardingChoice(step.ride, step.wait, journey.chosen[step.legIndex] ?: 0)
-            val departure = r.departures(ride, wait).firstOrNull { it.tripId == ride.tripId }
-                ?: Moovit.Departure(ride.tripId, ride.dep)
-            if (departure.status == 3) T("${line(ride)} is cancelled", "${line(ride)} מבוטל") to T("Find another route before continuing.", "מצאו מסלול אחר לפני שתמשיכו.")
-            else T("Wait for ${line(ride)}", "המתנה ל${line(ride)}") to listOfNotNull(
-                stop(ride.fromStop),
-                (if (departure.live) T("Live · ", "בזמן אמת · ") else T("Scheduled · ", "מתוזמן · ")) + whenLabel(departure.timeUtc, now),
-            ).joinToString(" · ")
-        }
-        is Step.Ride -> {
-            val (ride, _) = boardingChoice(step.ride, step.wait, journey.chosen[step.legIndex] ?: 0)
-            T("Ride ${line(ride)}", "נסיעה ב${line(ride)}") to T("Get off at ${nextStop(ride.toStop)}", "ירידה ב${nextStop(ride.toStop)}")
-        }
-        is Step.Taxi -> T("Take a taxi", "קחו מונית") to T("Continue to ${nextStop(step.leg.toStop)}", "המשיכו אל ${nextStop(step.leg.toStop)}")
-        is Step.Cycle -> T("Cycle to ${nextStop(step.leg.toStop)}", "רכיבה אל ${nextStop(step.leg.toStop)}") to T("Follow the cycling route.", "עקבו אחרי מסלול הרכיבה.")
-        is Step.Arrive -> T("Arrive at ${step.label}", "הגעה אל ${step.label}") to T("Planned arrival ${time(step.time)}", "הגעה מתוכננת בשעה ${time(step.time)}")
-    }
-}
-
 @Composable
 private fun HomeShortcut(label: String, icon: DrawScope.() -> Unit, modifier: Modifier, onClick: () -> Unit) {
     Row(

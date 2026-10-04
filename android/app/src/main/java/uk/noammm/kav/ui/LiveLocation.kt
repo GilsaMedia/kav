@@ -28,7 +28,7 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
-private val hm = SimpleDateFormat("HH:mm", Locale.US)
+private val hm = SimpleDateFormat("HH:mm", Locale.US).apply { timeZone = ISRAEL }
 
 fun whenLabel(t: Long, now: Long = System.currentTimeMillis() / 1000): String {
     val m = ((t - now) / 60).toInt()

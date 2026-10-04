@@ -63,6 +63,7 @@ object MoovitLink {
         fun latLon(latKey: String, lonKey: String): Pair<Double, Double>? {
             val lat = params[latKey]?.toDoubleOrNull() ?: return null
             val lon = params[lonKey]?.toDoubleOrNull() ?: return null
+            if (!lat.isFinite() || !lon.isFinite() || lat !in -90.0..90.0 || lon !in -180.0..180.0) return null
             return lat to lon
         }
         val from = latLon("orig_lat", "orig_lon")

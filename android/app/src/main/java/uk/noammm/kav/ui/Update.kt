@@ -31,7 +31,6 @@ fun UpdatePrompt(model: KavModel) {
     val release = model.update ?: return
     if (model.updateDismissed) return
     val ctx = LocalContext.current
-    val scope = rememberCoroutineScope()
     Dialog(onDismissRequest = { model.updateDismissed = true }) {
         Column(
             Modifier.fillMaxWidth().panel(K.rCard, solid = true).padding(K.gap5),
@@ -55,7 +54,7 @@ fun UpdatePrompt(model: KavModel) {
                         .clickable(role = Role.Button) { model.updateDismissed = true },
                     contentAlignment = Alignment.Center,
                 ) { Text(T("No", "לא"), fontSize = 15.sp, color = K.text) }
-                UpdateButton(model, Modifier.weight(1f)) { scope.launch { model.installUpdate(ctx) } }
+                UpdateButton(model, Modifier.weight(1f)) { model.startUpdate(ctx) }
             }
         }
     }
@@ -63,10 +62,11 @@ fun UpdatePrompt(model: KavModel) {
 
 @Composable
 private fun AppIcon(size: androidx.compose.ui.unit.Dp) {
-    Box(
-        Modifier.size(size).clip(RoundedCornerShape(size / 4)).background(androidx.compose.ui.graphics.Color.Black),
-        contentAlignment = Alignment.Center,
-    ) {
+    Box(Modifier.size(size).clip(RoundedCornerShape(size / 4)), contentAlignment = Alignment.Center) {
+        Image(
+            painterResource(R.drawable.ic_launcher_background), contentDescription = null,
+            modifier = Modifier.fillMaxSize().scale(1.5f),
+        )
         Image(
             painterResource(R.drawable.ic_launcher_foreground), contentDescription = "Kav",
             modifier = Modifier.fillMaxSize().scale(1.5f),
@@ -76,7 +76,7 @@ private fun AppIcon(size: androidx.compose.ui.unit.Dp) {
 
 @Composable
 private fun ReleaseNotes(release: Updates.Release, maxHeight: androidx.compose.ui.unit.Dp) {
-    val notes = release.notes.trim().ifBlank { release.name.ifBlank { T("No release notes.", "אין מה חדש.") } }
+    val notes = release.notes.trim().ifBlank { release.name.ifBlank { T("No release notes.", "אין הערות גרסה.") } }
     Column(
         Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).border(0.5.dp, K.text.copy(alpha = .14f), RoundedCornerShape(14.dp))
             .heightIn(max = maxHeight).verticalScroll(rememberScrollState()).padding(K.gap3),
@@ -137,13 +137,14 @@ fun UpdateSection(model: KavModel) {
                     when {
                         release != null -> T("${release.version} is available", "גרסה ${release.version} זמינה")
                         checking -> T("Looking…", "בודקים…")
+                        model.updateFailed -> T("Couldn't check for updates", "לא הצלחנו לבדוק אם יש עדכונים")
                         model.updateChecked -> T("This is the newest release", "זו הגרסה העדכנית ביותר")
                         else -> T("Not checked yet", "עוד לא נבדק")
                     },
                     fontSize = 12.sp, color = if (release != null) K.accent else K.dim,
                 )
             }
-            if (release != null) UpdateButton(model) { scope.launch { model.installUpdate(ctx) } }
+            if (release != null) UpdateButton(model) { model.startUpdate(ctx) }
             else Chip(if (checking) T("Checking…", "בודקים…") else T("Check for updates", "בדקו עדכונים"), false) {
                 if (checking) return@Chip
                 scope.launch {

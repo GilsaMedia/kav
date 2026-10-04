@@ -44,6 +44,15 @@ class TripService : Service() {
     }
     private val settle = Runnable { post() }
 
+    private val fired = HashSet<String>()
+    private var firedFor = ""
+    private val watch = object : Runnable {
+        override fun run() {
+            alertIfDue()
+            handler.postDelayed(this, ALERT_MS)
+        }
+    }
+
     override fun onBind(intent: Intent?) = null
 
     override fun onCreate() {
@@ -61,6 +70,8 @@ class TripService : Service() {
         post(force = true)
         handler.removeCallbacks(tick)
         handler.postDelayed(tick, TICK_MS)
+        handler.removeCallbacks(watch)
+        handler.post(watch)
         return START_STICKY
     }
 
@@ -87,6 +98,14 @@ class TripService : Service() {
         return true
     }
 
+    // Location granted after the trip started.
+    private fun track() {
+        if (tracking != null || !foreground || !hasLocationPermission(this)) return
+        val n = notice()?.let { build(this, it) } ?: return
+        val special = if (Build.VERSION.SDK_INT >= 34) ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE else 0
+        if (start(n, special or ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION)) tracking = trackLocation(this, ::onFix)
+    }
+
     private fun start(n: Notification, types: Int) = try {
         ServiceCompat.startForeground(this, ID, n, types)
         true
@@ -95,8 +114,7 @@ class TripService : Service() {
     }
 
     private fun onFix(location: Location) {
-        if (location.provider == "cached") return
-        val f = Fix(location.latitude, location.longitude, System.currentTimeMillis() / 1000, location.speed)
+        val f = Fix(location.latitude, location.longitude, location.fixTime(), location.speed)
         fix = f
         val shell = TripBridge.fix
         if (shell != null) shell(f) else advance()
@@ -107,7 +125,31 @@ class TripService : Service() {
         TripBridge.journey?.let { return it() }
         val at = JourneyFile.mtime(this)
         if (at != cachedAt) { cached = JourneyFile.load(this); cachedAt = at }
+        cached?.let { (journey, _) ->
+            if (System.currentTimeMillis() / 1000 > journey.trip.arr + JourneyFile.KEEP_S) {
+                JourneyFile.clear(this)
+                cached = null
+                cachedAt = -1L
+            }
+        }
         return cached
+    }
+
+    // Kept on disk so a restarted service doesn't repeat them.
+    private fun alertIfDue() {
+        val (journey, step) = journey() ?: return
+        val trip = "${journey.trip.guid}:${journey.trip.dep}"
+        val sent = getSharedPreferences("trip-alerts", MODE_PRIVATE)
+        if (trip != firedFor) {
+            firedFor = trip
+            fired.clear()
+            sent.getString(trip, null)?.let { fired.addAll(it.split(',')) }
+        }
+        val latest = listOfNotNull(fix, TripBridge.fixNow?.invoke()).maxByOrNull { it.at }
+        val due = tripAlert(journey, step, latest, System.currentTimeMillis() / 1000) ?: return
+        if (!fired.add(due.key)) return
+        sent.edit().clear().putString(trip, fired.joinToString(",")).apply()
+        alert(this, due.title, due.text)
     }
 
     private fun advance() {
@@ -115,7 +157,7 @@ class TripService : Service() {
         val (journey, step) = journey() ?: return
         val steps = buildSteps(journey.trip, journey.fromLabel, journey.toLabel)
         val moved = journeyProgress(
-            steps, step, journey.resolved, journey.chosen, System.currentTimeMillis() / 1000, fix,
+            steps, step, journey.resolved, journey.chosen, System.currentTimeMillis() / 1000, fix, canLocate(this),
         )
         if (moved == step) return
         JourneyFile.save(this, journey, moved)
@@ -144,11 +186,13 @@ class TripService : Service() {
     }
 
     private fun end() {
-        val shell = TripBridge.end
-        if (shell != null) shell() else { JourneyFile.clear(this); finish() }
+        TripBridge.end?.invoke()
+        JourneyFile.clear(this)
+        finish()
     }
 
     private fun finish() {
+        NotificationManagerCompat.from(this).cancel(ALERT_ID)
         ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
         stopSelf()
     }
@@ -162,17 +206,19 @@ class TripService : Service() {
         private const val PROMOTED = "android.requestPromotedOngoing"
         private const val TICK_MS = 15_000L
         private const val MIN_GAP_MS = 2_000L
+        private const val ALERT_MS = 5_000L
 
         private var running: TripService? = null
 
         fun show(ctx: Context) {
-            running?.let { it.post(); return }
+            running?.let { it.track(); it.post(); return }
             if (!NotificationManagerCompat.from(ctx).areNotificationsEnabled()) return
             runCatching { ctx.startForegroundService(Intent(ctx, TripService::class.java)) }
         }
 
         fun stop(ctx: Context) {
             ctx.stopService(Intent(ctx, TripService::class.java))
+            NotificationManagerCompat.from(ctx).cancel(ALERT_ID)
         }
 
         fun alert(ctx: Context, title: String, text: String) {
@@ -272,4 +318,5 @@ object TripBridge {
     @Volatile var end: (() -> Unit)? = null
     @Volatile var journey: (() -> Pair<ActiveJourney, Int>?)? = null
     @Volatile var fix: ((Fix) -> Unit)? = null
+    @Volatile var fixNow: (() -> Fix?)? = null
 }

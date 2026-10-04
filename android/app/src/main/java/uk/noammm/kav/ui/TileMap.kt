@@ -363,7 +363,9 @@ private class MapCamera {
     private var previousPadding = 0f
     private var previousMaxZoom = Geo.MAX_Z.toFloat()
 
-    fun update(points: List<WorldPoint>, viewport: Viewport, focus: Any?, padding: Float, maxZoom: Float, scope: CoroutineScope) {
+    fun update(
+        points: List<WorldPoint>, viewport: Viewport, focus: Any?, padding: Float, maxZoom: Float, keepZoom: Boolean, scope: CoroutineScope,
+    ) {
         if (points.isEmpty() || viewport.w <= 0 || viewport.h <= 0) return
         // Moved by hand, the map only reframes for something new to show, not for a resize.
         val reframe = value == null || followed || previousFocus != focus ||
@@ -377,7 +379,7 @@ private class MapCamera {
         previousPadding = padding
         previousMaxZoom = maxZoom
         if (reframe) {
-            reset(points, viewport, padding, maxZoom, scope)
+            reset(points, viewport, padding, if (keepZoom) current?.zoom ?: maxZoom else maxZoom, scope)
         } else if (!manual && current != null && changed.any { !viewport.contains(it, current) }) {
             val area = viewport.inset(padding)
             val scale = current.pxPerWorld
@@ -521,6 +523,9 @@ fun TileMap(
     onTap: ((Offset, MapProjection) -> Unit)? = null,
     onLook: ((centre: Pair<Double, Double>?, reachKm: Double) -> Unit)? = null,
     moved: Boolean = false,
+    keepZoom: Boolean = false,
+    status: (@Composable () -> Unit)? = null,
+    controls: (@Composable () -> Unit)? = null,
 ) {
     val ctx = LocalContext.current
     val density = LocalDensity.current
@@ -628,8 +633,8 @@ fun TileMap(
             (h - padB).coerceAtLeast(padT + 1), w, h)
         val liveViewport by rememberUpdatedState(viewport)
 
-        LaunchedEffect(worldPoints, viewport, focusKey, padFraction, fitMaxZoom, follow == null) {
-            if (follow == null) camera.update(worldPoints, viewport, focusKey, padFraction, fitMaxZoom, scope)
+        LaunchedEffect(worldPoints, viewport, focusKey, padFraction, fitMaxZoom, follow == null, keepZoom) {
+            if (follow == null) camera.update(worldPoints, viewport, focusKey, padFraction, fitMaxZoom, keepZoom, scope)
         }
         LaunchedEffect(focusKey) { camera.resume() }
         LaunchedEffect(follow, viewport, camera.manual) {
@@ -683,14 +688,21 @@ fun TileMap(
                     with(density) { (h - padT - padB).coerceAtLeast(1f).toDp() }),
         )
 
-        if (camera.manual || moved) {
-            Text(
+        // One row, so a long status wraps instead of running under the buttons.
+        Row(
+            Modifier.align(Alignment.TopStart).fillMaxWidth()
+                .padding(start = contentPadding.calculateStartPadding(layoutDirection) + K.gap2,
+                    top = contentPadding.calculateTopPadding() + K.gap2,
+                    end = contentPadding.calculateEndPadding(layoutDirection) + K.gap2),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            verticalAlignment = Alignment.Top,
+        ) {
+            Box(Modifier.weight(1f)) { status?.invoke() }
+            controls?.invoke()
+            if (camera.manual || moved) Text(
                 if (follow != null) T("Follow", "עקבו") else T("Reset", "איפוס"),
                 fontSize = 11.sp, color = K.text,
-                modifier = Modifier.align(Alignment.TopEnd)
-                    .padding(top = contentPadding.calculateTopPadding() + K.gap2,
-                        end = contentPadding.calculateEndPadding(layoutDirection) + K.gap2)
-                    .panel(999.dp)
+                modifier = Modifier.panel(999.dp)
                     .clickable {
                         look?.invoke(null, 0.0)
                         val me = recenterOn?.takeIf { it.first.isFinite() && it.second.isFinite() }

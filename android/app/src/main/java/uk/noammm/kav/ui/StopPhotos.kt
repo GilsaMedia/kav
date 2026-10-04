@@ -31,7 +31,7 @@ object StopPhotos {
 
     private val ids = ConcurrentHashMap<String, Int>()
     private val misses = ConcurrentHashMap.newKeySet<String>()
-    private class Urls(val list: List<String>, val day: Long)
+    private class Urls(val thumb: String?, val list: List<String>, val day: Long)
     private val urls = ConcurrentHashMap<Int, Urls>()
 
     private val thumbs = object : LruCache<String, Bitmap>(24 * 1024) {
@@ -42,12 +42,16 @@ object StopPhotos {
     }
     private val inflight = ConcurrentHashMap<String, Deferred<Bitmap?>>()
 
-    private val idFile get() = File(app.filesDir, "stop-ids.txt")
-    private val urlFile get() = File(app.filesDir, "stop-photos.txt")
+    private val idFile get() = File(app.filesDir, "stop-ids-2.txt")
+    private val urlFile get() = File(app.filesDir, "stop-photos-2.txt")
     private val imageDir get() = File(app.cacheDir, "stop-photos").apply { mkdirs() }
 
     fun init(ctx: Context) {
         app = ctx.applicationContext
+        // Ids matched before same-named stops were told apart, and photo lists where a failed
+        // request was kept as "no photos".
+        File(app.filesDir, "stop-ids.txt").delete()
+        File(app.filesDir, "stop-photos.txt").delete()
         scope.launch { load() }
     }
 
@@ -62,12 +66,11 @@ object StopPhotos {
         }
         runCatching {
             urlFile.takeIf { it.exists() }?.forEachLine { line ->
-                val parts = line.split('\t', limit = 3)
-                if (parts.size < 2) return@forEachLine
+                val parts = line.split('\t', limit = 4)
+                if (parts.size < 4) return@forEachLine
                 val id = parts[0].toIntOrNull() ?: return@forEachLine
                 val day = parts[1].toLongOrNull() ?: return@forEachLine
-                val list = parts.getOrNull(2)?.split(' ')?.filter { it.isNotBlank() }.orEmpty()
-                urls[id] = Urls(list, day)
+                urls[id] = Urls(parts[2].ifBlank { null }, parts[3].split(' ').filter { it.isNotBlank() }, day)
             }
             if (urlFile.length() > 2L shl 20) compactUrls()
         }
@@ -76,29 +79,63 @@ object StopPhotos {
     @Synchronized private fun appendId(key: String, id: Int) =
         runCatching { idFile.appendText("$key\t$id\n") }
 
-    @Synchronized private fun appendUrls(id: Int, entry: Urls) =
-        runCatching { urlFile.appendText("$id\t${entry.day}\t${entry.list.joinToString(" ")}\n") }
+    private fun row(id: Int, e: Urls) = "$id\t${e.day}\t${e.thumb.orEmpty()}\t${e.list.joinToString(" ")}\n"
+
+    @Synchronized private fun appendUrls(id: Int, entry: Urls) = runCatching { urlFile.appendText(row(id, entry)) }
 
     @Synchronized private fun compactUrls() = runCatching {
         val tmp = File(urlFile.parentFile, urlFile.name + ".tmp")
         tmp.bufferedWriter().use { w ->
-            for ((id, e) in urls) w.write("$id\t${e.day}\t${e.list.joinToString(" ")}\n")
+            for ((id, e) in urls) w.write(row(id, e))
         }
         tmp.renameTo(urlFile)
     }
 
     private fun fresh(e: Urls) =
-        today() - e.day <= if (e.list.isEmpty()) KEEP_EMPTY_DAYS else KEEP_PHOTOS_DAYS
+        today() - e.day <= if (e.thumb == null && e.list.isEmpty()) KEEP_EMPTY_DAYS else KEEP_PHOTOS_DAYS
+
+    // The thumbnail, then the photos themselves if it won't download.
+    private fun Urls.small() = listOfNotNull(thumb) + list.take(3)
 
     private fun keyOf(net: Net, stop: Int): String {
         val code = net.code.getOrElse(stop) { 0 }
-        return if (code > 0) "c$code" else "p%.5f,%.5f".format(net.lat[stop], net.lon[stop])
+        return if (code > 0) "c$code" else "p%.5f,%.5f".format(java.util.Locale.US, net.lat[stop], net.lon[stop])
     }
 
     fun idNow(net: Net, stop: Int): Int? = ids[keyOf(net, stop)]
 
+    // Searched for and not found, as opposed to a search that failed.
+    fun knownMissing(net: Net, stop: Int) = keyOf(net, stop) in misses
+
+    // A stop seen on a line's pattern comes with its code, which settles its id for good.
+    fun learn(stops: List<Moovit.StopInfo>) {
+        for (st in stops) {
+            val key = "c" + (st.code.toIntOrNull()?.takeIf { it > 0 } ?: continue)
+            if (ids[key] == st.id) continue
+            ids[key] = st.id
+            misses.remove(key)
+            appendId(key, st.id)
+        }
+    }
+
+    // Same-named stops across a street can share one Moovit hit; it belongs to the nearer.
+    private fun owns(net: Net, stop: Int, hitLat: Double, hitLon: Double): Boolean {
+        val name = net.name[stop]
+        val own = metres(hitLat, hitLon, net.lat[stop], net.lon[stop])
+        for (i in net.name.indices) {
+            if (i == stop || net.name[i] != name) continue
+            if (metres(hitLat, hitLon, net.lat[i], net.lon[i]) < own) return false
+        }
+        return true
+    }
+
     fun thumbNow(stopId: Int): Bitmap? =
-        urls[stopId]?.list?.firstOrNull()?.let { thumbs.get(it) }
+        urls[stopId]?.small()?.firstNotNullOfOrNull { thumbs.get(it) }
+
+    // Null while it isn't known, or Moovit couldn't be asked.
+    fun hasPhotosNow(stopId: Int): Boolean? = urls[stopId]?.takeIf(::fresh)?.small()?.isNotEmpty()
+
+    suspend fun hasPhotos(stopId: Int): Boolean? = if (stopId <= 0) null else urlsOf(stopId)?.small()?.isNotEmpty()
 
     suspend fun idOf(net: Net, stop: Int): Int? = withContext(Dispatchers.IO) {
         val key = keyOf(net, stop)
@@ -107,7 +144,9 @@ object StopPhotos {
         try {
             val lat = net.lat[stop].toDouble()
             val lon = net.lon[stop].toDouble()
-            val id = Moovit.searchStopId(Online.open(lat to lon), net.name.getOrElse(stop) { "" }, lat to lon)
+            val id = Moovit.searchStopId(Online.open(lat to lon), net.name.getOrElse(stop) { "" }, lat to lon) { hLat, hLon ->
+                owns(net, stop, hLat, hLon)
+            }
             if (id == null) misses.add(key) else { ids[key] = id; appendId(key, id) }
             id
         } catch (e: kotlinx.coroutines.CancellationException) {
@@ -117,14 +156,14 @@ object StopPhotos {
         }
     }
 
-    private suspend fun urlsOf(stopId: Int): List<String>? {
-        urls[stopId]?.takeIf(::fresh)?.let { return it.list }
-        return try {
-            val s = Online.open()
-            val entry = Urls(Moovit.stopImages(s, stopId), today())
+    private suspend fun urlsOf(stopId: Int): Urls? = withContext(Dispatchers.IO) {
+        urls[stopId]?.takeIf(::fresh)?.let { return@withContext it }
+        try {
+            val found = Moovit.stopImages(Online.open(), stopId)
+            val entry = Urls(found.thumb, found.photos, today())
             urls[stopId] = entry
             appendUrls(stopId, entry)
-            entry.list
+            entry
         } catch (e: kotlinx.coroutines.CancellationException) {
             throw e
         } catch (e: Exception) {
@@ -184,22 +223,25 @@ object StopPhotos {
     suspend fun thumb(stopId: Int): Bitmap? {
         if (stopId <= 0) return null
         thumbNow(stopId)?.let { return it }
-        val url = urlsOf(stopId)?.firstOrNull() ?: return null
-        thumbs.get(url)?.let { return it }
-        val job = inflight.getOrPut(url) {
-            scope.async {
-                gate.withPermit {
-                    val f = ensureFile(url) ?: return@withPermit null
-                    decode(f, THUMB_PX)?.also { thumbs.put(url, it) }
+        for (url in urlsOf(stopId)?.small().orEmpty()) {
+            thumbs.get(url)?.let { return it }
+            val job = inflight.getOrPut(url) {
+                scope.async {
+                    gate.withPermit {
+                        val f = ensureFile(url) ?: return@withPermit null
+                        decode(f, THUMB_PX)?.also { thumbs.put(url, it) }
+                    }
                 }
             }
+            (try { job.await() } finally { inflight.remove(url, job) })?.let { return it }
         }
-        return try { job.await() } finally { inflight.remove(url, job) }
+        return null
     }
 
     suspend fun full(stopId: Int): Bitmap? = withContext(Dispatchers.IO) {
-        val url = urlsOf(stopId)?.firstOrNull() ?: return@withContext null
-        fulls.get(url) ?: ensureFile(url)?.let { decode(it, FULL_PX) }?.also { fulls.put(url, it) }
+        urlsOf(stopId)?.list.orEmpty().take(3).firstNotNullOfOrNull { url ->
+            fulls.get(url) ?: ensureFile(url)?.let { decode(it, FULL_PX) }?.also { fulls.put(url, it) }
+        }
     }
 
     fun prefetchNet(net: Net, stops: List<Int>) {

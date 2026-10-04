@@ -9,7 +9,7 @@ import java.io.File
 object JourneyFile {
     private const val NAME = "journey.json"
 
-    private const val KEEP_S = 3 * 3600L
+    const val KEEP_S = 3 * 3600L
 
     @Volatile private var lastKey: Int? = null
 

@@ -26,15 +26,37 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import uk.noammm.kav.KavModel
 import uk.noammm.kav.PendingBackup
 import uk.noammm.kav.Prefs
+import uk.noammm.kav.Seen
 import uk.noammm.kav.data.Backup
 import uk.noammm.kav.data.Updates
 
 @Composable
 fun SettingsScreen(model: KavModel, onClose: () -> Unit) {
     val ctx = LocalContext.current
+    var choosing by remember { mutableStateOf(false) }
+    if (choosing) {
+        var q by remember { mutableStateOf("") }
+        PlacePicker(
+            title = T("a place for Moovit to see…", "מקום ש-Moovit יראה…"),
+            here = null,
+            allowMyLocation = false,
+            onMyLocation = {},
+            onPick = { p -> model.setSeen(ctx, Seen.PLACE, p); choosing = false },
+            onDismiss = { choosing = false },
+            favourites = model.favourites,
+            onSaveFavourites = { model.saveFavourites(ctx, it) },
+            query = q,
+            onQuery = { q = it },
+            net = model.net,
+        )
+        return
+    }
 
     Column(Modifier.fillMaxSize().background(K.bg).verticalScroll(rememberScrollState())
         .padding(bottom = LocalBottomBarInset.current)) {
@@ -67,19 +89,23 @@ fun SettingsScreen(model: KavModel, onClose: () -> Unit) {
 
         Group(T("privacy", "פרטיות"))
         Column(Modifier.fillMaxWidth().padding(horizontal = K.gap3)) {
-            var priv by remember { mutableStateOf(uk.noammm.kav.Prefs.privateSearch(ctx)) }
+            var priv by remember(model.prefsVersion) { mutableStateOf(uk.noammm.kav.Prefs.privateSearch(ctx)) }
             SwitchRow(
                 T("Private search", "חיפוש פרטי"),
                 T(
-                    "Keep your location off search and off the anonymous registration Kav makes " +
+                    "Keep your exact location off search and off the anonymous registration Kav makes " +
                         "with Moovit. Planning a trip still sends the two points you pick, since that " +
                         "is the trip you asked it to find.",
-                    "המיקום שלכם לא נשלח בחיפוש ולא ברישום האנונימי ש-Kav מבצעת מול Moovit. " +
+                    "המיקום המדויק שלכם לא נשלח בחיפוש ולא ברישום האנונימי ש-Kav מבצעת מול Moovit. " +
                         "תכנון מסלול עדיין שולח את שתי הנקודות שאתם בוחרים, כי זו הנסיעה שביקשתם למצוא.",
                 ),
                 priv,
-                { on -> priv = on; uk.noammm.kav.Prefs.setPrivateSearch(ctx, on); uk.noammm.kav.data.Moovit.shareLocation = !on },
+                { on ->
+                    priv = on; uk.noammm.kav.Prefs.setPrivateSearch(ctx, on); uk.noammm.kav.data.Moovit.shareLocation = !on
+                    Online.reset()
+                },
             ) { ShieldGlyph(if (priv) K.text else K.dim, 18.dp) }
+            if (priv) SeenChoice(model) { choosing = true }
         }
 
         Group(T("your data", "הנתונים שלכם"))
@@ -156,6 +182,57 @@ internal fun LookChoices(inset: Dp = 0.dp, heading: @Composable (String) -> Unit
 }
 
 @Composable
+private fun SeenChoice(model: KavModel, onChoose: () -> Unit) {
+    val ctx = LocalContext.current
+    var city by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(model.seen, model.here) {
+        if (model.seen != Seen.CITY) return@LaunchedEffect
+        runCatching { uk.noammm.kav.loadNet(ctx) }
+        city = withContext(Dispatchers.Default) { model.cityAround(ctx.applicationContext)?.name }
+    }
+    Text(
+        T("what Moovit sees", "מה Moovit רואה"), style = DisplayItalic, fontSize = 12.sp, color = K.dim,
+        modifier = Modifier.padding(start = K.gap1, top = K.gap4, bottom = K.gap2),
+    )
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(K.gap2)) {
+        Chip(T("Your town", "היישוב שלכם"), model.seen == Seen.CITY) { model.setSeen(ctx, Seen.CITY) }
+        Chip(T("Custom location", "מיקום מותאם אישית"), model.seen == Seen.PLACE) {
+            if (model.seenPlace == null) onChoose() else model.setSeen(ctx, Seen.PLACE)
+        }
+        Chip(T("None", "ללא"), model.seen == Seen.NONE) { model.setSeen(ctx, Seen.NONE) }
+    }
+    val place = model.seenPlace?.name
+    Text(
+        when (model.seen) {
+            Seen.NONE -> T(
+                "Moovit is told you're at Dizengoff Center in Tel Aviv, as before, and searches carry no " +
+                    "location, so results aren't sorted by how close they are.",
+                "Moovit מקבל מיקום קבוע בדיזנגוף סנטר בתל אביב, כמו קודם, והחיפוש לא כולל מיקום, " +
+                    "ולכן התוצאות לא ממוינות לפי קרבה.",
+            )
+            Seen.CITY -> T(
+                "Moovit sees the centre of the town or city you're in, or the closest one, worked out on " +
+                    "your phone. Never your exact spot. " +
+                    (city?.let { "Now: $it." } ?: "Kav finds your town once it has your location."),
+                "Moovit רואה את מרכז היישוב שבו אתם נמצאים, או של הקרוב ביותר, שמחושב בטלפון שלכם. " +
+                    "אף פעם לא את המיקום המדויק שלכם. " +
+                    (city?.let { "כרגע: $it." } ?: "Kav תמצא את היישוב שלכם כשיהיה לה מיקום."),
+            )
+            Seen.PLACE -> if (place == null) T("Pick a place for Moovit to see.", "בחרו מקום ש-Moovit יראה.") else T(
+                "Moovit sees $place instead of where you are, so places near it come first.",
+                "Moovit רואה את $place ולא את המיקום שלכם, כך שמקומות קרובים אליו מופיעים ראשונים.",
+            )
+        },
+        fontSize = 11.sp, color = K.dim, lineHeight = 15.sp,
+        modifier = Modifier.padding(start = 2.dp, top = 6.dp),
+    )
+    if (model.seen == Seen.PLACE) {
+        Spacer(Modifier.height(K.gap2))
+        Chip(T("Pick another place", "בחירת מקום אחר"), false, onClick = onChoose)
+    }
+}
+
+@Composable
 private fun LanguageRow(ctx: android.content.Context) {
     Row(
         Modifier.padding(horizontal = K.gap4).fillMaxWidth(),
@@ -172,11 +249,14 @@ private fun BackupSection(model: KavModel) {
     val ctx = LocalContext.current
     fun toast(s: String) = android.widget.Toast.makeText(ctx, s, android.widget.Toast.LENGTH_SHORT).show()
 
+    val scope = rememberCoroutineScope()
     val save = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument(Backup.MIME)) { uri ->
         if (uri == null) return@rememberLauncherForActivityResult
-        Backup.write(ctx, uri)
-            .onSuccess { toast(T("Backup saved", "הגיבוי נשמר")) }
-            .onFailure { toast(T("Couldn't write that file", "לא ניתן היה לכתוב את הקובץ")) }
+        scope.launch {
+            Backup.write(ctx, uri)
+                .onSuccess { toast(T("Backup saved", "הגיבוי נשמר")) }
+                .onFailure { toast(T("Couldn't write that file", "לא ניתן היה לכתוב את הקובץ")) }
+        }
     }
     val open = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) PendingBackup.uri = uri

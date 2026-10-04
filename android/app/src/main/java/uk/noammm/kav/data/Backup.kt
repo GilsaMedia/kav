@@ -2,6 +2,8 @@ package uk.noammm.kav.data
 
 import android.content.Context
 import android.net.Uri
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import uk.noammm.kav.Prefs
 import java.text.SimpleDateFormat
@@ -31,25 +33,30 @@ object Backup {
 
     private const val EXT = "kav"
 
-    fun write(ctx: Context, uri: Uri): Result<Unit> = runCatching {
-        val doc = Prefs.backupJson(ctx)
-            .put("kav", VERSION)
-            .put("saved", System.currentTimeMillis())
-            .put("app", Updates.installedVersion(ctx))
-        val out = ctx.contentResolver.openOutputStream(uri, "wt") ?: throw java.io.IOException("no stream")
-        out.use { it.write(doc.toString(2).toByteArray(Charsets.UTF_8)) }
+    // Off the main thread: a cloud provider can take seconds to fetch or upload the file.
+    suspend fun write(ctx: Context, uri: Uri): Result<Unit> = withContext(Dispatchers.IO) {
+        runCatching {
+            val doc = Prefs.backupJson(ctx)
+                .put("kav", VERSION)
+                .put("saved", System.currentTimeMillis())
+                .put("app", Updates.installedVersion(ctx))
+            val out = ctx.contentResolver.openOutputStream(uri, "wt") ?: throw java.io.IOException("no stream")
+            out.use { it.write(doc.toString(2).toByteArray(Charsets.UTF_8)) }
+        }
     }
 
-    fun read(ctx: Context, uri: Uri): Result<Restored> = runCatching {
-        val text = ctx.contentResolver.openInputStream(uri)?.use { it.readBytes().toString(Charsets.UTF_8) }
-            ?: throw java.io.IOException("no stream")
-        val o = try { JSONObject(text) } catch (e: Exception) { throw NotABackup() }
-        if (o.optInt("kav", -1) !in 1..VERSION) throw NotABackup()
-        Prefs.restoreBackup(ctx, o)
-        Restored(
-            o.optJSONArray("favourites")?.length() ?: 0,
-            o.optJSONArray("trips")?.length() ?: 0,
-            o.optJSONArray("recents")?.length() ?: 0,
-        )
+    suspend fun read(ctx: Context, uri: Uri): Result<Restored> = withContext(Dispatchers.IO) {
+        runCatching {
+            val text = ctx.contentResolver.openInputStream(uri)?.use { it.readBytes().toString(Charsets.UTF_8) }
+                ?: throw java.io.IOException("no stream")
+            val o = try { JSONObject(text) } catch (e: Exception) { throw NotABackup() }
+            if (o.optInt("kav", -1) !in 1..VERSION) throw NotABackup()
+            Prefs.restoreBackup(ctx, o)
+            Restored(
+                o.optJSONArray("favourites")?.length() ?: 0,
+                o.optJSONArray("trips")?.length() ?: 0,
+                o.optJSONArray("recents")?.length() ?: 0,
+            )
+        }
     }
 }

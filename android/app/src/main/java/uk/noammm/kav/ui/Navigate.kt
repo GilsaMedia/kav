@@ -54,7 +54,7 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
-private val hm = SimpleDateFormat("HH:mm", Locale.US)
+private val hm = SimpleDateFormat("HH:mm", Locale.US).apply { timeZone = ISRAEL }
 
 internal sealed class Step {
     abstract val focus: List<Pair<Double, Double>>

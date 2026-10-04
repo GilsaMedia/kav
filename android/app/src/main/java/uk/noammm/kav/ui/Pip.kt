@@ -1,5 +1,7 @@
 package uk.noammm.kav.ui
 
+import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -8,12 +10,27 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.IntSize
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import uk.noammm.kav.KavModel
+import uk.noammm.kav.TripNotice
+import uk.noammm.kav.plateIcon
+import uk.noammm.kav.trackerIcon
+import uk.noammm.kav.tripNotice
+import kotlin.math.roundToInt
 
+// The same card the trip notification shows: what to do now, and the trip as one bar.
 @Composable
 fun PipOverlay(model: KavModel) {
     val journey = model.activeJourney
@@ -22,25 +39,66 @@ fun PipOverlay(model: KavModel) {
         while (true) { now = System.currentTimeMillis() / 1000; kotlinx.coroutines.delay(15_000) }
     }
     Box(Modifier.fillMaxSize().background(K.bg), contentAlignment = Alignment.CenterStart) {
-        if (journey == null) {
+        val accent = K.accent.toArgb()
+        val n = journey?.let { remember(it, model.journeyStep, model.fix, now, accent) {
+            tripNotice(it, model.journeyStep, model.fix, now, accent)
+        } }
+        if (n == null) {
             Text(T("Trip ended", "הנסיעה הסתיימה"), fontSize = 15.sp, color = K.dim, modifier = Modifier.padding(K.gap4))
             return@Box
         }
-        val steps = remember(journey.trip, journey.fromLabel, journey.toLabel) {
-            buildSteps(journey.trip, journey.fromLabel, journey.toLabel)
-        }
-        val index = model.journeyStep.coerceIn(0, steps.lastIndex)
-        val (title, detail) = stepInstruction(steps[index], journey, index == steps.lastIndex - 1, now)
-        Row(Modifier.fillMaxSize().padding(horizontal = K.gap3, vertical = K.gap2), verticalAlignment = Alignment.CenterVertically) {
-            Box(Modifier.width(4.dp).fillMaxHeight(.7f).clip(RoundedCornerShape(999.dp)).background(K.accent))
-            Spacer(Modifier.width(K.gap3))
-            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                Text(
-                    title, fontSize = 15.sp, lineHeight = 19.sp, color = K.text, fontWeight = FontWeight.SemiBold,
-                    maxLines = 2, overflow = TextOverflow.Ellipsis,
+        Column(
+            Modifier.fillMaxSize().padding(horizontal = 10.dp, vertical = 8.dp),
+            verticalArrangement = Arrangement.SpaceEvenly,
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                val plate = remember(n.glyph, n.tint) { plateIcon(n.glyph, n.tint).asImageBitmap() }
+                Image(plate, contentDescription = null, modifier = Modifier.size(30.dp))
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        n.title, fontSize = 13.sp, lineHeight = 16.sp, color = K.text, fontWeight = FontWeight.SemiBold,
+                        maxLines = 1, overflow = TextOverflow.Ellipsis,
+                    )
+                    Text(
+                        listOf(n.text, n.arrive).filter { it.isNotBlank() }.joinToString(" · "),
+                        fontSize = 11.sp, lineHeight = 14.sp, color = K.dim, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                    )
+                }
+                if (n.chip.isNotBlank()) Text(
+                    n.chip, fontSize = 11.sp, color = K.text, fontWeight = FontWeight.Medium, maxLines = 1,
+                    modifier = Modifier.clip(RoundedCornerShape(999.dp)).background(K.plate).padding(horizontal = 7.dp, vertical = 2.dp),
                 )
-                Text(detail, fontSize = 12.sp, lineHeight = 15.sp, color = K.dim, maxLines = 2, overflow = TextOverflow.Ellipsis)
             }
+            TripBar(n)
         }
+    }
+}
+
+@Composable
+private fun TripBar(n: TripNotice) {
+    val tracker = remember(n.glyph, n.tint) { trackerIcon(n.glyph, n.tint).asImageBitmap() }
+    Canvas(Modifier.fillMaxWidth().height(20.dp)) {
+        val rtl = layoutDirection == LayoutDirection.Rtl
+        fun at(x: Float) = if (rtl) size.width - x else x
+        val bar = 6.dp.toPx()
+        val gap = 2.dp.toPx()
+        val total = n.max.coerceAtLeast(1).toFloat()
+        val y = size.height / 2
+        var x = 0f
+        for ((length, colour) in n.parts) {
+            val w = length / total * size.width
+            val a = at(x + gap / 2); val b = at(x + w - gap / 2)
+            drawRoundRect(
+                Color(colour), topLeft = Offset(minOf(a, b), y - bar / 2),
+                size = Size(kotlin.math.abs(b - a).coerceAtLeast(bar), bar), cornerRadius = CornerRadius(bar / 2),
+            )
+            x += w
+        }
+        val t = size.height
+        val cx = at((n.progress / total * size.width).coerceAtMost(size.width - t / 2).coerceAtLeast(t / 2))
+        drawImage(
+            tracker, dstOffset = IntOffset((cx - t / 2).roundToInt(), 0),
+            dstSize = IntSize(t.roundToInt(), t.roundToInt()),
+        )
     }
 }

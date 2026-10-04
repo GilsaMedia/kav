@@ -61,6 +61,17 @@ class Net private constructor() {
         return lo
     }
 
+    // Where each town or city is, as the average of its stops.
+    val cityCentre: Array<Pair<Double, Double>?> by lazy {
+        val sumLat = DoubleArray(city.size); val sumLon = DoubleArray(city.size); val count = IntArray(city.size)
+        for (s in 0 until nStops) {
+            val c = cityOf[s]
+            if (c !in city.indices || city[c].isBlank()) continue
+            sumLat[c] += lat[s]; sumLon[c] += lon[s]; count[c]++
+        }
+        Array(city.size) { c -> if (count[c] == 0) null else sumLat[c] / count[c] to sumLon[c] / count[c] }
+    }
+
     val stopWords: Array<String> by lazy {
         Array(nStops) { spacedWords(if (code[it] > 0) name[it] + " " + code[it] else name[it]) }
     }

@@ -105,6 +105,11 @@ object Updates {
                 }
             }
         }
+        if (total > 0 && part.length() != total) {
+            val got = part.length()
+            part.delete()
+            throw java.io.IOException(T("Interrupted at ${got / (1 shl 20)} MB, try again", "ההורדה נקטעה אחרי ${got / (1 shl 20)} MB, נסו שוב"))
+        }
         if (!part.renameTo(file)) throw RuntimeException(T("Could not keep the download", "לא ניתן היה לשמור את ההורדה"))
         return file
     }

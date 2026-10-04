@@ -1,5 +1,5 @@
 <p align="center">
-  <img src=".github/icon.svg" width="112" alt="Kav">
+  <img src=".github/icon.png" width="112" alt="Kav">
 </p>
 
 <h1 align="center">Kav</h1>
@@ -43,7 +43,8 @@ you're on the way.
 - OLED black, light and dark, with liquid glass or solid bars.
 - Favourite places on the home screen, and backups of your places and settings
   to a `.kav` file.
-- Private search, on by default, keeps your location out of searches.
+- Private search, on by default, keeps your exact location out of searches:
+  Moovit only sees the centre of the town you're in, or a place you pick.
 
 ## Getting it
 

@@ -33,7 +33,9 @@ import uk.noammm.kav.ui.isFresh
 import uk.noammm.kav.ui.legMode
 import uk.noammm.kav.ui.modeName
 import uk.noammm.kav.ui.pathLength
+import uk.noammm.kav.ui.ISRAEL
 import uk.noammm.kav.ui.routeTints
+import uk.noammm.kav.ui.stopsProgress
 import uk.noammm.kav.ui.whenLabel
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -117,7 +119,8 @@ internal fun tripNotice(journey: ActiveJourney, current: Int, fix: Fix?, now: Lo
     val lens = runs.indices.map { if (runs[it].walk) dashesIn(it, dash) * dash else metres[it] }
     val total = lens.sum().coerceAtLeast(1)
     val runAt = runs.indexOfFirst { it.step == index }
-    val into = runs.getOrNull(runAt)?.let { along(it, live, now) } ?: 0.0
+    // On foot, where you were last seen; on board, the timetable keeps the vehicle moving.
+    val into = runs.getOrNull(runAt)?.let { along(it, if (it.walk) fix else live, now) } ?: 0.0
     val done = runs.indices.filter { runs[it].step < index }.sumOf { lens[it] }
     val progress = when {
         steps[index] is Step.Arrive -> total
@@ -144,7 +147,7 @@ internal fun tripNotice(journey: ActiveJourney, current: Int, fix: Fix?, now: Lo
     }
     if (parts.isEmpty()) add(1, accent)
 
-    val hm = SimpleDateFormat("HH:mm", Locale.US)
+    val hm = SimpleDateFormat("HH:mm", Locale.US).apply { timeZone = ISRAEL }
     fun time(utc: Long) = hm.format(Date(utc * 1000))
     fun lineName(ride: Moovit.Leg): String {
         val number = ride.shortName.ifBlank { r.line(ride.lineId)?.number.orEmpty() }
@@ -188,7 +191,7 @@ internal fun tripNotice(journey: ActiveJourney, current: Int, fix: Fix?, now: Lo
                     listOfNotNull(
                         r.stopName(ride.fromStop)?.takeIf { it.isNotBlank() },
                         r.platform(ride, wait).takeIf { it.isNotBlank() }?.let { T("Platform $it", "רציף $it") },
-                        if (dep.live) T("Live", "בזמן אמת") else T("Scheduled", "מתוזמן"),
+                        if (dep.live && r.arrival(ride) != null) T("Live", "בזמן אמת") else T("Scheduled", "מתוזמן"),
                     ).joinToString(" · "),
                     if (mins == 0L) T("now", "עכשיו") else T("$mins min", "$mins דק׳"),
                     glyph, colourOf(ride),
@@ -259,4 +262,35 @@ private fun icon(glyph: Glyph, tint: Int, px: Int, round: Boolean): Bitmap = ico
         }
     }
     image.asAndroidBitmap()
+}
+
+internal class TripAlert(val key: String, val title: String, val text: String)
+
+internal fun tripAlert(journey: ActiveJourney, current: Int, fix: Fix?, now: Long): TripAlert? {
+    val steps = buildSteps(journey.trip, journey.fromLabel, journey.toLabel)
+    if (steps.isEmpty()) return null
+    val r = journey.resolved
+    return when (val step = steps[current.coerceIn(0, steps.lastIndex)]) {
+        is Step.Wait -> {
+            val (ride, wait) = boardingChoice(step.ride, step.wait, journey.chosen[step.legIndex] ?: 0)
+            val at = r.departures(ride, wait).firstOrNull { it.tripId == ride.tripId }?.timeUtc ?: ride.dep
+            val line = ride.shortName.ifBlank { r.line(ride.lineId)?.number.orEmpty() }
+            if (at - now !in 0..90 || line.isBlank()) null else TripAlert(
+                "wait-${step.legIndex}", T("$line is arriving", "$line מגיע"),
+                listOfNotNull(r.stopName(ride.fromStop), whenLabel(at, now)).joinToString(" · "),
+            )
+        }
+        is Step.Ride -> {
+            val ride = boardingChoice(step.ride, step.wait, journey.chosen[step.legIndex] ?: 0).first
+            val total = ride.stops.size
+            val progress = stopsProgress(ride, r.stops, r.arrival(ride), fix, now)
+            val nearEnd = (progress >= 0 && total >= 2 && progress >= total - 1f) ||
+                (progress < 0 && ride.arr - now in 0..120)
+            if (!nearEnd) null else TripAlert(
+                "ride-${step.legIndex}", T("Get off at the next stop", "רדו בתחנה הבאה"),
+                r.stopName(ride.toStop) ?: journey.toLabel,
+            )
+        }
+        else -> null
+    }
 }

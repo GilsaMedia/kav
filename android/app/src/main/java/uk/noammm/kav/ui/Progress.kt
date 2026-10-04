@@ -144,11 +144,21 @@ private fun onStep(step: Step, r: Moovit.Resolved, chosen: Map<Int, Int>, fix: F
     else -> false
 }
 
-private fun done(step: Step, r: Moovit.Resolved, chosen: Map<Int, Int>, now: Long, live: Fix?, last: Fix?): Boolean {
+// A phone that stops reporting hasn't moved, so where you were last seen beats the timetable.
+// `seen` is that place, or null once a ride has been assumed since; `waitForFix` holds the
+// timetable back while a first fix is still to come.
+private fun done(
+    step: Step, r: Moovit.Resolved, chosen: Map<Int, Int>, now: Long, live: Fix?, seen: Fix?, waitForFix: Boolean,
+): Boolean {
     val target = stepTarget(step, r, chosen)
     return when (step) {
         is Step.Start -> now >= step.time || (live != null && target != null && live.distanceTo(target) > 60)
-        is Step.Walk -> if (live != null && target != null) live.distanceTo(target) < 40 else now >= step.leg.arr
+        is Step.Walk -> when {
+            target == null -> now >= step.leg.arr
+            live != null -> live.distanceTo(target) < 40
+            seen != null -> seen.distanceTo(target) < 40
+            else -> !waitForFix && now >= step.leg.arr
+        }
         is Step.Wait -> {
             val ride = rideOf(step, chosen)
             if (live != null && target != null) {
@@ -157,8 +167,11 @@ private fun done(step: Step, r: Moovit.Resolved, chosen: Map<Int, Int>, now: Lon
                 onRoute && away > 40 && live.speed > 5f
             } else {
                 val dep = departureOf(step, r, chosen)
-                dep.status != 3 && now >= dep.timeUtc &&
-                    (target == null || last?.let { it.distanceTo(target) < 150 } == true)
+                dep.status != 3 && now >= dep.timeUtc && when {
+                    target == null -> true
+                    seen != null -> seen.distanceTo(target) < 60
+                    else -> !waitForFix
+                }
             }
         }
         is Step.Ride -> {
@@ -191,6 +204,7 @@ internal fun journeyProgress(
     chosen: Map<Int, Int>,
     now: Long,
     fix: Fix?,
+    canLocate: Boolean,
 ): Int {
     if (steps.isEmpty()) return 0
     var i = current.coerceIn(0, steps.lastIndex)
@@ -199,7 +213,7 @@ internal fun journeyProgress(
         for (k in steps.lastIndex downTo i + 1) {
             if (!onStep(steps[k], r, chosen, live)) continue
             if ((i until k).any { j ->
-                    steps[j] is Step.Ride && !done(steps[j], r, chosen, now, live, fix) &&
+                    steps[j] is Step.Ride && !done(steps[j], r, chosen, now, live, fix, false) &&
                         !(j == i && rideLeftBehind(steps[j] as Step.Ride, chosen, live))
                 }
             ) continue
@@ -207,7 +221,14 @@ internal fun journeyProgress(
             break
         }
     }
-    while (i < steps.lastIndex && done(steps[i], r, chosen, now, live, fix)) i++
+    val waitForFix = fix == null && canLocate
+    while (i < steps.lastIndex) {
+        val seen = fix?.takeIf { f ->
+            (0 until i).none { j -> (steps[j] as? Step.Ride)?.let { f.at < rideOf(it, chosen).arr - 300 } == true }
+        }
+        if (!done(steps[i], r, chosen, now, live, seen, waitForFix)) break
+        i++
+    }
     return i
 }
 
