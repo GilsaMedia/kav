@@ -128,18 +128,20 @@ private fun departureOf(step: Step.Wait, r: Moovit.Resolved, chosen: Map<Int, In
         ?: Moovit.Departure(ride.tripId, ride.dep)
 }
 
-private fun onStep(step: Step, r: Moovit.Resolved, chosen: Map<Int, Int>, fix: Fix): Boolean = when (step) {
+// On a ride: on its route, `past` metres beyond where it is boarded. A phone moving at bus speed is on it. One reporting
+// no speed, as in a bus stopped at a light or at a location set by hand, is too when it is off every walk of the
+// trip, since only speed tells the bus from walking along its street.
+private fun riding(fix: Fix, shape: List<Pair<Double, Double>>, onRoute: Double, past: Double, walks: List<List<Pair<Double, Double>>>) =
+    shape.size >= 2 && distanceToPath(fix.lat, fix.lon, shape) < onRoute && alongPath(fix.lat, fix.lon, shape) > past &&
+        (fix.speed > 5f || walks.none { distanceToPath(fix.lat, fix.lon, it) < ON_WALK_M })
+
+private fun onStep(step: Step, r: Moovit.Resolved, chosen: Map<Int, Int>, fix: Fix, walks: List<List<Pair<Double, Double>>>): Boolean = when (step) {
     is Step.Walk -> {
         val start = step.leg.shape.firstOrNull()
         distanceToPath(fix.lat, fix.lon, step.leg.shape) < ON_WALK_M && (start == null || fix.distanceTo(start) > 100)
     }
     is Step.Wait -> stepTarget(step, r, chosen)?.let { fix.distanceTo(it) < 40 } == true
-    is Step.Ride -> {
-        val ride = rideOf(step, chosen)
-        val shape = ride.shape
-        shape.size >= 2 && distanceToPath(fix.lat, fix.lon, shape) < 50 &&
-            alongPath(fix.lat, fix.lon, shape) > 150 && fix.speed > 5f
-    }
+    is Step.Ride -> riding(fix, rideOf(step, chosen).shape, 50.0, 150.0, walks)
     is Step.Arrive -> stepTarget(step, r, chosen)?.let { fix.distanceTo(it) < 40 } == true
     else -> false
 }
@@ -149,6 +151,7 @@ private fun onStep(step: Step, r: Moovit.Resolved, chosen: Map<Int, Int>, fix: F
 // timetable back while a first fix is still to come.
 private fun done(
     step: Step, r: Moovit.Resolved, chosen: Map<Int, Int>, now: Long, live: Fix?, seen: Fix?, waitForFix: Boolean,
+    walks: List<List<Pair<Double, Double>>>,
 ): Boolean {
     val target = stepTarget(step, r, chosen)
     return when (step) {
@@ -164,7 +167,7 @@ private fun done(
             if (live != null && target != null) {
                 val away = live.distanceTo(target)
                 val onRoute = distanceToPath(live.lat, live.lon, ride.shape) < 60
-                onRoute && away > 40 && live.speed > 5f
+                onRoute && away > 40 && live.speed > 5f || riding(live, ride.shape, 60.0, 150.0, walks)
             } else {
                 val dep = departureOf(step, r, chosen)
                 dep.status != 3 && now >= dep.timeUtc && when {
@@ -183,6 +186,20 @@ private fun done(
         is Step.Cycle -> if (live != null && target != null) live.distanceTo(target) < 45 else now >= step.leg.arr
         is Step.Arrive -> false
     }
+}
+
+// Back to the walk to a ride's stop when the trip has moved on to waiting for or riding it, but the phone is on that
+// walk again and well off the ride's route, as after a location that only passed the route.
+private fun walkedBack(steps: List<Step>, i: Int, chosen: Map<Int, Int>, fix: Fix): Int? {
+    val shape = when (val s = steps[i]) {
+        is Step.Wait -> rideOf(s, chosen).shape
+        is Step.Ride -> rideOf(s, chosen).shape
+        else -> return null
+    }
+    if (shape.isEmpty() || distanceToPath(fix.lat, fix.lon, shape) < 80) return null
+    val k = (i - 1 downTo 0).firstOrNull { steps[it] is Step.Walk || steps[it] is Step.Ride } ?: return null
+    val walk = steps[k] as? Step.Walk ?: return null
+    return k.takeIf { distanceToPath(fix.lat, fix.lon, walk.leg.shape) < ON_WALK_M }
 }
 
 private fun rideLeftBehind(step: Step.Ride, chosen: Map<Int, Int>, fix: Fix): Boolean {
@@ -209,11 +226,13 @@ internal fun journeyProgress(
     if (steps.isEmpty()) return 0
     var i = current.coerceIn(0, steps.lastIndex)
     val live = fix?.takeIf { it.isFresh(now) }
+    val walks = steps.mapNotNull { (it as? Step.Walk)?.leg?.shape?.takeIf { s -> s.isNotEmpty() } }
+    if (live != null) walkedBack(steps, i, chosen, live)?.let { i = it }
     if (live != null) {
         for (k in steps.lastIndex downTo i + 1) {
-            if (!onStep(steps[k], r, chosen, live)) continue
+            if (!onStep(steps[k], r, chosen, live, walks)) continue
             if ((i until k).any { j ->
-                    steps[j] is Step.Ride && !done(steps[j], r, chosen, now, live, fix, false) &&
+                    steps[j] is Step.Ride && !done(steps[j], r, chosen, now, live, fix, false, walks) &&
                         !(j == i && rideLeftBehind(steps[j] as Step.Ride, chosen, live))
                 }
             ) continue
@@ -226,7 +245,7 @@ internal fun journeyProgress(
         val seen = fix?.takeIf { f ->
             (0 until i).none { j -> (steps[j] as? Step.Ride)?.let { f.at < rideOf(it, chosen).arr - 300 } == true }
         }
-        if (!done(steps[i], r, chosen, now, live, seen, waitForFix)) break
+        if (!done(steps[i], r, chosen, now, live, seen, waitForFix, walks)) break
         i++
     }
     return i

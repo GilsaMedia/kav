@@ -62,6 +62,11 @@ fun SettingsScreen(model: KavModel, onClose: () -> Unit) {
         .padding(bottom = LocalBottomBarInset.current)) {
         ScreenHeader(T("Your", "ההגדרות"), T("settings", "שלכם"), back = onClose)
 
+        if (Payer.signedIn) {
+            Group(T("payments", "תשלומים"))
+            PaymentsSection(model)
+        }
+
         Group(T("language", "שפה"))
         LanguageRow(ctx)
 
@@ -116,10 +121,12 @@ fun SettingsScreen(model: KavModel, onClose: () -> Unit) {
 
         Group(T("what is not in here", "מה לא נמצא כאן"))
         Absent(
-            T("No account", "אין חשבון"),
+            T("No account, unless you pay", "אין חשבון, אלא אם משלמים"),
             T(
-                "There is no sign-in, no profile, no sync. Nothing identifies you to anyone.",
-                "אין התחברות, אין פרופיל, אין סנכרון. שום דבר כאן לא מזהה אתכם בפני איש.",
+                "Planning, live times and search need no sign-in, profile or sync. Paying for a ride signs in to " +
+                    "your own Moovit payment account, on a Moovit user Kav keeps only for paying.",
+                "תכנון, זמנים בזמן אמת וחיפוש לא דורשים התחברות, פרופיל או סנכרון. תשלום על נסיעה מתחבר " +
+                    "לחשבון התשלום שלכם ב-Moovit, דרך משתמש Moovit ש-Kav שומרת רק לתשלומים.",
             ),
         )
         Absent(

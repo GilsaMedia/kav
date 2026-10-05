@@ -27,6 +27,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import kotlinx.coroutines.launch
 import uk.noammm.kav.ActiveJourney
 import uk.noammm.kav.KavModel
 import uk.noammm.kav.RecentTrip
@@ -49,6 +50,27 @@ internal fun HomeScreen(
     val favourites = model.favourites
     var editing by remember { mutableStateOf<Favourite?>(null) }
     var creating by remember { mutableStateOf(false) }
+    var allTrips by remember { mutableStateOf(false) }
+    androidx.activity.compose.BackHandler(allTrips) { allTrips = false }
+    androidx.compose.animation.AnimatedContent(
+        targetState = allTrips, modifier = Modifier.fillMaxSize(),
+        transitionSpec = { if (targetState) forward() else backward() }, label = "recentTrips",
+    ) { history ->
+    if (history) {
+        Column(Modifier.fillMaxSize().background(K.bg)) {
+            ScreenHeader(T("Recent", "נסיעות"), T("trips", "אחרונות"), back = { allTrips = false })
+            LazyColumn(Modifier.fillMaxSize(),
+                contentPadding = PaddingValues(start = K.gap4, end = K.gap4, bottom = K.gap6 + LocalBottomBarInset.current),
+                verticalArrangement = Arrangement.spacedBy(K.gap2)) {
+                items(recentTrips.size) { index ->
+                    Box(Modifier.fillMaxWidth().panel(K.rCard)) {
+                        RecentTripRow(recentTrips[index]) { allTrips = false; onTrip(recentTrips[index]) }
+                    }
+                }
+            }
+        }
+        return@AnimatedContent
+    }
     fun save(list: List<Favourite>) = model.saveFavourites(ctx, list)
     // AlertRow only works under a LocalServiceAlertOpener, so this screen hosts the sheet itself.
     var alert by remember { mutableStateOf<Pair<Int, String>?>(null) }
@@ -103,37 +125,26 @@ internal fun HomeScreen(
                         Note(T("Choose a destination to see your route and what to do next.", "בחרו יעד כדי לראות את המסלול ואת הצעד הבא."))
                     }
                 }
+                item {
+                    HomeShortcut(T("Pay for a ride", "תשלום על נסיעה"), { drawQr() }, Modifier.fillMaxWidth()) {
+                        model.payOpen = true
+                    }
+                }
+                if (Payer.signedIn) item { PayTicketsCard(model) }
                 if (recentTrips.isNotEmpty()) item {
                     Column(verticalArrangement = Arrangement.spacedBy(K.gap3)) {
                         Text(T("Recent trips", "נסיעות אחרונות"), fontSize = 15.sp, color = K.muted, fontWeight = FontWeight.Medium)
                         Column(Modifier.panel(K.rCard)) {
-                            recentTrips.forEachIndexed { index, trip ->
+                            recentTrips.take(if (model.activeJourney != null) 2 else 3).forEachIndexed { index, trip ->
                                 if (index > 0) Box(
                                     Modifier.padding(start = 52.dp, end = K.gap4).fillMaxWidth()
                                         .height(1.dp).background(K.border),
                                 )
-                                Row(
-                                    Modifier.fillMaxWidth().heightIn(min = 64.dp)
-                                        .clickable(role = Role.Button) { onTrip(trip) }
-                                        .padding(K.gap4),
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(K.gap4),
-                                ) {
-                                    ClockGlyph(K.dim, 20.dp)
-                                    Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
-                                        Text(
-                                            trip.to.name, fontSize = 15.sp, color = K.text,
-                                            maxLines = 1, overflow = TextOverflow.Ellipsis,
-                                        )
-                                        Text(
-                                            T("from ", "מ־") + (trip.from?.name ?: T("Current location", "המיקום הנוכחי")),
-                                            fontSize = 13.sp, color = K.dim,
-                                            maxLines = 1, overflow = TextOverflow.Ellipsis,
-                                        )
-                                    }
-                                    Text(tripWhen(trip.at), fontSize = 12.sp, color = K.dim)
-                                }
+                                RecentTripRow(trip) { onTrip(trip) }
                             }
+                            Text(T("More", "עוד"), fontSize = 15.sp, color = K.accent,
+                                modifier = Modifier.fillMaxWidth().clickable(role = Role.Button) { allTrips = true }
+                                    .padding(horizontal = K.gap4, vertical = K.gap3))
                         }
                     }
                 }
@@ -185,6 +196,25 @@ internal fun HomeScreen(
             onChangePlace = { editing = null; onSetFavourite(f) },
         )
     }
+    }
+}
+
+@Composable
+private fun RecentTripRow(trip: RecentTrip, onClick: () -> Unit) {
+    Row(
+        Modifier.fillMaxWidth().heightIn(min = 64.dp)
+            .clickable(role = Role.Button, onClick = onClick).padding(K.gap4),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(K.gap4),
+    ) {
+        ClockGlyph(K.dim, 20.dp)
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+            Text(trip.to.name, fontSize = 15.sp, color = K.text, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(T("from ", "מ־") + (trip.from?.name ?: T("Current location", "המיקום הנוכחי")),
+                fontSize = 13.sp, color = K.dim, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        }
+        Text(tripWhen(trip.at), fontSize = 12.sp, color = K.dim)
+    }
 }
 
 private fun tripWhen(at: Long): String {
@@ -212,6 +242,7 @@ private fun JourneyCard(model: KavModel, journey: ActiveJourney, onResume: () ->
     }
     val current = model.journeyStep.coerceIn(0, steps.lastIndex)
     val pager = rememberPagerState(initialPage = current) { steps.size }
+    val scope = rememberCoroutineScope()
     LaunchedEffect(current) { pager.animateScrollToPage(current) }
     Column(
         Modifier.fillMaxWidth().panel(K.rCard).padding(vertical = K.gap4),
@@ -240,13 +271,15 @@ private fun JourneyCard(model: KavModel, journey: ActiveJourney, onResume: () ->
             verticalAlignment = Alignment.Top,
             beyondViewportPageCount = 1,
         ) { page ->
-            Box(Modifier.fillMaxWidth().onSizeChanged { pageHeights[page] = it.height }.animateContentSize()) {
+            Column(Modifier.fillMaxWidth().onSizeChanged { pageHeights[page] = it.height }.animateContentSize()) {
+                CurrentStepButton(page, current) { scope.launch { pager.animateScrollToPage(current) } }
                 StepCard(steps[page], journey.resolved, active = page == current, now = now, chosen = journey.chosen,
                     fix = model.fix,
                     onChoose = { leg, option ->
                         model.activeJourney?.takeIf { it.trip === journey.trip }
                             ?.let { model.activeJourney = it.copy(chosen = it.chosen + (leg to option)) }
-                    })
+                    },
+                    pay = { leg, ride -> TripPay(model, leg, ride, journey.resolved) })
             }
         }
         Row(
@@ -293,6 +326,15 @@ private fun DrawScope.drawBulb() {
     drawCircle(K.accent, w * .24f, Offset(w * .5f, w * .38f), style = Stroke(w * .08f))
     drawLine(K.accent, Offset(w * .38f, w * .72f), Offset(w * .62f, w * .72f), w * .08f, StrokeCap.Round)
     drawLine(K.accent, Offset(w * .42f, w * .86f), Offset(w * .58f, w * .86f), w * .08f, StrokeCap.Round)
+}
+
+internal fun DrawScope.drawQr() {
+    val w = size.width
+    for ((x, y) in listOf(.10f to .10f, .58f to .10f, .10f to .58f)) {
+        drawRoundRect(K.accent, Offset(w * x, w * y), Size(w * .32f, w * .32f), CornerRadius(w * .06f), style = Stroke(w * .08f))
+    }
+    drawRect(K.accent, Offset(w * .62f, w * .62f), Size(w * .12f, w * .12f))
+    drawRect(K.accent, Offset(w * .80f, w * .80f), Size(w * .10f, w * .10f))
 }
 
 private fun DrawScope.drawCoffee() {

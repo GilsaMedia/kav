@@ -29,6 +29,9 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -50,6 +53,8 @@ fun KavField(
     placeholder: String,
     modifier: Modifier = Modifier,
     autoFocus: Boolean = false,
+    keyboard: KeyboardType = KeyboardType.Text,
+    secret: Boolean = false,
 ) {
     val focus = remember { FocusRequester() }
     LaunchedEffect(autoFocus) { if (autoFocus) runCatching { focus.requestFocus() } }
@@ -59,7 +64,11 @@ fun KavField(
         singleLine = true,
         textStyle = TextStyle(color = K.text, fontSize = 15.sp),
         cursorBrush = SolidColor(K.text),
-        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+        visualTransformation = if (secret) PasswordVisualTransformation() else VisualTransformation.None,
+        keyboardOptions = KeyboardOptions(
+            keyboardType = keyboard,
+            imeAction = if (keyboard == KeyboardType.Text) ImeAction.Search else ImeAction.Done,
+        ),
         modifier = modifier
             .fillMaxWidth()
             .heightIn(min = 48.dp)
@@ -138,8 +147,15 @@ fun PlacePicker(
     var setting by remember { mutableStateOf(initialSetting) }
     var editing by remember { mutableStateOf<Favourite?>(null) }
     var creating by remember { mutableStateOf(false) }
+    var locating by remember { mutableStateOf(false) }
+    var locateFailed by remember { mutableStateOf(false) }
+    var shown by remember { mutableStateOf(true) }
+    var stopLocating by remember { mutableStateOf<(() -> Unit)?>(null) }
+    DisposableEffect(Unit) { onDispose { shown = false; stopLocating?.invoke() } }
+    fun cancelLocation() { stopLocating?.invoke(); stopLocating = null; locating = false }
     fun save(list: List<Favourite>) = onSaveFavourites(list)
     val pick: (Moovit.Place) -> Unit = { p ->
+        cancelLocation()
         val f = setting
         if (f != null) {
             save(favourites.map { if (it.id == f.id) it.copy(place = p) else it })
@@ -210,25 +226,27 @@ fun PlacePicker(
         )
         return
     }
-    val leave: () -> Unit = { if (setting != null && initialSetting == null) setting = null else onDismiss() }
+    val leave: () -> Unit = {
+        cancelLocation()
+        if (setting != null && initialSetting == null) setting = null else onDismiss()
+    }
     androidx.activity.compose.BackHandler(onBack = leave)
-    var locating by remember { mutableStateOf(false) }
-    var locateFailed by remember { mutableStateOf(false) }
-    var shown by remember { mutableStateOf(true) }
-    DisposableEffect(Unit) { onDispose { shown = false } }
     fun startLocating() {
+        stopLocating?.invoke()
         locating = true; locateFailed = false
-        var used = false
-        requestLocationOnce(ctx, onFail = { locating = false; locateFailed = true }) {
+        stopLocating = requestLocationOnce(ctx, requireFresh = true, onFail = {
+            if (shown) { locating = false; locateFailed = true }
+        }) {
+            if (!shown) return@requestLocationOnce
             onLocate(it)
-            if (!used && shown) { used = true; onMyLocation(it) }
             locating = false
+            onMyLocation(it)
         }
     }
     val askHere = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions(),
     ) { granted ->
-        if (granted.values.any { it }) startLocating() else locating = false
+        if (shown && granted.values.any { it }) startLocating() else locating = false
     }
     LaunchedEffect(here == null) {
         if (allowMyLocation && here == null && hasLocationPermission(ctx)) requestLocationOnce(ctx, onResult = onLocate)
@@ -269,15 +287,14 @@ fun PlacePicker(
                 )
             }
         }
-        item(key = "map") { SelectOnMapRow { onMap = true } }
+        item(key = "map") { SelectOnMapRow { cancelLocation(); onMap = true } }
         if (allowMyLocation) item(key = "here") {
-            val ready = here != null
+            val ready = here != null && !locating && !locateFailed
             Row(
                 Modifier.fillMaxWidth().padding(horizontal = K.gap3, vertical = K.gap2).heightIn(min = 48.dp)
                     .glassSurface(24.dp)
-                    .clickable(role = Role.Button) {
-                        if (ready) here?.let(onMyLocation)
-                        else if (hasLocationPermission(ctx)) startLocating()
+                    .clickable(enabled = !locating, role = Role.Button) {
+                        if (hasLocationPermission(ctx)) startLocating()
                         else askHere.launch(LOCATION_PERMISSIONS)
                     }
                     .padding(horizontal = K.gap4, vertical = K.gap3),
@@ -288,9 +305,9 @@ fun PlacePicker(
                         .background(if (ready) K.live else K.dim),
                 )
                 Text(
-                    if (ready) T("My location", "המיקום שלי")
-                    else if (locating) T("Finding you…", "מאתרים אתכם…")
-                    else if (locateFailed) T("Couldn't find your location", "לא הצלחנו למצוא את המיקום שלכם")
+                    if (locating) T("Finding you…", "מאתרים אתכם…")
+                    else if (locateFailed) T("Couldn't get an accurate location. Tap to retry", "לא התקבל מיקום מדויק. לחצו לנסות שוב")
+                    else if (ready) T("My location", "המיקום שלי")
                     else T("Use my location", "השתמשו במיקום שלי"),
                     fontSize = 15.sp, color = if (ready) K.live else K.muted,
                 )

@@ -1,7 +1,8 @@
 package uk.noammm.kav.data
 
 import java.net.URLDecoder
-import java.net.URLEncoder
+import java.net.URI
+import java.net.HttpURLConnection
 import java.util.Locale
 
 object MoovitLink {
@@ -13,53 +14,48 @@ object MoovitLink {
         val departMs: Long,
         val autoRun: Boolean,
         val rides: List<Ride> = emptyList(),
+        val sharedId: String? = null,
+        val shortUrl: String? = null,
     )
 
-    fun share(
-        fromName: String?, fromLat: Double?, fromLon: Double?,
-        toName: String?, toLat: Double, toLon: Double, departMs: Long = 0L,
-        rides: List<Ride> = emptyList(),
-    ): String = buildString {
-        append("https://moovitapp.com/directions")
-        append("?dest_lat="); append(coord(toLat))
-        append("&dest_lon="); append(coord(toLon))
-        if (!toName.isNullOrBlank()) { append("&dest_name="); append(encode(toName)) }
-        if (fromLat != null && fromLon != null) {
-            append("&orig_lat="); append(coord(fromLat))
-            append("&orig_lon="); append(coord(fromLon))
-            if (!fromName.isNullOrBlank()) { append("&orig_name="); append(encode(fromName)) }
-        }
-        if (departMs > 0L) { append("&date="); append(departMs) }
-        if (rides.isNotEmpty()) {
-            append("&kav_trip=")
-            append(rides.joinToString("~") { "${it.lineId}.${it.tripId}.${it.depSec}" })
-        }
-    }
+    fun parse(url: String?): Plan? = parse(url, 0)
 
-    fun parse(url: String?): Plan? {
+    private fun parse(url: String?, depth: Int): Plan? {
         if (url.isNullOrBlank()) return null
+        if (depth > 4 || url.length > 16_384) return null
         val trimmed = url.trim()
+        val uri = runCatching { URI(trimmed) }.getOrNull() ?: return null
+        if (uri.userInfo != null || uri.port != -1) return null
         val scheme = trimmed.substringBefore("://", "").lowercase(Locale.US)
         val rest = trimmed.substringAfter("://", "")
         if (rest.isEmpty()) return null
-        val hostAndPath = rest.substringBefore('?').substringBefore('#')
-        val host = hostAndPath.substringBefore('/').lowercase(Locale.US)
-        val path = hostAndPath.removePrefix(host).trimEnd('/').lowercase(Locale.US)
+        val host = uri.host?.lowercase(Locale.US) ?: return null
+        val path = uri.path.orEmpty().trimEnd('/')
+        val web = scheme in listOf("http", "https") && host in listOf("moovitapp.com", "www.moovitapp.com")
+        val shared = when {
+            web && path.startsWith("/i/") -> path.removePrefix("/i/")
+            scheme == "moovit" && host == "i" -> path.removePrefix("/")
+            else -> null
+        }
+        if (shared != null) return shared.takeIf { it.matches(Regex("[A-Za-z0-9_-]{1,160}")) }?.let {
+            Plan(null, null, null, null, null, null, 0L, true, sharedId = it)
+        }
+        if (scheme in listOf("https", "http") && host == "moovit.onelink.me") {
+            val params = parameters(uri.rawQuery.orEmpty())
+            for (key in listOf("deep_link_value", "af_dp", "link", "af_android_url", "af_web_dp")) {
+                parse(params[key], depth + 1)?.takeIf { it.shortUrl == null }?.let { return it }
+            }
+            return Plan(null, null, null, null, null, null, 0L, true,
+                shortUrl = trimmed.replaceFirst(Regex("^http:"), "https:"))
+        }
         val ok = when (scheme) {
             "moovit" -> host == "directions"
-            "https", "http" -> (host == "moovitapp.com" || host == "www.moovitapp.com") && path == "/directions"
+            "https", "http" -> web && path == "/directions"
             else -> false
         }
         if (!ok) return null
         val query = rest.substringAfter('?', "").substringBefore('#')
-        val params = HashMap<String, String>()
-        for (pair in query.split('&')) {
-            if (pair.isEmpty()) continue
-            val key = pair.substringBefore('=')
-            if (key !in params) params[key] = runCatching {
-                URLDecoder.decode(pair.substringAfter('=', "").replace("+", "%2B"), "UTF-8")
-            }.getOrDefault("")
-        }
+        val params = parameters(query)
         fun latLon(latKey: String, lonKey: String): Pair<Double, Double>? {
             val lat = params[latKey]?.toDoubleOrNull() ?: return null
             val lon = params[lonKey]?.toDoubleOrNull() ?: return null
@@ -84,6 +80,68 @@ object MoovitLink {
         )
     }
 
+    private fun parameters(query: String): Map<String, String> = buildMap {
+        for (pair in query.split('&')) {
+            val key = pair.substringBefore('=')
+            if (key.isNotEmpty() && key !in this) put(key, runCatching {
+                URLDecoder.decode(pair.substringAfter('=', "").replace("+", "%2B"), "UTF-8")
+            }.getOrDefault(""))
+        }
+    }
+
+    // No AppsFlyer SDK or tracking identity: follow only Moovit's public redirect pages.
+    fun resolve(plan: Plan): Plan {
+        var next = plan.shortUrl ?: return plan
+        val visited = HashSet<String>()
+        repeat(5) {
+            if (!visited.add(next)) throw IllegalStateException("This Moovit link redirects in a loop.")
+            val parsed = parse(next) ?: throw IllegalArgumentException("Unsupported Moovit link.")
+            if (parsed.shortUrl == null) return parsed
+            val connection = (URI(parsed.shortUrl).toURL().openConnection() as HttpURLConnection).apply {
+                instanceFollowRedirects = false
+                connectTimeout = 10_000; readTimeout = 10_000
+                setRequestProperty("User-Agent", "Mozilla/5.0 (Linux; Android 16) AppleWebKit/537.36 Chrome/140.0 Mobile Safari/537.36")
+            }
+            try {
+                val code = connection.responseCode
+                val redirect = connection.getHeaderField("Location")
+                if (code in 300..399 && redirect != null) {
+                    embedded(redirect)?.let { return it }
+                    next = URI(next).resolve(redirect).toString()
+                } else {
+                    if (code != 200) throw IllegalStateException("Moovit link HTTP $code")
+                    val page = connection.inputStream.bufferedReader().use { reader ->
+                        val text = StringBuilder()
+                        val buffer = CharArray(4096)
+                        while (text.length < 262_144) {
+                            val n = reader.read(buffer, 0, minOf(buffer.size, 262_144 - text.length))
+                            if (n < 0) break
+                            text.append(buffer, 0, n)
+                        }
+                        text.toString()
+                    }
+                    return embedded(page) ?: throw IllegalStateException("This Moovit link contains no route.")
+                }
+            } finally { connection.disconnect() }
+        }
+        throw IllegalStateException("Too many Moovit link redirects.")
+    }
+
+    internal fun embedded(text: String): Plan? {
+        val plain = text.replace("\\/", "/").replace("\\u0026", "&").replace("&amp;", "&")
+        for (match in Regex("intent://[^\\s\"'<>]+").findAll(plain)) {
+            val intent = match.value
+            if (intent.contains(";scheme=moovit;")) {
+                parse("moovit://" + intent.removePrefix("intent://").substringBefore("#Intent"))?.let { return it }
+            }
+        }
+        parse(plain)?.takeIf { it.shortUrl == null }?.let { return it }
+        for (match in Regex("(?:https?://(?:www\\.)?moovitapp\\.com/|moovit://)[^\\s\"'<>\\\\]+").findAll(plain)) {
+            parse(match.value)?.takeIf { it.shortUrl == null }?.let { return it }
+        }
+        return null
+    }
+
     private fun ridesOf(v: String?): List<Ride> {
         if (v.isNullOrBlank()) return emptyList()
         val out = ArrayList<Ride>()
@@ -98,7 +156,4 @@ object MoovitLink {
         return out
     }
 
-    private fun coord(v: Double) = String.format(Locale.US, "%.6f", v)
-
-    private fun encode(v: String) = URLEncoder.encode(v, "UTF-8").replace("+", "%20")
 }

@@ -178,6 +178,8 @@ fun NavigateScreen(
     }
     val here = model.here
     val fix = model.fix
+    // Where the map shows and follows you: the last sharp fix, or a rough one that came well after it.
+    val seen = model.roughFix?.takeIf { rough -> fix == null || rough.at > fix.at + 10 } ?: fix
     val currentStep = model.journeyStep.coerceIn(0, steps.lastIndex)
     val pager = rememberPagerState(initialPage = currentStep) { steps.size }
     LaunchedEffect(currentStep) { pager.animateScrollToPage(currentStep) }
@@ -194,7 +196,7 @@ fun NavigateScreen(
             val compact = contentHeight < 480.dp
             val panelWidth = (maxWidth * .46f).coerceIn(240.dp, 340.dp).coerceAtMost(maxWidth * .60f)
             val cardHeight = (contentHeight * .30f).coerceIn(160.dp, 240.dp)
-            NavigateMap(trip, r, steps.getOrNull(pager.settledPage), chosen, here, fix, model.heading, now,
+            NavigateMap(trip, r, steps.getOrNull(pager.settledPage), chosen, here, seen, model.heading, now,
                 following = following,
                 Modifier.fillMaxSize().glassBackdrop(liquid),
                 contentPadding = if (compact) PaddingValues(top = 96.dp, end = panelWidth, bottom = bottomInset + 12.dp)
@@ -209,7 +211,7 @@ fun NavigateScreen(
                 ) {
                     Box(
                         Modifier.size(48.dp).clip(RoundedCornerShape(24.dp))
-                            .semantics { contentDescription = T("Back to the plan", "חזרה למסלול") }
+                            .semantics { contentDescription = T("Back to home", "חזרה לבית") }
                             .clickable(role = Role.Button, onClick = onExit),
                         contentAlignment = Alignment.Center,
                     ) {
@@ -256,11 +258,13 @@ fun NavigateScreen(
                     verticalAlignment = Alignment.Bottom,
                     beyondViewportPageCount = 1,
                 ) { page ->
-                    Box(Modifier.fillMaxWidth().onSizeChanged { pageHeights[page] = it.height }.animateContentSize()) {
+                    Column(Modifier.fillMaxWidth().onSizeChanged { pageHeights[page] = it.height }.animateContentSize()) {
+                        CurrentStepButton(page, currentStep) { scope.launch { pager.animateScrollToPage(currentStep) } }
                         StepCard(
                             steps[page], r, active = page == currentStep, now = now,
                             chosen = chosen, fix = fix,
                             onChoose = ::choose,
+                            pay = { leg, ride -> TripPay(model, leg, ride, r) },
                         )
                     }
                 }
@@ -277,6 +281,26 @@ fun NavigateScreen(
                     Text(T.ltr("${pager.currentPage + 1} / ${steps.size}"), fontSize = 12.sp, color = K.dim)
                 }
             }
+        }
+    }
+}
+
+@Composable
+internal fun CurrentStepButton(page: Int, current: Int, onClick: () -> Unit) {
+    if (page == current) return
+    val back = page > current
+    Row(Modifier.fillMaxWidth().padding(bottom = K.gap2),
+        horizontalArrangement = if (back) Arrangement.Start else Arrangement.End) {
+        Row(
+            Modifier.glassSurface(K.rPill).heightIn(min = 44.dp)
+                .clickable(role = Role.Button, onClick = onClick)
+                .padding(horizontal = K.gap3, vertical = K.gap2),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(K.gap2),
+        ) {
+            if (back) Text(T.backward, color = K.text, fontSize = 22.sp)
+            Text(T("Current step", "השלב הנוכחי"), color = K.text, fontSize = 13.sp, fontWeight = FontWeight.Medium)
+            if (!back) Text(T.onward, color = K.text, fontSize = 22.sp)
         }
     }
 }
@@ -339,6 +363,8 @@ internal fun StepCard(
     chosen: Map<Int, Int> = emptyMap(),
     fix: Fix? = null,
     onChoose: (leg: Int, option: Int) -> Unit = { _, _ -> },
+    // The ride's payment, or its ticket once bought, on its riding card.
+    pay: (@Composable (legIndex: Int, ride: Moovit.Leg) -> Unit)? = null,
 ) {
     when (step) {
         is Step.Start -> Card(T("Start from", "התחלה מ-"), active) {
@@ -430,9 +456,11 @@ internal fun StepCard(
                 active,
                 trailing = T("${ride.minutes} min", "${ride.minutes} דק׳"),
             ) {
-                LineRow(ride, r)
-                Spacer(Modifier.height(K.gap2))
                 StopLine(alight?.name ?: T("your stop", "התחנה שלכם"), alight?.code, legMode(ride, r), stopId = ride.toStop)
+                Spacer(Modifier.height(K.gap2))
+                LineRow(ride, r)
+                // Above the stops, so a long ride's payment is in sight without scrolling.
+                pay?.invoke(step.legIndex, ride)
                 if (stops.size > 1) {
                     Spacer(Modifier.height(K.gap2))
                     Box(Modifier.height(1.dp).fillMaxWidth().background(K.border))
@@ -626,10 +654,11 @@ private fun followFor(
             val along = bearingAlong(at.lat, at.lon, path)
             Follow(at.lat, at.lon, heading ?: along ?: 0f, zoom = 19.1f)
         }
+        // On board, the same view as walking: the map turns with the phone.
         is Step.Ride -> {
             val ride = chosenRide ?: return null
             val at = recent?.takeIf { it.isFresh(now) && it.aboard(ride.shape) } ?: return null
-            Follow(at.lat, at.lon, bearingAlong(at.lat, at.lon, ride.shape) ?: heading ?: 0f, zoom = 18.3f)
+            Follow(at.lat, at.lon, heading ?: bearingAlong(at.lat, at.lon, ride.shape) ?: 0f, zoom = 18.3f)
         }
         else -> null
     }
@@ -695,7 +724,8 @@ private fun NavigateMap(
     val mePulse = animateFloatAsState(if (here == null) 0f else 1f, tween(350), label = "meReveal")
     val vehicleAlpha = animateFloatAsState(if (vehicles.isEmpty()) 0f else 1f, tween(350), label = "vehicleReveal")
     val heldWalk = remember(step) { mutableStateOf(false) }
-    val follow = if (following) followFor(step, chosenRide, fix, heading, now, heldWalk.value) else null
+    // A ride's card follows the rider whenever they are on it, even before the trip has moved on to it.
+    val follow = if (following || step is Step.Ride) followFor(step, chosenRide, fix, heading, now, heldWalk.value) else null
     SideEffect { heldWalk.value = follow != null && step is Step.Walk }
     val fresh = fix?.takeIf { it.isFresh(now) }
 
@@ -737,7 +767,7 @@ private fun NavigateMap(
         )
     }
 
-    val walkArrow = follow != null && step is Step.Walk && heading != null
+    val walkArrow = follow != null && heading != null
     val live = MapGeometry(
         dots = buildList {
             here?.let { (lat, lon) ->

@@ -14,7 +14,7 @@ object JourneyFile {
     @Volatile private var lastKey: Int? = null
 
     private fun key(journey: ActiveJourney, step: Int): Int = listOf(
-        System.identityHashCode(journey.trip), journey.chosen, step,
+        System.identityHashCode(journey.trip), journey.chosen, journey.paid, step,
         journey.fromLabel, journey.toLabel,
         journey.resolved.lines.size, journey.resolved.stops.size,
         journey.resolved.routeTypes.size, journey.resolved.shapes.size,
@@ -60,6 +60,7 @@ object JourneyFile {
         .put("from", journey.fromLabel)
         .put("to", journey.toLabel)
         .put("chosen", JSONObject().apply { journey.chosen.forEach { (leg, opt) -> put(leg.toString(), opt) } })
+        .put("paid", JSONObject().apply { journey.paid.forEach { (leg, key) -> put(leg.toString(), key) } })
         .put("trip", json(journey.trip))
         .put("lines", JSONObject().apply { journey.resolved.lines.forEach { (id, l) -> put(id.toString(), json(l)) } })
         .put("stops", JSONObject().apply { journey.resolved.stops.forEach { (id, s) -> put(id.toString(), json(s)) } })
@@ -78,6 +79,8 @@ object JourneyFile {
             fromLabel = o.optString("from"),
             toLabel = o.optString("to"),
             chosen = counts(o.optJSONObject("chosen")),
+            paid = o.optJSONObject("paid")?.let { p -> p.keys().asSequence().associate { it.toInt() to p.getString(it) } }
+                ?: emptyMap(),
         )
         journey to o.optInt("step")
     } catch (e: Exception) { null }
@@ -89,6 +92,7 @@ object JourneyFile {
         .put("fare", t.fare).put("cur", t.currency).put("co2", t.co2g)
         .put("acc", t.accessible).put("tags", JSONArray(t.tags))
         .put("sec", t.section).put("secId", t.sectionId)
+        .put("wire", t.wire)
 
     private fun itinerary(o: JSONObject) = Moovit.Itinerary(
         guid = o.optString("guid"), group = o.optInt("group"),
@@ -98,6 +102,7 @@ object JourneyFile {
         co2g = o.optInt("co2", -1), accessible = o.optBoolean("acc"),
         tags = strings(o.optJSONArray("tags")),
         section = o.optString("sec"), sectionId = o.optInt("secId", -1),
+        wire = o.optString("wire").takeIf { it.isNotBlank() },
     )
 
     private fun json(l: Moovit.Leg): JSONObject {

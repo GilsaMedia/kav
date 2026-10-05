@@ -54,6 +54,8 @@ internal data class TripNotice(
     val progress: Int,
     val glyph: Glyph,
     val tint: Int,
+    // The notification's button for a bus ride kept with Asshole mode: "PAY QUICK", then "Paying" and "Paid".
+    val pay: String? = null,
 ) {
     val max get() = parts.sumOf { it.first }
 }
@@ -83,6 +85,7 @@ private fun along(run: Run, live: Fix?, now: Long): Double {
     if (live != null && run.shape.size >= 2 && distanceToPath(live.lat, live.lon, run.shape) < 150) {
         return alongPath(live.lat, live.lon, run.shape).coerceIn(0.0, run.metres)
     }
+    if (run.walk) return 0.0
     val span = run.arr - run.dep
     return if (span > 0) ((now - run.dep).toDouble() / span).coerceIn(0.0, 1.0) * run.metres else 0.0
 }

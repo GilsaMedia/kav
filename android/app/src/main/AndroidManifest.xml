@@ -9,6 +9,11 @@
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
 
+    <!-- Only to read the QR code on a bus when paying for a ride; asked for then,
+         and a phone without a camera can still install Kav. -->
+    <uses-permission android:name="android.permission.CAMERA" />
+    <uses-feature android:name="android.hardware.camera" android:required="false" />
+
     <!-- Routing goes through Moovit's own servers, so planning a trip needs a
          connection. The map is the part that does not: its tiles are bundled and
          read from disk, so the map still draws with the radio off. -->
@@ -52,8 +57,8 @@
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
-            <!-- Shared trips travel as Moovit's own directions links, so either app
-                 can open what either app sent. singleTask above is what routes a
+            <!-- Shared trips use Moovit's itinerary links, including its OneLink wrappers.
+                 Legacy directions links still work. singleTask above routes a
                  link into the running copy instead of stacking a second one. The
                  https form belongs to their site, so Android will not hand it over
                  without being told to; the moovit: scheme has no owner to verify,
@@ -69,6 +74,26 @@
                 <category android:name="android.intent.category.DEFAULT" />
                 <category android:name="android.intent.category.BROWSABLE" />
                 <data android:scheme="https" android:host="moovitapp.com" android:path="/directions" />
+                <data android:scheme="https" android:host="www.moovitapp.com" android:path="/directions" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="https" android:host="moovitapp.com" android:pathPrefix="/i/" />
+                <data android:scheme="https" android:host="www.moovitapp.com" android:pathPrefix="/i/" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="moovit" android:host="i" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="https" android:host="moovit.onelink.me" />
             </intent-filter>
             <!-- A .kav backup tapped in a file manager. Matched by the name's ending
                  rather than a type, because .kav has no registered MIME and claiming

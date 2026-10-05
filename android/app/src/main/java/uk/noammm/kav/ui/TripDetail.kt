@@ -23,29 +23,24 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import uk.noammm.kav.KavModel
 import uk.noammm.kav.data.Moovit
-import uk.noammm.kav.data.MoovitLink
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.CancellationException
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
-private fun shareTrip(ctx: android.content.Context, trip: Moovit.Itinerary, fromLabel: String, toLabel: String) {
-    val from = trip.legs.firstOrNull { it.shape.isNotEmpty() }?.shape?.first()
-    val to = trip.legs.lastOrNull { it.shape.isNotEmpty() }?.shape?.last() ?: return
-    val depMs = trip.dep * 1000
-    val url = MoovitLink.share(
-        fromLabel, from?.first, from?.second, toLabel, to.first, to.second,
-        departMs = if (depMs > System.currentTimeMillis()) depMs else 0L,
-        rides = trip.rides.map { MoovitLink.Ride(it.lineId, it.tripId, it.dep) },
-    )
+private suspend fun shareTrip(ctx: android.content.Context, trip: Moovit.Itinerary, fromLabel: String, toLabel: String) {
+    val session = Online.open()
+    val url = withContext(Dispatchers.IO) { Moovit.shareItinerary(session, trip) }
     val send = android.content.Intent(android.content.Intent.ACTION_SEND)
         .setType("text/plain")
         .putExtra(
             android.content.Intent.EXTRA_TEXT,
             T("$fromLabel → $toLabel\n$url", "$fromLabel ← $toLabel\n$url"),
         )
-    runCatching {
-        ctx.startActivity(android.content.Intent.createChooser(send, T("Share trip", "שיתוף נסיעה")))
-    }
+    ctx.startActivity(android.content.Intent.createChooser(send, T("Share trip", "שיתוף נסיעה")))
 }
 
 private val hm = SimpleDateFormat("HH:mm", Locale.US).apply { timeZone = ISRAEL }
@@ -63,6 +58,7 @@ fun TripDetailScreen(
     onStart: () -> Unit = {},
     onEnd: () -> Unit = {},
     onNavigating: (Boolean) -> Unit = {},
+    onHome: () -> Unit = onBack,
 ) {
     var tracking by remember { mutableStateOf<Pair<Moovit.Leg, Int>?>(null) }
     var navigating by remember(trip) { mutableStateOf(startInNavigation) }
@@ -76,7 +72,7 @@ fun TripDetailScreen(
     androidx.activity.compose.BackHandler {
         when {
             alert != null -> alert = null
-            navigating -> { navigating = false; planFromNavigation = false }
+            navigating -> onHome()
             tracking != null -> tracking = null
             else -> leavePlan()
         }
@@ -99,7 +95,7 @@ fun TripDetailScreen(
             isNavigating -> NavigateScreen(
                 model, trip, r, fromLabel, toLabel,
                 onStop = { navigating = false; onEnd() },
-                onExit = { navigating = false; planFromNavigation = false },
+                onExit = onHome,
                 onPlan = { navigating = false; planFromNavigation = true },
             )
             else -> TripDetailBody(trip, r, fromLabel, toLabel, onBack = ::leavePlan,
@@ -123,7 +119,10 @@ private fun TripDetailBody(
     onTrack: (Moovit.Leg, Int) -> Unit,
     onStart: () -> Unit,
 ) {
-
+    val ctx = androidx.compose.ui.platform.LocalContext.current
+    val scope = rememberCoroutineScope()
+    var sharing by remember(trip) { mutableStateOf(false) }
+    var shareError by remember(trip) { mutableStateOf<String?>(null) }
     Column(Modifier.fillMaxSize()) {
         Row(
             Modifier.fillMaxWidth().padding(K.gap3).heightIn(min = 48.dp),
@@ -132,8 +131,18 @@ private fun TripDetailBody(
             BackButton(onBack)
             Spacer(Modifier.width(K.gap3))
             Sig(T("Your", "הנסיעה"), T("trip", "שלכם"), Modifier.weight(1f))
-            val ctx = androidx.compose.ui.platform.LocalContext.current
-            ShareButton { shareTrip(ctx, trip, fromLabel, toLabel) }
+            ShareButton {
+                if (!sharing) scope.launch {
+                    sharing = true; shareError = null
+                    try { shareTrip(ctx, trip, fromLabel, toLabel) }
+                    catch (e: CancellationException) { throw e }
+                    catch (e: Exception) {
+                        shareError = if (trip.wire == null) T("Reopen this older route before sharing it.", "פתחו מחדש את המסלול הישן לפני שיתוף.")
+                        else T("Couldn't share this trip. Try again.", "לא ניתן לשתף את הנסיעה. נסו שוב.")
+                    }
+                    finally { sharing = false }
+                }
+            }
             val taxiOnly = trip.legs.any { it.kind == Moovit.LegKind.TAXI } &&
                 trip.legs.none { it.kind == Moovit.LegKind.RIDE }
             if (!taxiOnly) {
@@ -141,6 +150,9 @@ private fun TripDetailBody(
                 StartButton(onStart)
             }
         }
+
+        if (sharing) Note(T("Preparing the trip link…", "מכינים קישור לנסיעה…"), Modifier.padding(horizontal = K.gap4))
+        shareError?.let { Note(it, Modifier.padding(horizontal = K.gap4)) }
 
         Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())
             .padding(bottom = LocalBottomBarInset.current)) {

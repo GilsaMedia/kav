@@ -12,8 +12,8 @@ android {
         applicationId = "uk.noammm.kav"
         minSdk = 26
         targetSdk = 35
-        versionCode = 22
-        versionName = "2.1.1"
+        versionCode = 23
+        versionName = "2.2"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         // MapLibre's renderer is native code. Every phone Kav can reach is arm64;
         // x86_64 stays so the release APK still installs on the emulator.
@@ -55,6 +55,11 @@ dependencies {
     implementation("androidx.compose.material3:material3")
     implementation("androidx.compose.material:material-icons-extended")
     implementation("org.maplibre.gl:android-sdk:12.3.1")
+    // Reading a bus QR code with the camera, and drawing a ticket's QR for the inspector.
+    implementation("androidx.camera:camera-camera2:1.4.2")
+    implementation("androidx.camera:camera-lifecycle:1.4.2")
+    implementation("androidx.camera:camera-view:1.4.2")
+    implementation("com.google.zxing:core:3.5.4")
     debugImplementation("androidx.compose.ui:ui-tooling")
     testImplementation("junit:junit:4.13.2")
     androidTestImplementation("androidx.test:runner:1.6.2")

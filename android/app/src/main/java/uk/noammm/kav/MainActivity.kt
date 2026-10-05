@@ -10,7 +10,6 @@ import android.hardware.SensorEvent
 import android.hardware.SensorEventListener
 import android.hardware.SensorManager
 import android.location.Location
-import android.location.LocationListener
 import android.location.LocationManager
 import android.os.Build
 import android.os.Bundle
@@ -56,7 +55,11 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.core.content.ContextCompat
+import androidx.core.location.LocationListenerCompat
+import androidx.core.location.LocationManagerCompat
+import androidx.core.location.LocationRequestCompat
 import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.repeatOnLifecycle
@@ -137,6 +140,11 @@ class MainActivity : ComponentActivity() {
         MapFile.init(this)
         StopPhotos.init(this)
         Online.init(this)
+        Payer.init(this)
+        // The trip notification's PAY QUICK button follows the ride kept with Asshole mode.
+        lifecycleScope.launch {
+            snapshotFlow { Triple(Payer.pending, Payer.payingLater, Payer.paidLater) }.collect { TripService.repost() }
+        }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             addOnPictureInPictureModeChangedListener { Pip.active = it.isInPictureInPictureMode }
         }
@@ -195,7 +203,11 @@ data class ActiveJourney(
     val chosen: Map<Int, Int> = emptyMap(),
     val from: Moovit.Place? = null,
     val to: Moovit.Place? = null,
-)
+    // Per ride leg, the key of the ticket bought for it from its card.
+    val paid: Map<Int, String> = emptyMap(),
+) {
+    val paymentKey get() = "${trip.guid}:${trip.dep}"
+}
 
 data class RecentTrip(
     val from: Moovit.Place?,
@@ -203,6 +215,7 @@ data class RecentTrip(
     val at: Long,
     val lines: List<Int> = emptyList(),
     val group: Int = -1,
+    val stops: List<Moovit.RideStops> = emptyList(),
 )
 
 // What Moovit is told about where the user is while private search is on.
@@ -216,6 +229,10 @@ class KavModel(net: Net? = null, ctx: Context? = null) : ViewModel() {
 
     var tab by mutableStateOf(Tab.Directions)
     var settingsOpen by mutableStateOf(false)
+    var payOpen by mutableStateOf(false)
+    var payHistoryOpen by mutableStateOf(false)
+    // A ride's pay row in a trip asking Pay to open on that ride's way of paying.
+    internal var payFor by mutableStateOf<uk.noammm.kav.ui.PayFor?>(null)
     var activeJourney by mutableStateOf<ActiveJourney?>(null)
     var returnHome by mutableStateOf(false)
 
@@ -279,12 +296,23 @@ class KavModel(net: Net? = null, ctx: Context? = null) : ViewModel() {
     fun locate(lat: Double, lon: Double) {
         here = lat to lon
         hereAt = System.currentTimeMillis() / 1000
+        roughFix = Fix(lat, lon, hereAt)
     }
 
     fun track(lat: Double, lon: Double, speed: Float, at: Long) {
         here = lat to lon
         hereAt = at
         fix = Fix(lat, lon, at, speed)
+    }
+
+    // A one-off or rough position can guide the camera without advancing the trip's steps.
+    var roughFix by mutableStateOf<Fix?>(null)
+        private set
+
+    fun glimpse(lat: Double, lon: Double, speed: Float, at: Long) {
+        here = lat to lon
+        hereAt = at
+        roughFix = Fix(lat, lon, at, speed)
     }
 
     // Recent enough to plan a trip from.
@@ -331,6 +359,13 @@ class KavModel(net: Net? = null, ctx: Context? = null) : ViewModel() {
     }
 
     fun lastCity(ctx: Context): Moovit.Place? = city ?: Prefs.seenCity(ctx).also { city = it }
+
+    // Where Moovit is told a ride is paid from: the place picked for it, or the town's centre, never the fix.
+    fun payAt(ctx: Context): Pair<Double, Double> = when (seen) {
+        Seen.PLACE -> seenPlace?.let { it.lat to it.lon }
+        Seen.NONE -> null
+        Seen.CITY -> cityAround(ctx)?.let { it.lat to it.lon }
+    } ?: Moovit.NEUTRAL
 
     var update by mutableStateOf<Updates.Release?>(null)
     var updateDismissed by mutableStateOf(false)
@@ -552,7 +587,8 @@ private fun Shell(model: KavModel) {
     LaunchedEffect(journeyActive, lifecycle) {
         if (!journeyActive) return@LaunchedEffect
         lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
-            val stop = trackLocation(ctx) { model.track(it.latitude, it.longitude, it.speed, it.fixTime()) }
+            val stop = trackLocation(ctx, onFix = { model.track(it.latitude, it.longitude, it.speed, it.fixTime()) },
+                onRough = { model.glimpse(it.latitude, it.longitude, it.speed, it.fixTime()) })
             try { awaitCancellation() } finally { stop() }
         }
     }
@@ -591,12 +627,16 @@ private fun Shell(model: KavModel) {
             TripBridge.journey = { model.activeJourney?.let { it to model.journeyStep } }
             TripBridge.fix = { model.track(it.lat, it.lon, it.speed, it.at) }
             TripBridge.fixNow = { model.fix }
+            TripBridge.paid = { leg, key ->
+                model.activeJourney?.let { model.activeJourney = it.copy(paid = it.paid + (leg to key)) }
+            }
         }
         onDispose {
             TripBridge.end = null
             TripBridge.journey = null
             TripBridge.fix = null
             TripBridge.fixNow = null
+            TripBridge.paid = null
         }
     }
     LaunchedEffect(model.navigating, lifecycle) {
@@ -612,6 +652,8 @@ private fun Shell(model: KavModel) {
     var exitAsk by remember { mutableStateOf(false) }
     BackHandler(enabled = !model.navigating) {
         when {
+            model.payHistoryOpen -> model.payHistoryOpen = false
+            model.payOpen -> model.payOpen = false
             model.settingsOpen -> { model.settingsOpen = false; model.tab = Tab.Directions }
             model.tab != Tab.Directions -> {
                 model.stationStop = -1; model.lineRoute = -1; model.moovitLine = null
@@ -664,10 +706,36 @@ private fun Shell(model: KavModel) {
             ) {
                 SettingsScreen(model) { model.settingsOpen = false }
             }
+            androidx.compose.animation.AnimatedVisibility(
+                model.payOpen,
+                enter = androidx.compose.animation.fadeIn(androidx.compose.animation.core.tween(200)) +
+                    androidx.compose.animation.slideInVertically(androidx.compose.animation.core.tween(240)) { it / 10 },
+                exit = androidx.compose.animation.fadeOut(androidx.compose.animation.core.tween(200)) +
+                    androidx.compose.animation.slideOutVertically(androidx.compose.animation.core.tween(220)) { it / 10 },
+            ) {
+                PayScreen(model) { model.payOpen = false }
+            }
+            androidx.compose.animation.AnimatedVisibility(
+                model.payHistoryOpen,
+                enter = androidx.compose.animation.fadeIn(androidx.compose.animation.core.tween(200)) +
+                    androidx.compose.animation.slideInVertically(androidx.compose.animation.core.tween(240)) { it / 10 },
+                exit = androidx.compose.animation.fadeOut(androidx.compose.animation.core.tween(200)) +
+                    androidx.compose.animation.slideOutVertically(androidx.compose.animation.core.tween(220)) { it / 10 },
+            ) {
+                PayHistoryScreen(onClose = { model.payHistoryOpen = false }, onTicket = { key ->
+                    Payer.showRef = key
+                    model.payHistoryOpen = false
+                    model.payOpen = true
+                })
+            }
         }
         }
         }
     }
+    // Asshole mode: the kept purchase floats over every screen until it is paid or dropped.
+    if (Payer.signedIn) PendingFloat(model, Modifier.align(Alignment.TopEnd)
+        .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Top + WindowInsetsSides.End))
+        .padding(top = 76.dp, end = K.gap3))
     }
     }
 }
@@ -908,25 +976,42 @@ val LOCATION_PERMISSIONS = arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Man
 
 private const val GOOD_FIX_M = 50f
 private const val ROUGH_FIX_M = 75f
+private const val VIEW_FIX_M = 200f
 
 internal fun Location.fixTime(): Long =
     System.currentTimeMillis() / 1000 - (SystemClock.elapsedRealtimeNanos() - elapsedRealtimeNanos) / 1_000_000_000
+
+private fun locationProviders(lm: LocationManager): List<String> {
+    val available = runCatching { lm.allProviders }.getOrDefault(emptyList())
+    return buildList {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) add(LocationManager.FUSED_PROVIDER)
+        add(LocationManager.GPS_PROVIDER)
+        add(LocationManager.NETWORK_PROVIDER)
+    }.filter { it in available }
+}
 
 private fun lastKnown(ctx: Context): Location? {
     if (!hasLocationPermission(ctx)) return null
     return try {
         val lm = ctx.getSystemService(Context.LOCATION_SERVICE) as LocationManager
-        listOf(LocationManager.NETWORK_PROVIDER, LocationManager.GPS_PROVIDER, LocationManager.PASSIVE_PROVIDER)
+        (locationProviders(lm) + LocationManager.PASSIVE_PROVIDER)
             .asSequence()
             .mapNotNull { runCatching { lm.getLastKnownLocation(it) }.getOrNull() }
             .maxByOrNull { it.elapsedRealtimeNanos }
     } catch (e: SecurityException) { null }
 }
 
-// A recent fix at once, then better ones until one is within GOOD_FIX_M; onFail if none came.
-fun requestLocationOnce(ctx: Context, onFail: () -> Unit = {}, onResult: (Pair<Double, Double>) -> Unit) {
+// Map previews may start with a cached fix. Route endpoints require an accurate fix measured after this request.
+// Cancelling removes the listener and timeout without reporting failure.
+fun requestLocationOnce(
+    ctx: Context,
+    onFail: () -> Unit = {},
+    requireFresh: Boolean = false,
+    onResult: (Pair<Double, Double>) -> Unit,
+): () -> Unit {
     val lm = ctx.getSystemService(Context.LOCATION_SERVICE) as? LocationManager
-    if (lm == null || !hasLocationPermission(ctx)) { onFail(); return }
+    if (lm == null || !hasLocationPermission(ctx)) { onFail(); return {} }
+    val started = SystemClock.elapsedRealtimeNanos()
     var reported = false
     var live = false
     var bestAccuracy = Float.MAX_VALUE
@@ -941,72 +1026,90 @@ fun requestLocationOnce(ctx: Context, onFail: () -> Unit = {}, onResult: (Pair<D
         reported = true
         onResult(l.latitude to l.longitude)
     }
-    lastKnown(ctx)?.takeIf { System.currentTimeMillis() / 1000 - it.fixTime() <= 120 }?.let { offer(it, false) }
+    if (!requireFresh) {
+        lastKnown(ctx)?.takeIf { System.currentTimeMillis() / 1000 - it.fixTime() in 0..120 }?.let { offer(it, false) }
+    }
 
     var done = false
-    var listener: LocationListener? = null
-    fun stop() {
+    val handler = Handler(Looper.getMainLooper())
+    var timeout: Runnable? = null
+    var listener: LocationListenerCompat? = null
+    fun stop(failed: Boolean = false) {
         if (done) return
         done = true
-        listener?.let { runCatching { lm.removeUpdates(it) } }
-        if (!reported) onFail()
+        listener?.let { runCatching { LocationManagerCompat.removeUpdates(lm, it) } }
+        timeout?.let { handler.removeCallbacks(it) }
+        if (failed && !reported) onFail()
     }
-    listener = object : LocationListener {
+    listener = object : LocationListenerCompat {
         override fun onLocationChanged(location: Location) {
-            if (done) return
+            if (done || location.elapsedRealtimeNanos !in started..SystemClock.elapsedRealtimeNanos()) return
+            val accurate = location.hasAccuracy() && location.accuracy in 0f..GOOD_FIX_M
+            if (requireFresh && !accurate) return
+            if (accurate) stop()
             offer(location, true)
-            if (location.hasAccuracy() && location.accuracy <= GOOD_FIX_M) stop()
         }
         override fun onProviderEnabled(provider: String) {}
         override fun onProviderDisabled(provider: String) {}
-        @Deprecated("required below API 30")
-        override fun onStatusChanged(provider: String?, status: Int, extras: Bundle?) {}
     }
     var any = false
-    for (provider in listOf(LocationManager.GPS_PROVIDER, LocationManager.NETWORK_PROVIDER)) {
+    val request = LocationRequestCompat.Builder(1000L)
+        .setQuality(LocationRequestCompat.QUALITY_HIGH_ACCURACY).build()
+    for (provider in locationProviders(lm)) {
         if (!runCatching { lm.isProviderEnabled(provider) }.getOrDefault(false)) continue
         try {
-            lm.requestLocationUpdates(provider, 0L, 0f, listener, Looper.getMainLooper())
+            LocationManagerCompat.requestLocationUpdates(lm, provider, request, listener, Looper.getMainLooper())
             any = true
         } catch (e: SecurityException) {
         } catch (e: IllegalArgumentException) {
         }
     }
-    if (!any) { stop(); return }
-    Handler(Looper.getMainLooper()).postDelayed({ stop() }, 30_000)
+    if (!any) stop(failed = true)
+    else {
+        timeout = Runnable { stop(failed = true) }
+        handler.postDelayed(timeout, 30_000)
+    }
+    return { stop() }
 }
 
-// Rough fixes, and network ones while GPS is talking, would move the steps on.
-fun trackLocation(ctx: Context, onFix: (Location) -> Unit): () -> Unit {
+// Rough fixes, and network ones while a precise provider is talking, would move the steps on, so a rough one goes to onRough instead,
+// only to show where you are. One rougher than VIEW_FIX_M is no use at all.
+fun trackLocation(ctx: Context, onFix: (Location) -> Unit, onRough: ((Location) -> Unit)? = null): () -> Unit {
     if (!hasLocationPermission(ctx)) return {}
     val lm = ctx.getSystemService(Context.LOCATION_SERVICE) as? LocationManager ?: return {}
-    var lastGps = 0L
-    val listener = object : LocationListener {
+    var active = true
+    var lastPrecise = 0L
+    var lastAt = 0L
+    val listener = object : LocationListenerCompat {
         override fun onLocationChanged(location: Location) {
-            if (location.hasAccuracy() && location.accuracy > ROUGH_FIX_M) return
+            val at = location.elapsedRealtimeNanos
+            val age = SystemClock.elapsedRealtimeNanos() - at
+            if (!active || at < lastAt || age !in 0..15_000_000_000L) return
+            if (!location.hasAccuracy() || location.accuracy !in 0f..VIEW_FIX_M) return
+            val rough = location.accuracy > ROUGH_FIX_M
             val now = SystemClock.elapsedRealtime()
-            if (location.provider == LocationManager.GPS_PROVIDER) lastGps = now
-            else if (now - lastGps < 10_000) return
-            onFix(location)
+            if (location.provider == LocationManager.NETWORK_PROVIDER && now - lastPrecise < 10_000) return
+            if (!rough && location.provider != LocationManager.NETWORK_PROVIDER) lastPrecise = now
+            lastAt = at
+            if (rough) onRough?.invoke(location) else onFix(location)
         }
         override fun onProviderEnabled(provider: String) {}
         override fun onProviderDisabled(provider: String) {}
-        @Deprecated("required below API 30")
-        override fun onStatusChanged(provider: String?, status: Int, extras: Bundle?) {}
     }
-    val providers = runCatching { lm.allProviders }.getOrDefault(emptyList())
     var any = false
-    for ((provider, interval) in listOf(LocationManager.GPS_PROVIDER to 1000L, LocationManager.NETWORK_PROVIDER to 4000L)) {
-        if (provider !in providers) continue
+    for (provider in locationProviders(lm)) {
         try {
-            lm.requestLocationUpdates(provider, interval, 2f, listener, Looper.getMainLooper())
+            val interval = if (provider == LocationManager.NETWORK_PROVIDER) 4000L else 1000L
+            val request = LocationRequestCompat.Builder(interval)
+                .setQuality(LocationRequestCompat.QUALITY_HIGH_ACCURACY).build()
+            LocationManagerCompat.requestLocationUpdates(lm, provider, request, listener, Looper.getMainLooper())
             any = true
         } catch (e: SecurityException) {
         } catch (e: IllegalArgumentException) {
         }
     }
     if (!any) return {}
-    return { runCatching { lm.removeUpdates(listener) } }
+    return { active = false; runCatching { LocationManagerCompat.removeUpdates(lm, listener) } }
 }
 
 fun trackHeading(ctx: Context, onHeading: (Float) -> Unit): () -> Unit {
@@ -1080,7 +1183,7 @@ object Prefs {
     }
 
     private const val TRIPS = "trips"
-    private const val MAX_TRIPS = 6
+    private const val MAX_TRIPS = 100
 
     private fun place(o: org.json.JSONObject) = Moovit.Place(
         o.optString("n"), o.optString("d"), o.optDouble("lat"), o.optDouble("lon"),
@@ -1098,16 +1201,26 @@ object Prefs {
             val o = arr.optJSONObject(i) ?: return@mapNotNull null
             val to = o.optJSONObject("to") ?: return@mapNotNull null
             val lines = o.optJSONArray("lines")
+            val stops = o.optJSONArray("stops")
             RecentTrip(
                 o.optJSONObject("from")?.let { place(it) }, place(to), o.optLong("at"),
                 lines = (0 until (lines?.length() ?: 0)).map { j -> lines!!.optInt(j) },
                 group = o.optInt("group", -1),
+                stops = (0 until (stops?.length() ?: 0)).mapNotNull { j ->
+                    val pair = stops?.optJSONArray(j) ?: return@mapNotNull null
+                    val from = pair.optInt(0, -1); val to = pair.optInt(1, -1)
+                    if (from > 0 && to > 0) Moovit.RideStops(from, to) else null
+                }.takeIf { it.size == (stops?.length() ?: 0) }.orEmpty(),
             )
         }
     } catch (e: Exception) { emptyList() }
 
-    private fun tripKey(t: RecentTrip) =
+    private fun endpointsKey(t: RecentTrip) =
         "%.4f,%.4f>%.4f,%.4f".format(java.util.Locale.US, t.from?.lat ?: 0.0, t.from?.lon ?: 0.0, t.to.lat, t.to.lon)
+
+    private fun tripKey(t: RecentTrip) = endpointsKey(t) + ":" +
+        if (t.stops.isNotEmpty()) t.stops.joinToString(";") { "${it.from}>${it.to}" }
+        else "${t.group}:${t.lines.joinToString(",")}"
 
     private fun saveTrips(ctx: Context, trips: List<RecentTrip>) {
         val arr = org.json.JSONArray()
@@ -1115,7 +1228,10 @@ object Prefs {
             arr.put(
                 org.json.JSONObject()
                     .put("from", t.from?.let { json(it) }).put("to", json(t.to)).put("at", t.at)
-                    .put("lines", org.json.JSONArray(t.lines)).put("group", t.group),
+                    .put("lines", org.json.JSONArray(t.lines)).put("group", t.group)
+                    .put("stops", org.json.JSONArray().apply {
+                        t.stops.forEach { put(org.json.JSONArray(listOf(it.from, it.to))) }
+                    }),
             )
         }
         store(ctx).edit().putString(TRIPS, arr.toString()).apply()
@@ -1127,24 +1243,36 @@ object Prefs {
         to: Moovit.Place,
         at: Long,
         trip: Moovit.Itinerary? = null,
+        chosen: Map<Int, Int> = emptyMap(),
     ) {
+        val rides = trip?.legs?.mapIndexedNotNull { index, leg ->
+            if (leg.kind != Moovit.LegKind.RIDE) null else leg.options.getOrNull(chosen[index] ?: 0) ?: leg
+        }.orEmpty()
+        val origin = from ?: trip?.legs?.firstOrNull { it.shape.isNotEmpty() }?.shape?.firstOrNull()?.let {
+            Moovit.Place(T("Saved start", "נקודת ההתחלה השמורה"), "", it.first, it.second)
+        }
         val fresh = RecentTrip(
-            from, to, at,
-            lines = trip?.rides?.map { it.lineId } ?: emptyList(),
+            origin, to, at,
+            lines = rides.map { it.lineId },
             group = trip?.group ?: -1,
+            stops = rides.map { Moovit.RideStops(it.fromStop, it.toStop) }.takeIf { list ->
+                list.all { it.from > 0 && it.to > 0 }
+            }.orEmpty(),
         )
         saveTrips(ctx, (listOf(fresh) + trips(ctx)).distinctBy(::tripKey).take(MAX_TRIPS))
     }
 
-    fun noteTripRoute(ctx: Context, from: Moovit.Place?, to: Moovit.Place, trip: Moovit.Itinerary) {
-        val want = tripKey(RecentTrip(from, to, 0L))
+    fun noteTripRoute(ctx: Context, taken: RecentTrip, trip: Moovit.Itinerary, from: Moovit.Place?) {
+        val want = tripKey(taken)
         val trips = trips(ctx)
-        if (trips.none { tripKey(it) == want }) return
+        fun matches(t: RecentTrip) = t.at == taken.at && tripKey(t) == want && t.stops.isEmpty()
+        if (trips.none(::matches)) return
         saveTrips(
             ctx,
             trips.map {
-                if (tripKey(it) != want) it
-                else it.copy(lines = trip.rides.map { r -> r.lineId }, group = trip.group)
+                if (!matches(it)) it
+                else it.copy(from = from, lines = trip.rides.map { r -> r.lineId }, group = trip.group,
+                    stops = trip.rideStops.takeIf { list -> list.all { pair -> pair.from > 0 && pair.to > 0 } }.orEmpty())
             },
         )
     }
