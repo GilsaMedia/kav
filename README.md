@@ -45,6 +45,9 @@ you're on the way.
   to a `.kav` file.
 - Private search, on by default, keeps your exact location out of searches:
   Moovit only sees the centre of the town you're in, or a place you pick.
+- Pays for bus, train, light rail and Carmelit rides, if you want it to. That
+  needs your own Moovit payment account, and only payments use it. Everything
+  else stays anonymous.
 
 ## Getting it
 
