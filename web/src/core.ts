@@ -11,11 +11,14 @@ export interface Favourite extends Place { label: string }
 export interface Prefs {
   lang: "he" | "en"; look: Look; privateSearch: boolean; recents: Place[]; favourites: Favourite[]; modes: number[];
   accent: string; liquid: boolean;
+  // First-launch setup done, and the one "Enjoying Kav?" note after it.
+  onboarded: boolean; supportShown: boolean;
 }
 
 export const DEFAULT_ACCENT = "#9ABEFF";
 const DEFAULTS: Prefs = {
   lang: "he", look: "dark", privateSearch: true, recents: [], favourites: [], modes: [], accent: DEFAULT_ACCENT, liquid: true,
+  onboarded: false, supportShown: false,
 };
 const KEY = "kav-prefs";
 

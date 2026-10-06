@@ -1,5 +1,7 @@
-import { useRef, useState, type ComponentType } from "react";
-import { T, usePrefs, setPrefs, DEFAULT_ACCENT, type LatLon, type Look } from "./core.ts";
+import { useState, type ComponentType } from "react";
+import { T, usePrefs, setPrefs, type LatLon, type Look } from "./core.ts";
+import { AccentPicker } from "./Accent.tsx";
+import { Onboarding, SupportPrompt } from "./Onboarding.tsx";
 import { Header, stayPut } from "./ui.tsx";
 import { TripGlyph, StationsGlyph, LinesGlyph, LiveGlyph, PayGlyph, GearGlyph } from "./icons.tsx";
 import { isNative, removeMap, getMapState } from "./native.ts";
@@ -27,6 +29,9 @@ export function App() {
   // Tabs crossfade, as on Android: the screen inside doesn't slide.
   const go = (t: Tab) => { if (t !== tab) stayPut(); setTab(t); try { sessionStorage.setItem("kav-tab", t); } catch { /* ignore */ } };
 
+  // The first launch sets Kav up before anything else, as on Android.
+  if (!prefs.onboarded) return <div className="app" key={prefs.lang}><Onboarding onDone={() => setPrefs({ onboarded: true })} /></div>;
+
   return (
     <div className="app" key={prefs.lang}>
       <main className="main">
@@ -46,6 +51,7 @@ export function App() {
           </button>
         ))}
       </nav>
+      {!prefs.supportShown && <SupportPrompt onDone={() => setPrefs({ supportShown: true })} />}
     </div>
   );
 }
@@ -85,6 +91,7 @@ function Settings() {
             </div>
             <input type="checkbox" className="switch" checked={prefs.privateSearch} onChange={e => setPrefs({ privateSearch: e.target.checked })} />
           </label>
+          <button className="btn" onClick={() => setPrefs({ onboarded: false })}>{T("Run setup again", "הפעלת ההגדרה הראשונית מחדש")}</button>
           <div className="list-head">{T("Saved", "שמורים")}</div>
           <button className="btn" onClick={() => { if (confirm(T("Clear recent places?", "לנקות את המקומות האחרונים?"))) setPrefs({ recents: [] }); }}>{T("Clear recent places", "ניקוי מקומות אחרונים")}</button>
           {isNative && getMapState().k === "ready" && <button className="btn" onClick={() => { if (confirm(T("Remove the map from this phone? It can be downloaded again.", "להסיר את המפה מהטלפון? אפשר להוריד אותה שוב."))) removeMap(); }}>{T("Remove the map (185 MB)", "הסרת המפה (185 MB)")}</button>}
@@ -97,56 +104,5 @@ function Settings() {
         </div>
       </div>
     </div>
-  );
-}
-
-// ---- the accent: a wheel of pale colours and the Android app's presets --------------------------
-
-const MAX_SAT = .62;
-const PRESETS: { en: string; he: string; hue: number; sat: number }[] = [
-  { en: "Blue", he: "כחול", hue: 219, sat: .40 }, { en: "Green", he: "ירוק", hue: 140, sat: .38 },
-  { en: "Teal", he: "טורקיז", hue: 178, sat: .42 }, { en: "Violet", he: "סגול", hue: 262, sat: .34 },
-  { en: "Amber", he: "ענבר", hue: 44, sat: .48 }, { en: "Pink", he: "ורוד", hue: 338, sat: .36 },
-  { en: "White", he: "לבן", hue: 0, sat: 0 },
-];
-
-// HSV with full value, as Compose's Color.hsv.
-function hsv(h: number, s: number): string {
-  const f = (n: number) => { const k = (n + h / 60) % 6; return 1 - s * Math.max(0, Math.min(k, 4 - k, 1)); };
-  return "#" + [f(5), f(3), f(1)].map(v => Math.round(v * 255).toString(16).padStart(2, "0")).join("").toUpperCase();
-}
-function toHsv(hex: string): [number, number] {
-  const [r, g, b] = [1, 3, 5].map(i => parseInt(hex.slice(i, i + 2), 16) / 255);
-  const max = Math.max(r, g, b), d = max - Math.min(r, g, b);
-  const h = d === 0 ? 0 : max === r ? ((g - b) / d + 6) % 6 : max === g ? (b - r) / d + 2 : (r - g) / d + 4;
-  return [h * 60, max === 0 ? 0 : d / max];
-}
-
-function AccentPicker() {
-  const prefs = usePrefs();
-  const wheel = useRef<HTMLDivElement>(null);
-  const [hue, sat] = toHsv(/^#[0-9a-f]{6}$/i.test(prefs.accent) ? prefs.accent : DEFAULT_ACCENT);
-  const pick = (e: React.PointerEvent) => {
-    const box = wheel.current!.getBoundingClientRect();
-    const r = box.width / 2, dx = e.clientX - box.left - r, dy = e.clientY - box.top - r;
-    const h = (Math.atan2(dy, dx) * 180 / Math.PI + 360) % 360;
-    setPrefs({ accent: hsv(h, Math.min(1, Math.hypot(dx, dy) / (r * .92)) * MAX_SAT) });
-  };
-  const a = hue * Math.PI / 180, dist = Math.min(1, sat / MAX_SAT) * 50 * .92;
-  return (
-    <>
-      <div ref={wheel} className="wheel" aria-label={T("Colour wheel", "גלגל צבעים")}
-        onPointerDown={e => { e.currentTarget.setPointerCapture(e.pointerId); pick(e); }}
-        onPointerMove={e => { if (e.buttons) pick(e); }}>
-        <span className="wheel-dot" style={{ left: `${50 + Math.cos(a) * dist}%`, top: `${50 + Math.sin(a) * dist}%`, background: prefs.accent }} />
-      </div>
-      <div className="swatches">
-        {PRESETS.map(p => {
-          const on = (p.sat < .02 && sat < .02) || (Math.abs(p.hue - hue) < 2 && Math.abs(p.sat - sat) < .02);
-          return <button key={p.en} className={"swatch" + (on ? " on" : "")} style={{ background: hsv(p.hue, p.sat) }}
-            aria-label={T(p.en, p.he)} onClick={() => setPrefs({ accent: hsv(p.hue, p.sat) })} />;
-        })}
-      </div>
-    </>
   );
 }

@@ -81,7 +81,12 @@ public class KavNativePlugin: CAPPlugin, CAPBridgedPlugin, URLSessionDownloadDel
     }
 
     // download({ url, name, size }): fetched to a temporary file, then moved into place when whole.
+    // Touched from the plugin queue and the session delegate queue, so always under the lock.
     private var downloads: [Int: (CAPPluginCall, URL, Int64)] = [:]
+    private let lock = NSLock()
+    private func track(_ id: Int, _ d: (CAPPluginCall, URL, Int64)) { lock.lock(); downloads[id] = d; lock.unlock() }
+    private func tracked(_ id: Int) -> (CAPPluginCall, URL, Int64)? { lock.lock(); defer { lock.unlock() }; return downloads[id] }
+    private func untrack(_ id: Int) -> (CAPPluginCall, URL, Int64)? { lock.lock(); defer { lock.unlock() }; return downloads.removeValue(forKey: id) }
     private lazy var downloader = URLSession(configuration: .default, delegate: self, delegateQueue: nil)
 
     @objc func download(_ call: CAPPluginCall) {
@@ -89,19 +94,19 @@ public class KavNativePlugin: CAPPlugin, CAPBridgedPlugin, URLSessionDownloadDel
         do {
             let target = try fileURL(call.getString("name") ?? "")
             let task = downloader.downloadTask(with: url)
-            downloads[task.taskIdentifier] = (call, target, Int64(call.getDouble("size") ?? -1))
             call.keepAlive = true
+            track(task.taskIdentifier, (call, target, Int64(call.getDouble("size") ?? -1)))
             task.resume()
         } catch { call.reject(error.localizedDescription) }
     }
 
     public func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask, didWriteData bytesWritten: Int64, totalBytesWritten: Int64, totalBytesExpectedToWrite: Int64) {
-        let total = totalBytesExpectedToWrite > 0 ? totalBytesExpectedToWrite : (downloads[downloadTask.taskIdentifier]?.2 ?? -1)
+        let total = totalBytesExpectedToWrite > 0 ? totalBytesExpectedToWrite : (tracked(downloadTask.taskIdentifier)?.2 ?? -1)
         notifyListeners("downloadProgress", data: ["done": totalBytesWritten, "total": total])
     }
 
     public func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask, didFinishDownloadingTo location: URL) {
-        guard let (call, target, size) = downloads.removeValue(forKey: downloadTask.taskIdentifier) else { return }
+        guard let (call, target, size) = untrack(downloadTask.taskIdentifier) else { return }
         do {
             let got = (try FileManager.default.attributesOfItem(atPath: location.path)[.size] as? NSNumber)?.int64Value ?? 0
             if let http = downloadTask.response as? HTTPURLResponse, http.statusCode != 200 { throw NSError(domain: "Kav", code: http.statusCode, userInfo: [NSLocalizedDescriptionKey: "Download HTTP \(http.statusCode)"]) }
@@ -114,7 +119,7 @@ public class KavNativePlugin: CAPPlugin, CAPBridgedPlugin, URLSessionDownloadDel
     }
 
     public func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
-        guard let error = error, let (call, _, _) = downloads.removeValue(forKey: task.taskIdentifier) else { return }
+        guard let error = error, let (call, _, _) = untrack(task.taskIdentifier) else { return }
         call.reject(error.localizedDescription)
         call.keepAlive = false
     }
