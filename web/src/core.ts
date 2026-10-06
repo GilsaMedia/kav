@@ -125,17 +125,17 @@ export function useLoad<T>(key: string | null, load: (signal: AbortSignal) => Pr
   useEffect(() => {
     if (!key) return;
     const ac = new AbortController();
-    let timer: number | undefined;
+    let timer: number | undefined, unwait: (() => void) | undefined;
     setState(s => ({ ...s, loading: true }));
-    loadRef.current(ac.signal).then(
+    Promise.resolve().then(() => loadRef.current(ac.signal)).then(
       data => { if (!ac.signal.aborted) setState({ data, error: null, loading: false }); },
       e => { if (!ac.signal.aborted) setState(s => ({ ...s, error: failure(e), loading: false })); },
     ).finally(() => {
       if (ac.signal.aborted || !everyMs) return;
       const ms = typeof everyMs === "function" ? everyMs() : everyMs;
-      timer = window.setTimeout(() => { if (document.visibilityState === "visible") setTick(t => t + 1); else waitVisible(() => setTick(t => t + 1)); }, ms);
+      timer = window.setTimeout(() => { if (document.visibilityState === "visible") setTick(t => t + 1); else unwait = waitVisible(() => setTick(t => t + 1)); }, ms);
     });
-    return () => { ac.abort(); clearTimeout(timer); };
+    return () => { ac.abort(); clearTimeout(timer); unwait?.(); };
   }, [key, tick]);
   return { ...state, reload: () => setTick(t => t + 1) };
 }
@@ -143,6 +143,7 @@ export function useLoad<T>(key: string | null, load: (signal: AbortSignal) => Pr
 function waitVisible(f: () => void) {
   const on = () => { if (document.visibilityState === "visible") { document.removeEventListener("visibilitychange", on); f(); } };
   document.addEventListener("visibilitychange", on);
+  return () => document.removeEventListener("visibilitychange", on);
 }
 
 // ---- location --------------------------------------------------------------------------------
@@ -157,8 +158,9 @@ export let locationDenied = false;
 
 let nativeWatch: Promise<string> | null = null;
 
+let fixedAt = 0;
 function fix(lat: number, lon: number, acc: number) {
-  here = [lat, lon]; accuracy = acc; locationDenied = false; hereListeners.forEach(l => l());
+  here = [lat, lon]; accuracy = acc; fixedAt = Date.now(); locationDenied = false; hereListeners.forEach(l => l());
 }
 function denied() { locationDenied = true; hereListeners.forEach(l => l()); }
 
@@ -196,8 +198,10 @@ export function useHere(active = true): LatLon | null {
 export const currentHere = () => here;
 export const currentAccuracy = () => accuracy;
 
+// The position now: the one being followed, or a fresh fix. A position kept from long ago would price a ride
+// or find a station where the rider no longer is.
 export function locateOnce(timeout = 12000): Promise<LatLon> {
-  if (here) return Promise.resolve(here);
+  if (here && (watching > 0 || Date.now() - fixedAt < 30_000)) return Promise.resolve(here);
   if (isNative) {
     return Geolocation.getCurrentPosition({ enableHighAccuracy: true, timeout, maximumAge: 10000 }).then(
       p => { fix(p.coords.latitude, p.coords.longitude, p.coords.accuracy); return here!; },
@@ -208,7 +212,7 @@ export function locateOnce(timeout = 12000): Promise<LatLon> {
   return new Promise((resolve, reject) => {
     if (!("geolocation" in navigator)) return reject(new Error(T("Location isn't available.", "המיקום אינו זמין.")));
     navigator.geolocation.getCurrentPosition(
-      p => { here = [p.coords.latitude, p.coords.longitude]; hereListeners.forEach(l => l()); resolve(here); },
+      p => { fix(p.coords.latitude, p.coords.longitude, p.coords.accuracy); resolve(here!); },
       e => reject(new Error(e.code === e.PERMISSION_DENIED
         ? T("Location is off for Kav. Allow it in Settings → Safari → Location.", "המיקום כבוי עבור Kav. אפשרו אותו בהגדרות → Safari → מיקום.")
         : T("Couldn't find your location.", "לא הצלחנו למצוא את המיקום שלכם."))),

@@ -19,7 +19,7 @@ function styleFor(light: boolean) {
     const origin = location.origin;
     const s = JSON.parse(text.replace("__MAP__", MAP_SOURCE()).replaceAll("asset://map/", `${origin}/map/`));
     return s;
-  }));
+  }).catch(e => { styles.delete(key); throw e; }));
   return styles.get(key)!;
 }
 
@@ -176,7 +176,7 @@ function LiveMap({ lines = [], points = [], fit, fitKey, center, zoom = 14, foll
       if (gone) return;
       map.current = p.m;
       setReady(true);
-    });
+    }).catch(() => { /* no style: the map stays empty until it's shown again */ });
     return () => { gone = true; setReady(false); map.current = null; if (held) release(held); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [light]);

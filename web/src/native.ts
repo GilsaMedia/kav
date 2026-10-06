@@ -15,6 +15,10 @@ interface KavNativePlugin {
   liveStart(o: TripLive & { destination: string }): Promise<{ ok: boolean; why?: string }>;
   liveUpdate(o: TripLive): Promise<{ ok: boolean }>;
   liveEnd(): Promise<void>;
+  scanQr(o: { title: string; cancel: string; torch: string }): Promise<{ code?: string; cancelled?: boolean }>;
+  stateRead(o: { key: string }): Promise<{ value: string | null }>;
+  haptic(o: { kind: "tap" | "alert" }): Promise<void>;
+  stateWrite(o: { key: string; value: string | null }): Promise<void>;
   addListener(event: "downloadProgress", f: (e: { done: number; total: number }) => void): Promise<PluginListenerHandle>;
 }
 export const KavNative = registerPlugin<KavNativePlugin>("KavNative");
@@ -33,19 +37,75 @@ export function fromBase64(s: string): Uint8Array {
 
 const STATE_KEY = "kav-backend";
 
+// URLSession's codes for a request that never left the phone (no network, no such host, no connection, no
+// TLS): safe to send again even when it pays. A connection lost or a timeout may come after Moovit acted.
+const NEVER_SENT = new Set(["-1009", "-1003", "-1004", "-1006", "-1200"]);
+const errCode = (e: unknown) => String((e as { code?: unknown })?.code ?? "");
+
+// The backend's state lives with the app, not in the web view's storage, which iOS may clear when space runs
+// low. The payment user's tokens go to the Keychain. Read once before the backend starts.
+let stateText: string | null = null;
+let savedPay: string | null = null, savedRest: string | null = null;
+const PAY_KEYS = ["pay", "paySignedIn"] as const;
+
+async function loadState() {
+  try {
+    const [rest, pay] = await Promise.all([KavNative.stateRead({ key: "backend" }), KavNative.stateRead({ key: "pay" })]);
+    if (rest.value != null || pay.value != null) {
+      savedRest = rest.value; savedPay = pay.value;
+      stateText = JSON.stringify({ ...JSON.parse(rest.value ?? "{}"), ...JSON.parse(pay.value ?? "{}") });
+      return;
+    }
+  } catch { /* the web view's copy, below */ }
+  // First run of this version: what earlier ones kept in the web view, moved over on the first save.
+  try { stateText = localStorage.getItem(STATE_KEY); } catch { stateText = null; }
+}
+
+function saveState(text: string) {
+  stateText = text;
+  let o: Record<string, unknown>;
+  try { o = JSON.parse(text); } catch { return; }
+  const pay: Record<string, unknown> = {};
+  for (const k of PAY_KEYS) { if (k in o) pay[k] = o[k]; delete o[k]; }
+  const payText = Object.keys(pay).length ? JSON.stringify(pay) : null, restText = JSON.stringify(o);
+  const writes: Promise<void>[] = [];
+  if (payText !== savedPay) { savedPay = payText; writes.push(KavNative.stateWrite({ key: "pay", value: payText })); }
+  if (restText !== savedRest) { savedRest = restText; writes.push(KavNative.stateWrite({ key: "backend", value: restText })); }
+  Promise.all(writes)
+    .then(() => { try { localStorage.removeItem(STATE_KEY); } catch { /* nothing kept there */ } })
+    .catch(() => { try { localStorage.setItem(STATE_KEY, text); } catch { /* storage full */ } });
+}
+
 const phone: Platform = {
-  async request(method, url, headers, body, timeoutMs = 25000) {
+  async request(method, url, headers, body, timeoutMs = 25000, once = false) {
     const o = { method, url, headers, body: body ? toBase64(body) : undefined, timeout: timeoutMs };
     let r;
     // iOS often drops a kept-alive connection under a request ("The network connection was lost"),
-    // most of all on mobile data. Once more on a fresh one fixes it.
+    // most of all on mobile data. Once more on a fresh one fixes it, but a payment only when it surely
+    // never reached Moovit.
     try { r = await KavNative.request(o); }
-    catch { await new Promise(done => setTimeout(done, 400)); r = await KavNative.request(o); }
+    catch (e) {
+      if (once && !NEVER_SENT.has(errCode(e))) throw e;
+      await new Promise(done => setTimeout(done, 400));
+      r = await KavNative.request(o);
+    }
     return { code: r.status, headers: r.headers, body: fromBase64(r.body) };
   },
-  load: () => { try { return localStorage.getItem(STATE_KEY); } catch { return null; } },
-  save: text => { try { localStorage.setItem(STATE_KEY, text); } catch { /* storage full */ } },
+  load: () => stateText,
+  save: saveState,
 };
+
+// The QR code on a bus, read by the camera in a native screen. Null when the rider cancels.
+export class CameraDenied extends Error {}
+export async function scanQr(texts: { title: string; cancel: string; torch: string }): Promise<string | null> {
+  try {
+    const r = await KavNative.scanQr(texts);
+    return r.code ?? null;
+  } catch (e) {
+    if (errCode(e) === "denied") throw new CameraDenied((e as Error).message);
+    throw e;
+  }
+}
 
 // ---- the backend, on the phone ---------------------------------------------------------------
 
@@ -53,9 +113,13 @@ type Backend = typeof import("../backend/routes.ts");
 let backend: Promise<Backend> | null = null;
 
 function startBackend(): Promise<Backend> {
-  backend ??= import("../backend/routes.ts").then(async b => {
+  backend ??= Promise.all([import("../backend/routes.ts"), loadState()]).then(([b]) => {
     // The timetable ships inside the app.
-    b.startBackend(phone, async () => new Uint8Array(await (await fetch("/il.kav.gz")).arrayBuffer()));
+    b.startBackend(phone, async () => {
+      const r = await fetch("/il.kav.gz");
+      if (!r.ok) throw new Error(`The timetable is missing from the app (${r.status})`);
+      return new Uint8Array(await r.arrayBuffer());
+    }).catch(() => { /* each call reports it, and the next one tries again */ });
     return b;
   });
   return backend;
@@ -128,6 +192,12 @@ export const nativeMapSource = {
   },
 };
 
+// A tap or an alert the rider feels. WebKit has no navigator.vibrate, so on iPhone it's the app's.
+export function buzz(kind: "tap" | "alert") {
+  if (isNative) KavNative.haptic({ kind }).catch(() => {});
+  else navigator.vibrate?.(kind === "tap" ? 10 : [200, 100, 200]);
+}
+
 export function keepAwake(on: boolean) {
   if (isNative) KavNative.keepAwake({ on }).catch(() => {});
 }
@@ -145,12 +215,14 @@ export type LiveResult = { ok: boolean; why?: string };
 let lastResult: LiveResult | null = null;
 export const liveResult = () => lastResult;
 
-// Started once per trip, then updated; a phone without Live Activities just says no.
-let started = false;
+// Started once per trip, then updated; a phone without Live Activities just says no. Each start counts, so a
+// sample from Settings only ends itself, never a trip started after it.
+let started = false, starts = 0;
 export function showTrip(destination: string, t: TripLive): Promise<LiveResult | null> {
   if (!isNative) return Promise.resolve(null);
-  if (started) { KavNative.liveUpdate(t).catch(() => {}); return Promise.resolve(lastResult); }
-  started = true;
+  // The card gone (swiped away, or ended by iOS): the next update starts it again.
+  if (started) { KavNative.liveUpdate(t).then(r => { if (!r.ok) started = false; }, () => {}); return Promise.resolve(lastResult); }
+  started = true; starts++;
   return KavNative.liveStart({ destination, ...t })
     .then(r => { lastResult = r; if (!r.ok) started = false; return r; })
     .catch(e => {
@@ -168,8 +240,10 @@ export function endTrip() {
 export async function tryTripLive(t: TripLive): Promise<LiveResult> {
   if (!isNative) return { ok: false, why: "browser" };
   try {
+    const mine = ++starts;
+    started = false;
     const r = await KavNative.liveStart({ destination: t.stop, ...t });
-    if (r.ok) setTimeout(() => KavNative.liveEnd().catch(() => {}), 120_000);
+    if (r.ok) setTimeout(() => { if (starts === mine) KavNative.liveEnd().catch(() => {}); }, 120_000);
     return lastResult = r;
   } catch (e) {
     return lastResult = { ok: false, why: /not implemented/i.test(String((e as Error)?.message)) ? "missing" : String((e as Error)?.message ?? e) };

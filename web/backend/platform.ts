@@ -4,7 +4,8 @@ export interface Reply { code: number; headers: Record<string, string>; body: Ui
 
 export interface Platform {
   // An HTTP request with the headers exactly as given. Header names in the reply are lower case.
-  request(method: string, url: string, headers: Record<string, string>, body?: Uint8Array, timeoutMs?: number): Promise<Reply>;
+  // once: the request must not be sent twice (a payment), even if the connection drops on the way back.
+  request(method: string, url: string, headers: Record<string, string>, body?: Uint8Array, timeoutMs?: number, once?: boolean): Promise<Reply>;
   // The backend's saved state (Moovit sessions, learned stop ids), as one JSON text.
   load(): string | null;
   save(text: string): void;

@@ -38,7 +38,13 @@ export function initState() {
 }
 
 let writing: ReturnType<typeof setTimeout> | null = null;
-export function persist() {
+// now: at once, for what can't be lost if the app is closed straight after (the payment user).
+export function persist(now = false) {
+  if (now) {
+    if (writing) { clearTimeout(writing); writing = null; }
+    platform().save(JSON.stringify(saved));
+    return;
+  }
   if (writing) return;
   writing = setTimeout(() => { writing = null; platform().save(JSON.stringify(saved)); }, 200);
 }
@@ -62,7 +68,11 @@ export function browse(at?: M.LatLon | null): Promise<M.MoovitSession> {
       let next: M.MoovitSession | null = null;
       if (!kept || Date.now() - (saved.born ?? 0) > WEEK_MS) {
         try { next = at ? await M.register(at[0], at[1]) : await M.register(); saved.born = Date.now(); }
-        catch (e) { if (!kept) throw e; }
+        catch (e) {
+          if (!kept) throw e;
+          // Keep the old user another day rather than asking Moovit for a new one on every call.
+          saved.born = Date.now() - WEEK_MS + 86_400_000;
+        }
       }
       if (!next) next = fresh(kept) ? kept! : await M.renew(kept!);
       saved.browse = next; persist(); failures = 0;
@@ -81,7 +91,7 @@ async function payUser(renew: boolean): Promise<M.MoovitSession> {
   let next = kept;
   if (!kept) next = await M.register();
   else if (renew || !fresh(kept)) next = await M.renew(kept);
-  if (next !== kept) { saved.pay = next; persist(); }
+  if (next !== kept) { saved.pay = next; persist(true); }
   return next!;
 }
 
@@ -96,8 +106,8 @@ export function asPayer<T>(f: (s: M.MoovitSession) => Promise<T>): Promise<T> {
 }
 
 export const paySignedIn = () => !!saved.paySignedIn;
-export function markSignedIn() { saved.paySignedIn = true; persist(); }
-export function signOut() { saved.pay = undefined; saved.paySignedIn = false; persist(); }
+export function markSignedIn() { saved.paySignedIn = true; persist(true); }
+export function signOut() { saved.pay = undefined; saved.paySignedIn = false; persist(true); }
 
 // ---- timetable stops to Moovit ids -----------------------------------------------------------
 

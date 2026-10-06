@@ -5,6 +5,7 @@ import jsQR from "jsqr";
 import { T, api, useLoad, useNow, clock, shekels, failure, locateOnce, ApiError, type LatLon } from "../core.ts";
 import { Header, Spinner, Note, Qr, Sheet } from "../ui.tsx";
 import { ModeGlyph, QrGlyph, MinusGlyph, PlusGlyph, BackGlyph } from "../icons.tsx";
+import { isNative, scanQr, CameraDenied } from "../native.ts";
 
 interface Price { agorot: number; code: string }
 interface Cost { price: Price; full: Price; reasons: string[] }
@@ -88,6 +89,7 @@ function SignIn({ onDone }: { onDone: () => void }) {
   const [code, setCode] = useState("");
   const [cvv, setCvv] = useState("");
   const [elsewhere, setElsewhere] = useState(false);
+  const [cvvFailed, setCvvFailed] = useState(false);
   const [attempt, setAttempt] = useState(0);
 
   const run = async (work: () => Promise<void>) => {
@@ -152,7 +154,21 @@ function SignIn({ onDone }: { onDone: () => void }) {
             <Note>{T(`Moovit asks a newly connected phone to confirm the card on the account. Enter the CVV of the card ending in ${step.last4}. It goes to Moovit once and is kept nowhere.`,
               `Moovit מבקשת מטלפון שהתחבר עכשיו לאשר את הכרטיס שבחשבון. הקלידו את ה-CVV של הכרטיס שמסתיים ב-${step.last4}. הוא נשלח ל-Moovit פעם אחת ולא נשמר.`)}</Note>
             <input className="field ltr" type="password" inputMode="numeric" autoComplete="off" value={cvv} onChange={e => setCvv(e.target.value.replace(/\D/g, "").slice(0, 4))} placeholder="CVV" />
-            <button className="btn primary" disabled={busy || cvv.length < 3} onClick={() => run(async () => { const d = cvv; setCvv(""); await api("pay/cvv", { cvv: d }); await finish([], null); })}>{T("Confirm card", "אישור הכרטיס")}</button>
+            <button className="btn primary" disabled={busy || cvv.length < 3} onClick={() => run(async () => {
+              const d = cvv; setCvv("");
+              try { await api("pay/cvv", { cvv: d }); }
+              catch (e) { setCvvFailed(true); throw e; }
+              await finish([], null);
+            })}>{T("Confirm card", "אישור הכרטיס")}</button>
+            {cvvFailed && <>
+              <div className="dim small">{T("If Moovit keeps refusing the CVV, the account may already be ready to pay: Kav can check.",
+                "אם Moovit ממשיכה לסרב ל-CVV, ייתכן שהחשבון כבר מוכן לתשלום: Kav יכולה לבדוק.")}</div>
+              <button className="btn" disabled={busy} onClick={() => run(async () => {
+                const f = await api<{ connected: boolean }>("pay/finish", {});
+                if (f.connected) onDone();
+                else throw new Error(T("Moovit hasn't connected the account to Kav yet. Try the CVV again in a minute.", "Moovit עוד לא חיברה את החשבון ל-Kav. נסו את ה-CVV שוב בעוד דקה."));
+              })}>{T("Continue without confirming", "המשך בלי אישור")}</button>
+            </>}
           </>}
           {step.k === "noAccount" && <>
             <Note>{T("No payment account on this number. Register a payment account in Moovit's app, then try again.", "אין חשבון תשלום על המספר הזה. רשמו חשבון תשלום באפליקציה של Moovit ונסו שוב.")}</Note>
@@ -267,6 +283,7 @@ function BusPurchase({ onBack, onBought }: { onBack: () => void; onBought: (t: T
   const [quote, setQuote] = useState<Quote | null>(null);
   const [guests, setGuests] = useState(0);
   const [loading, setLoading] = useState(false);
+  const [noFix, setNoFix] = useState(false);
   const p = usePurchase(onBought);
   const at = useRef<LatLon | null>(null);
 
@@ -275,6 +292,7 @@ function BusPurchase({ onBack, onBought }: { onBack: () => void; onBought: (t: T
     setLoading(true); p.setError(null);
     (async () => {
       at.current = await payAt();
+      setNoFix(!at.current);
       const o = await api<Offer>("pay/price", { qr, at: at.current });
       setOffer(o);
       if (o.fares.length === 1) setFare(o.fares[0]);
@@ -303,6 +321,8 @@ function BusPurchase({ onBack, onBought }: { onBack: () => void; onBought: (t: T
             </div>
           </>}
           {loading && <Spinner text={T("Asking Moovit for the fare…", "שואלים את Moovit על המחיר…")} />}
+          {noFix && offer && <Note tone="warn">{T("Kav couldn't find your location, so Moovit priced the ride from the city centre. Check the fare before paying.",
+            "Kav לא מצאה את המיקום שלכם, ולכן Moovit תמחרה את הנסיעה ממרכז העיר. בדקו את המחיר לפני התשלום.")}</Note>}
           {offer && !fare && <>
             <div className="list-head">{T("Where are you going?", "לאן נוסעים?")}</div>
             {offer.fares.map((f, k) => (
@@ -320,7 +340,7 @@ function BusPurchase({ onBack, onBought }: { onBack: () => void; onBought: (t: T
             {offer.fares.length > 1 && <button className="link" onClick={() => { setFare(null); setQuote(null); }}>{T("Choose another fare", "בחירת מחיר אחר")}</button>}
           </>}
           {p.error && <Note tone="error">{p.error}</Note>}
-          {qr && !p.busy && <button className="link" onClick={() => { setQr(null); setOffer(null); setFare(null); p.setError(null); }}>{T("Scan again", "סריקה מחדש")}</button>}
+          {qr && !p.busy && <button className="link" onClick={() => { setQr(null); setOffer(null); setFare(null); setQuote(null); setNoFix(false); p.setError(null); }}>{T("Scan again", "סריקה מחדש")}</button>}
         </div>
       </div>
     </div>
@@ -336,6 +356,35 @@ function PayButton({ busy, quote, fallback, guests, onPay }: { busy: boolean; qu
 }
 
 function Scanner({ onCode }: { onCode: (code: string) => void }) {
+  return isNative ? <NativeScanner onCode={onCode} /> : <WebScanner onCode={onCode} />;
+}
+
+// On iPhone the camera opens in a screen of its own as soon as paying for a bus starts.
+function NativeScanner({ onCode }: { onCode: (code: string) => void }) {
+  const [error, setError] = useState<string | null>(null);
+  const [open, setOpen] = useState(false);
+  const opened = useRef(false);
+  const scan = async () => {
+    if (open) return;
+    setOpen(true); setError(null);
+    try {
+      const code = await scanQr({ title: T("Point the camera at the QR code on the bus", "כוונו את המצלמה לברקוד שבאוטובוס"), cancel: T("Cancel", "ביטול"), torch: T("Light", "פנס") });
+      if (code) onCode(code);
+    } catch (e) {
+      setError(e instanceof CameraDenied
+        ? T("The camera is off for Kav. Allow it in Settings → Kav → Camera, or type the number.", "המצלמה כבויה עבור Kav. אפשרו אותה בהגדרות → Kav → מצלמה, או הקלידו את המספר.")
+        : T("The camera isn't available. Type the number under the code.", "המצלמה אינה זמינה. הקלידו את המספר שמתחת לברקוד."));
+    }
+    setOpen(false);
+  };
+  useEffect(() => { if (!opened.current) { opened.current = true; scan(); } /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, []);
+  return <>
+    <button className="btn primary big" disabled={open} onClick={scan}><QrGlyph size={20} />{T("Scan the QR code", "סריקת הברקוד")}</button>
+    {error && <Note tone="warn">{error}</Note>}
+  </>;
+}
+
+function WebScanner({ onCode }: { onCode: (code: string) => void }) {
   const video = useRef<HTMLVideoElement>(null);
   const [error, setError] = useState<string | null>(null);
   useEffect(() => {

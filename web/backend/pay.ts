@@ -41,9 +41,16 @@ const sStrs = (m: S | undefined, id: number) => { const v = m?.get(id); return A
 
 const latlon = (at: LatLon) => new TWriter().i32Field(1, Math.trunc(at[0] * 1e6)).i32Field(2, Math.trunc(at[1] * 1e6));
 
+// Calls that do something (pay, text a code, use one up): never sent twice. A repeated purchase is a
+// second charge, and a repeated SMS or verification makes the code the rider types the wrong one.
+const ONCE = new Set([
+  "PaymentContext/GenerateVerificationToken", "PaymentContext/RegistrationVerification", "PTB/Accounts/SetBillingAccount",
+  "PTB/Activations/SetActivationV2", "PTB/Activations/SetActivationByLocation", "PTB/Activations/FinishTrainActivation",
+]);
+
 // Binary Thrift both ways. Null for an empty answer.
 async function call(user: MoovitSession, path: string, body: TWriter): Promise<S | null> {
-  const [code, raw] = await post(APP4, path, body.stop().bytes(), authHeaders(user));
+  const [code, raw] = await post(APP4, path, body.stop().bytes(), authHeaders(user), 25000, true, ONCE.has(path));
   if (code === 204 || (code === 200 && !raw.length)) return null;
   let s: S | null = null;
   try { s = new TReader(raw).readStruct(); } catch { /* not a struct */ }

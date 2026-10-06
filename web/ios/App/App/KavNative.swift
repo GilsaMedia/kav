@@ -1,4 +1,5 @@
 import ActivityKit
+import AVFoundation
 import CoreLocation
 import Foundation
 import UIKit
@@ -21,6 +22,10 @@ public class KavNativePlugin: CAPPlugin, CAPBridgedPlugin, URLSessionDownloadDel
         CAPPluginMethod(name: "liveStart", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "liveUpdate", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "liveEnd", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "scanQr", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "stateRead", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "stateWrite", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "haptic", returnType: CAPPluginReturnPromise),
     ]
 
     // No cookies, no cache: every request goes out as Kav builds it.
@@ -52,8 +57,13 @@ public class KavNativePlugin: CAPPlugin, CAPBridgedPlugin, URLSessionDownloadDel
         req.timeoutInterval = (call.getDouble("timeout") ?? 25000) / 1000
         for (k, v) in call.getObject("headers") ?? [:] { if let v = v as? String { req.setValue(v, forHTTPHeaderField: k) } }
         if let b = call.getString("body"), let data = Data(base64Encoded: b) { req.httpBody = data }
+        // A payment shouldn't be cut off because the phone was locked or Kav left the screen mid-request.
+        let bg = BackgroundTask()
         session.dataTask(with: req) { data, response, error in
-            if let error = error { return call.reject(error.localizedDescription) }
+            defer { bg.end() }
+            // The code tells the app whether the request surely never left (no network, no host), so that
+            // only then is a payment sent again.
+            if let error = error { return call.reject(error.localizedDescription, String((error as? URLError)?.code.rawValue ?? 0)) }
             guard let http = response as? HTTPURLResponse else { return call.reject("No response") }
             var headers: [String: String] = [:]
             for (k, v) in http.allHeaderFields { headers[String(describing: k).lowercased()] = String(describing: v) }
@@ -99,7 +109,6 @@ public class KavNativePlugin: CAPPlugin, CAPBridgedPlugin, URLSessionDownloadDel
         do {
             let target = try fileURL(call.getString("name") ?? "")
             let task = downloader.downloadTask(with: url)
-            call.keepAlive = true
             track(task.taskIdentifier, (call, target, Int64(call.getDouble("size") ?? -1)))
             task.resume()
         } catch { call.reject(error.localizedDescription) }
@@ -120,13 +129,11 @@ public class KavNativePlugin: CAPPlugin, CAPBridgedPlugin, URLSessionDownloadDel
             try FileManager.default.moveItem(at: location, to: target)
             call.resolve(["size": got])
         } catch { call.reject(error.localizedDescription) }
-        call.keepAlive = false
     }
 
     public func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
         guard let error = error, let (call, _, _) = untrack(task.taskIdentifier) else { return }
         call.reject(error.localizedDescription)
-        call.keepAlive = false
     }
 
     @objc func remove(_ call: CAPPluginCall) {
@@ -170,10 +177,12 @@ public class KavNativePlugin: CAPPlugin, CAPBridgedPlugin, URLSessionDownloadDel
         let state = Self.tripState(call)
         let attributes = KavTripAttributes(destination: call.getString("destination") ?? "")
         Task { @MainActor in
+            // The earlier trip's keeper stops first, so it can't go on with location and a timer if this one fails.
+            (self.keeper as? TripKeeper)?.stop()
+            self.keeper = nil
             for a in Activity<KavTripAttributes>.activities { await a.end(nil, dismissalPolicy: .immediate) }
             do {
                 let activity = try Activity.request(attributes: attributes, content: TripKeeper.content(state), pushType: nil)
-                (self.keeper as? TripKeeper)?.stop()
                 let k = TripKeeper(activity: activity, state: state)
                 self.keeper = k
                 k.start()
@@ -186,7 +195,10 @@ public class KavNativePlugin: CAPPlugin, CAPBridgedPlugin, URLSessionDownloadDel
         guard #available(iOS 16.2, *) else { return call.resolve(["ok": false]) }
         let state = Self.tripState(call)
         Task { @MainActor in
-            if let k = self.keeper as? TripKeeper { k.state = state; await k.push() }
+            // No card any more (ended from the lock screen, by iOS, or by another start): the app starts one again.
+            guard let k = self.keeper as? TripKeeper, k.running else { return call.resolve(["ok": false]) }
+            k.state = state
+            await k.push()
             call.resolve(["ok": true])
         }
     }
@@ -197,6 +209,74 @@ public class KavNativePlugin: CAPPlugin, CAPBridgedPlugin, URLSessionDownloadDel
             (self.keeper as? TripKeeper)?.stop()
             self.keeper = nil
             for a in Activity<KavTripAttributes>.activities { await a.end(nil, dismissalPolicy: .immediate) }
+            call.resolve()
+        }
+    }
+
+    // ---- the QR code on a bus, read by the camera natively ----
+
+    // scanQr({ title, cancel, torch }) -> { code } or { cancelled: true }; rejects with code "denied" when the
+    // camera is off for Kav.
+    @objc func scanQr(_ call: CAPPluginCall) {
+        let present = {
+            DispatchQueue.main.async {
+                guard AVCaptureDevice.default(for: .video) != nil else { return call.reject("No camera", "unavailable") }
+                guard let host = self.bridge?.viewController else { return call.reject("No view") }
+                let scanner = QrScannerController(title: call.getString("title") ?? "", cancel: call.getString("cancel") ?? "Cancel",
+                                                  torch: call.getString("torch") ?? "Light") { code in
+                    if let code = code { call.resolve(["code": code]) } else { call.resolve(["cancelled": true]) }
+                }
+                var top = host
+                while let next = top.presentedViewController { top = next }
+                top.present(scanner, animated: true)
+            }
+        }
+        switch AVCaptureDevice.authorizationStatus(for: .video) {
+        case .authorized: present()
+        case .notDetermined:
+            AVCaptureDevice.requestAccess(for: .video) { ok in ok ? present() : call.reject("Camera denied", "denied") }
+        default: call.reject("Camera denied", "denied")
+        }
+    }
+
+    // ---- the backend's saved state, kept by the app rather than the web view ----
+
+    // The web view's storage can be cleared by iOS when space runs low; losing the payment user would mean
+    // moving the account to Kav again. "pay" (tokens that can spend money) goes to the Keychain, on this
+    // device only; anything else to a file. stateRead({ key }) -> { value: string | null }.
+    @objc func stateRead(_ call: CAPPluginCall) {
+        let key = call.getString("key") ?? ""
+        if key == "pay", let v = Keychain.read(key) { return call.resolve(["value": v]) }
+        do {
+            let u = try fileURL("state-\(key).json")
+            if let data = try? Data(contentsOf: u), let v = String(data: data, encoding: .utf8) { return call.resolve(["value": v]) }
+            call.resolve(["value": NSNull()])
+        } catch { call.reject(error.localizedDescription) }
+    }
+
+    // stateWrite({ key, value }): a null value removes it.
+    @objc func stateWrite(_ call: CAPPluginCall) {
+        let key = call.getString("key") ?? ""
+        let value = call.getString("value")
+        do {
+            let u = try fileURL("state-\(key).json")
+            if key == "pay" {
+                if let v = value, Keychain.write(key, v) { try? FileManager.default.removeItem(at: u); return call.resolve() }
+                if value == nil { Keychain.delete(key); try? FileManager.default.removeItem(at: u); return call.resolve() }
+                // No Keychain (some ways of installing an app leave it without one): the file below.
+            }
+            if let v = value { try Data(v.utf8).write(to: u, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication]) }
+            else { try? FileManager.default.removeItem(at: u) }
+            call.resolve()
+        } catch { call.reject(error.localizedDescription) }
+    }
+
+    // haptic({ kind: "tap" | "alert" }): WebKit has no navigator.vibrate.
+    @objc func haptic(_ call: CAPPluginCall) {
+        let alert = call.getString("kind") == "alert"
+        DispatchQueue.main.async {
+            if alert { UINotificationFeedbackGenerator().notificationOccurred(.warning) }
+            else { UIImpactFeedbackGenerator(style: .light).impactOccurred() }
             call.resolve()
         }
     }
@@ -221,7 +301,9 @@ final class TripKeeper: NSObject, CLLocationManagerDelegate {
     let activity: Activity<KavTripAttributes>
     var state: KavTripAttributes.ContentState
     private var timer: Timer?
+    private var watcher: Task<Void, Never>?
     private let location = CLLocationManager()
+    private(set) var running = false
 
     init(activity: Activity<KavTripAttributes>, state: KavTripAttributes.ContentState) {
         self.activity = activity
@@ -238,6 +320,14 @@ final class TripKeeper: NSObject, CLLocationManagerDelegate {
     }
 
     func start() {
+        running = true
+        // Dismissed on the lock screen or ended by iOS: nothing left to keep current, so the location stops too.
+        watcher = Task { @MainActor [weak self, activity] in
+            for await s in activity.activityStateUpdates where s == .ended || s == .dismissed {
+                self?.stop()
+                break
+            }
+        }
         timer = Timer.scheduledTimer(withTimeInterval: 20, repeats: true) { [weak self] _ in
             Task { @MainActor in await self?.push() }
         }
@@ -258,6 +348,9 @@ final class TripKeeper: NSObject, CLLocationManagerDelegate {
     }
 
     func stop() {
+        running = false
+        watcher?.cancel()
+        watcher = nil
         timer?.invalidate()
         timer = nil
         location.stopUpdatingLocation()
@@ -265,4 +358,175 @@ final class TripKeeper: NSObject, CLLocationManagerDelegate {
 
     nonisolated func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {}
     nonisolated func locationManager(_ manager: CLLocationManager, didFailWithError error: Error) {}
+}
+
+// Asks iOS for a little time to finish a request if Kav goes to the background, and gives it back after.
+final class BackgroundTask {
+    private var id = UIBackgroundTaskIdentifier.invalid
+    private let lock = NSLock()
+    init() { id = UIApplication.shared.beginBackgroundTask(withName: "Kav request") { [weak self] in self?.end() } }
+    func end() {
+        lock.lock(); let i = id; id = .invalid; lock.unlock()
+        if i != .invalid { UIApplication.shared.endBackgroundTask(i) }
+    }
+}
+
+enum Keychain {
+    private static func query(_ key: String) -> [String: Any] {
+        [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: "kav", kSecAttrAccount as String: key]
+    }
+    static func read(_ key: String) -> String? {
+        var q = query(key); q[kSecReturnData as String] = true; q[kSecMatchLimit as String] = kSecMatchLimitOne
+        var out: AnyObject?
+        guard SecItemCopyMatching(q as CFDictionary, &out) == errSecSuccess, let data = out as? Data else { return nil }
+        return String(data: data, encoding: .utf8)
+    }
+    static func write(_ key: String, _ value: String) -> Bool {
+        let data = Data(value.utf8)
+        let found = SecItemUpdate(query(key) as CFDictionary, [kSecValueData as String: data] as CFDictionary)
+        if found == errSecSuccess { return true }
+        guard found == errSecItemNotFound else { return false }
+        var q = query(key); q[kSecValueData as String] = data
+        q[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
+        return SecItemAdd(q as CFDictionary, nil) == errSecSuccess
+    }
+    static func delete(_ key: String) { SecItemDelete(query(key) as CFDictionary) }
+}
+
+// The camera, full screen, until it sees a QR code: AVFoundation reads it at once and in poor light, where
+// reading frames in the web view was slow and needed the web view's own camera prompt.
+final class QrScannerController: UIViewController, AVCaptureMetadataOutputObjectsDelegate {
+    private let session = AVCaptureSession()
+    private let queue = DispatchQueue(label: "kav.scanner")
+    private var preview: AVCaptureVideoPreviewLayer?
+    private var device: AVCaptureDevice?
+    private var finished = false
+    private let titleText: String, cancelText: String, torchText: String
+    private let done: (String?) -> Void
+
+    init(title: String, cancel: String, torch: String, done: @escaping (String?) -> Void) {
+        titleText = title; cancelText = cancel; torchText = torch; self.done = done
+        super.init(nibName: nil, bundle: nil)
+        modalPresentationStyle = .fullScreen
+    }
+    required init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
+
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        view.backgroundColor = .black
+        if let d = AVCaptureDevice.default(for: .video), let input = try? AVCaptureDeviceInput(device: d), session.canAddInput(input) {
+            device = d
+            session.addInput(input)
+            let output = AVCaptureMetadataOutput()
+            if session.canAddOutput(output) {
+                session.addOutput(output)
+                output.setMetadataObjectsDelegate(self, queue: .main)
+                if output.availableMetadataObjectTypes.contains(.qr) { output.metadataObjectTypes = [.qr] }
+            }
+            let layer = AVCaptureVideoPreviewLayer(session: session)
+            layer.videoGravity = .resizeAspectFill
+            view.layer.addSublayer(layer)
+            preview = layer
+        }
+
+        let frame = UIView()
+        frame.translatesAutoresizingMaskIntoConstraints = false
+        frame.layer.borderColor = UIColor.white.withAlphaComponent(0.9).cgColor
+        frame.layer.borderWidth = 3
+        frame.layer.cornerRadius = 22
+        frame.isUserInteractionEnabled = false
+        view.addSubview(frame)
+
+        let label = UILabel()
+        label.translatesAutoresizingMaskIntoConstraints = false
+        label.text = titleText
+        label.textColor = .white
+        label.font = .systemFont(ofSize: 17, weight: .semibold)
+        label.textAlignment = .center
+        label.numberOfLines = 0
+        view.addSubview(label)
+
+        let cancel = Self.button(cancelText)
+        cancel.addTarget(self, action: #selector(cancelTapped), for: .touchUpInside)
+        view.addSubview(cancel)
+
+        var constraints = [
+            frame.centerXAnchor.constraint(equalTo: view.centerXAnchor),
+            frame.centerYAnchor.constraint(equalTo: view.centerYAnchor, constant: -30),
+            frame.widthAnchor.constraint(equalTo: view.widthAnchor, multiplier: 0.66),
+            frame.heightAnchor.constraint(equalTo: frame.widthAnchor),
+            label.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 24),
+            label.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -24),
+            label.bottomAnchor.constraint(equalTo: frame.topAnchor, constant: -28),
+            cancel.centerXAnchor.constraint(equalTo: view.centerXAnchor),
+            cancel.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor, constant: -24),
+            cancel.heightAnchor.constraint(equalToConstant: 50),
+            cancel.widthAnchor.constraint(greaterThanOrEqualToConstant: 140),
+        ]
+        if device?.hasTorch == true {
+            let torch = Self.button(torchText)
+            torch.addTarget(self, action: #selector(torchTapped), for: .touchUpInside)
+            view.addSubview(torch)
+            constraints += [
+                torch.centerXAnchor.constraint(equalTo: view.centerXAnchor),
+                torch.bottomAnchor.constraint(equalTo: cancel.topAnchor, constant: -14),
+                torch.heightAnchor.constraint(equalToConstant: 50),
+                torch.widthAnchor.constraint(greaterThanOrEqualToConstant: 140),
+            ]
+        }
+        NSLayoutConstraint.activate(constraints)
+    }
+
+    private static func button(_ title: String) -> UIButton {
+        let b = UIButton(type: .system)
+        b.translatesAutoresizingMaskIntoConstraints = false
+        b.setTitle(title, for: .normal)
+        b.setTitleColor(.white, for: .normal)
+        b.titleLabel?.font = .systemFont(ofSize: 17, weight: .semibold)
+        b.backgroundColor = UIColor.white.withAlphaComponent(0.18)
+        b.layer.cornerRadius = 25
+        b.contentEdgeInsets = UIEdgeInsets(top: 0, left: 28, bottom: 0, right: 28)
+        return b
+    }
+
+    override func viewDidLayoutSubviews() {
+        super.viewDidLayoutSubviews()
+        preview?.frame = view.bounds
+    }
+
+    override func viewWillAppear(_ animated: Bool) {
+        super.viewWillAppear(animated)
+        let s = session
+        queue.async { if !s.isRunning { s.startRunning() } }
+    }
+
+    override func viewWillDisappear(_ animated: Bool) {
+        super.viewWillDisappear(animated)
+        setTorch(false)
+        let s = session
+        queue.async { if s.isRunning { s.stopRunning() } }
+    }
+
+    func metadataOutput(_ output: AVCaptureMetadataOutput, didOutput objects: [AVMetadataObject], from connection: AVCaptureConnection) {
+        guard let code = objects.compactMap({ ($0 as? AVMetadataMachineReadableCodeObject)?.stringValue }).first(where: { !$0.isEmpty }) else { return }
+        UINotificationFeedbackGenerator().notificationOccurred(.success)
+        finish(code)
+    }
+
+    @objc private func cancelTapped() { finish(nil) }
+
+    @objc private func torchTapped() { setTorch(device?.torchMode != .on) }
+
+    private func setTorch(_ on: Bool) {
+        guard let d = device, d.hasTorch, (try? d.lockForConfiguration()) != nil else { return }
+        d.torchMode = on ? .on : .off
+        d.unlockForConfiguration()
+    }
+
+    private func finish(_ code: String?) {
+        guard !finished else { return }
+        finished = true
+        let done = self.done
+        dismiss(animated: true) { done(code) }
+    }
 }

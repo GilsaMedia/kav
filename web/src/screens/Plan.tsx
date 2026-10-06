@@ -9,7 +9,7 @@ import { Header, LineBadge, Spinner, Note, LiveDot, PlacePicker, SaveFavourite, 
 import { MapView, type MapLine, type MapPoint } from "../MapView.tsx";
 import { Home, Arrives, type Opened } from "./Home.tsx";
 import { DragSheet } from "../sheet.tsx";
-import { isNative, keepAwake, showTrip, endTrip, type TripLive } from "../native.ts";
+import { isNative, keepAwake, showTrip, endTrip, buzz, type TripLive } from "../native.ts";
 import { SwapGlyph, ClockGlyph, StarGlyph, CloseGlyph, RecentGlyph, WalkGlyph, BikeGlyph, TaxiGlyph, DotGlyph, ShareGlyph, PlayGlyph, ChevronGlyph, BackGlyph, PayGlyph, LocateGlyph, PinGlyph, StationMark, BellGlyph, FlagGlyph, modeOf } from "../icons.tsx";
 
 type When = { kind: "now" } | { kind: "depart" | "arrive"; ms: number };
@@ -60,7 +60,8 @@ export function PlanScreen({ onPay }: { onPay: (at?: LatLon, routeType?: number)
     });
   }, [plan.data]);
 
-  const swap = () => { const f = from; setFrom(to); setTo(f ?? { name: HERE_NAME(), detail: "", lat: here?.[0] ?? 0, lon: here?.[1] ?? 0, type: -1 }); };
+  // Without a position yet there's no "here" to swap to.
+  const swap = () => { if (!from && !here) return; const f = from; setFrom(to); setTo(f ?? { name: HERE_NAME(), detail: "", lat: here![0], lon: here![1], type: -1 }); };
 
   if (picking) {
     return <PlacePicker title={picking === "from" ? T("From", "מאיפה") : picking === "fav" ? T("Add a favorite", "הוספת מועדף") : T("To", "לאן")} allowHere={picking !== "fav"}
@@ -175,7 +176,7 @@ function TimeSheet({ when, onDone, onClose }: { when: When; onDone: (w: When) =>
           ))}
         </div>
         {kind !== "now" && <input className="field" type="datetime-local" value={value} onChange={e => setValue(e.target.value)} />}
-        <button className="btn primary" onClick={() => onDone(kind === "now" ? { kind } : { kind, ms: new Date(value).getTime() })}>{T("Done", "סיום")}</button>
+        <button className="btn primary" onClick={() => { const ms = new Date(value).getTime(); onDone(kind === "now" || !Number.isFinite(ms) ? { kind: "now" } : { kind, ms }); }}>{T("Done", "סיום")}</button>
       </div>
     </Sheet>
   );
@@ -549,7 +550,8 @@ function Navigate({ trip, r, live, here, lines, ends, vehicles, from, to, onPay,
     const near = (p: LatLon | null, m: number) => !!p && metres(here, p) < m;
     if (c.kind === "start" && start && !near(start, 40)) setStep(step + 1);
     else if (c.kind === "walk" && near(endOf(c.leg), 35)) setStep(step + 1);
-    else if (c.kind === "wait" && !near(stopAt(c.ride.fromStop), 150)) setStep(step + 1);
+    // Only once the stop is known: an unknown one isn't a reason to think the rider has left it.
+    else if (c.kind === "wait" && stopAt(c.ride.fromStop) && !near(stopAt(c.ride.fromStop), 150)) setStep(step + 1);
     else if (c.kind === "ride" && near(endOf(c.ride), 120)) setStep(step + 1);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [here?.[0], here?.[1], step]);
@@ -559,7 +561,7 @@ function Navigate({ trip, r, live, here, lines, ends, vehicles, from, to, onPay,
   useEffect(() => {
     if (!alerts || !here || card?.kind !== "ride" || told.current === step) return;
     const end = endOf(card.ride);
-    if (end && metres(here, end) < 400) { told.current = step; navigator.vibrate?.([200, 100, 200]); }
+    if (end && metres(here, end) < 400) { told.current = step; buzz("alert"); }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [here?.[0], here?.[1], step, alerts]);
 

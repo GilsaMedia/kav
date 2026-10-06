@@ -41,8 +41,8 @@ interface Reply { code: number; raw: Uint8Array; headers: Record<string, string>
 
 const isGzip = (b: Uint8Array) => b.length > 2 && b[0] === 0x1f && b[1] === 0x8b;
 
-async function request(method: string, url: string, headers: Record<string, string>, body?: Uint8Array, timeoutMs = 25000): Promise<Reply> {
-  const r = await platform().request(method, url, headers, body, timeoutMs);
+async function request(method: string, url: string, headers: Record<string, string>, body?: Uint8Array, timeoutMs = 25000, once = false): Promise<Reply> {
+  const r = await platform().request(method, url, headers, body, timeoutMs, once);
   let raw = r.body;
   // Some HTTP stacks unpack gzip themselves; the rest is unpacked here.
   if (isGzip(raw)) { try { raw = gunzipSync(raw); } catch { /* keep raw */ } }
@@ -58,9 +58,10 @@ function adoptRevision(r: Reply): boolean {
 }
 
 export async function post(base: string, path: string, body: Uint8Array, headers: Record<string, string>,
-  readMs = 25000, revision = true): Promise<[number, Uint8Array]> {
+  readMs = 25000, revision = true, once = false): Promise<[number, Uint8Array]> {
   for (let attempt = 0; attempt < 2; attempt++) {
-    const r = await request("POST", base + path, revision ? withRev(headers) : headers, body, readMs);
+    // A 412 (stale revision) is refused before anything is done, so even a payment is sent again after one.
+    const r = await request("POST", base + path, revision ? withRev(headers) : headers, body, readMs, once);
     if (!revision) {
       const rev = (r.headers[REV_HEADER.toLowerCase()] ?? "").trim();
       if (rev) metroRev = rev;
@@ -84,8 +85,28 @@ async function get(base: string, path: string, headers: Record<string, string>):
 const decoder = new TextDecoder();
 const text = (b: Uint8Array) => decoder.decode(b);
 
-// Moovit's JSON carries 64-bit ids; any past 2^53 are kept exact as strings.
+// Moovit's JSON carries 64-bit ids; any past 2^53 are kept exact as strings. Older WebKit (before iOS 18.4)
+// doesn't hand the reviver the number's source text, so there they're quoted before parsing.
+let hasSource = false;
+JSON.parse("1", (_k, v, ctx?: { source?: string }) => { hasSource = ctx?.source === "1"; return v; });
+
+function quoteBigInts(text: string): string {
+  let out = "", from = 0;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (c === '"') { for (i++; i < text.length && text[i] !== '"'; i++) if (text[i] === "\\") i++; continue; }
+    if (c !== "-" && (c < "0" || c > "9")) continue;
+    let j = i + 1;
+    while (j < text.length && /[0-9.eE+-]/.test(text[j])) j++;
+    const n = text.slice(i, j);
+    if (/^-?\d{16,}$/.test(n) && !Number.isSafeInteger(Number(n))) { out += text.slice(from, i) + '"' + n + '"'; from = j; }
+    i = j - 1;
+  }
+  return out + text.slice(from);
+}
+
 export function parseJson(text: string): any {
+  if (!hasSource) return JSON.parse(quoteBigInts(text));
   return JSON.parse(text, (_k, v, ctx?: { source?: string }) =>
     typeof v === "number" && !Number.isSafeInteger(v) && ctx?.source && /^-?\d+$/.test(ctx.source) ? ctx.source : v);
 }
@@ -95,6 +116,14 @@ const locale = () => settings.hebrew
   ? new TWriter().strField(1, "he").strField(2, "IL").strField(3, "")
   : new TWriter().strField(1, "en").strField(2, "GB").strField(3, "");
 const dpk = () => new TWriter().strField(1, "").strField(2, "").strField(3, "");
+// crypto.randomUUID arrived in iOS 15.4.
+const uuid = (): string => {
+  if (typeof crypto.randomUUID === "function") return crypto.randomUUID();
+  const b = crypto.getRandomValues(new Uint8Array(16));
+  b[6] = (b[6] & 0x0f) | 0x40; b[8] = (b[8] & 0x3f) | 0x80;
+  const h = Array.from(b, x => x.toString(16).padStart(2, "0")).join("");
+  return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20)}`;
+};
 const hex = (n: number) => Array.from(crypto.getRandomValues(new Uint8Array(n)), b => b.toString(16).padStart(2, "0")).join("");
 
 function createUserBody(lat: number, lon: number): Uint8Array {
@@ -108,7 +137,7 @@ function createUserBody(lat: number, lon: number): Uint8Array {
   w.i32Field(11, 5); w.i64Field(12, Date.now()); w.i32Field(13, 1);
   w.strField(15, hex(8));
   w.strField(16, APP_ID);
-  w.strField(19, crypto.randomUUID());
+  w.strField(19, uuid());
   w.strField(20, hex(16));
   w.strField(21, "com.tranzmate");
   w.stop();

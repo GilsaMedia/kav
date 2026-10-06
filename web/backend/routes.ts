@@ -12,17 +12,20 @@ let netReady: Promise<void> | null = null;
 export function startBackend(p: Platform, loadTimetable: () => Promise<Uint8Array>) {
   setPlatform(p);
   St.initState();
-  netReady = loadTimetable().then(Net.fromBytes).then(n => { net = n; });
+  // A load that fails is tried again by the next call rather than failing every call after it.
+  loadNet = () => loadTimetable().then(Net.fromBytes).then(n => { net = n; }).catch(e => { netReady = null; throw e; });
+  netReady = loadNet();
   return netReady;
 }
+let loadNet: (() => Promise<void>) | null = null;
 
 // One call of the API: `name` as in `/api/<name>`, the query, and a POST's body.
 export async function call(name: string, q: URLSearchParams, body: any = {}): Promise<unknown> {
   const h = routes.get(name);
   if (!h) throw new HttpError(404, "No such call");
   M.settings.hebrew = q.get("lang") !== "en";
-  if (!netReady) throw new Error("The backend hasn't started");
-  if (name !== "status") await netReady;
+  if (!loadNet) throw new Error("The backend hasn't started");
+  if (name !== "status") await (netReady ??= loadNet());
   return h(q, body ?? {});
 }
 
@@ -119,7 +122,7 @@ const bAt = (v: any): M.LatLon | null => Array.isArray(v) && v.length === 2 && v
 
 // ---- browsing --------------------------------------------------------------------------------
 
-route("status", async () => ({ pay: St.paySignedIn(), stops: net.nStops }));
+route("status", async () => ({ pay: St.paySignedIn(), stops: net?.nStops ?? 0 }));
 
 route("places", async q => {
   const text = (q.get("q") ?? "").trim();

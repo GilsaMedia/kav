@@ -1,5 +1,6 @@
 // The gestures an iPhone hand expects: a swipe in from the leading edge goes back (an arrow follows the
 // finger and the back button under it is pressed on release), and a sheet pulled down by its top closes.
+import { buzz } from "./native.ts";
 
 const EDGE = 28;      // how close to the edge a back swipe has to start, in px
 const COMMIT = 80;    // how far it has to travel to go back
@@ -51,7 +52,7 @@ export function installGestures() {
   }, { passive: true });
 
   document.addEventListener("touchend", () => {
-    if (start && dx >= COMMIT) { navigator.vibrate?.(10); start.target.click(); }
+    if (start && dx >= COMMIT) { buzz("tap"); start.target.click(); }
     reset();
   }, { passive: true });
   document.addEventListener("touchcancel", reset, { passive: true });
