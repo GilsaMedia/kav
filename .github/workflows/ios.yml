@@ -15,6 +15,11 @@ on:
 permissions:
   contents: write
 
+# One build at a time per branch, so two can't race to replace the same release's IPA.
+concurrency:
+  group: ios-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   ipa:
     runs-on: macos-15

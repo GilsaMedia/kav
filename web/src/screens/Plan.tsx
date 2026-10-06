@@ -9,10 +9,10 @@ import { Header, LineBadge, Spinner, Note, LiveDot, PlacePicker, SaveFavourite, 
 import { MapView, type MapLine, type MapPoint } from "../MapView.tsx";
 import { Home, Arrives, type Opened } from "./Home.tsx";
 import { DragSheet } from "../sheet.tsx";
+import { WhenButton, WhenSheet, type When } from "../when.tsx";
 import { isNative, keepAwake, showTrip, endTrip, buzz, type TripLive } from "../native.ts";
-import { SwapGlyph, ClockGlyph, StarGlyph, CloseGlyph, RecentGlyph, WalkGlyph, BikeGlyph, TaxiGlyph, DotGlyph, ShareGlyph, PlayGlyph, ChevronGlyph, BackGlyph, PayGlyph, LocateGlyph, PinGlyph, StationMark, BellGlyph, FlagGlyph, modeOf } from "../icons.tsx";
+import { SwapGlyph, StarGlyph, CloseGlyph, RecentGlyph, WalkGlyph, BikeGlyph, TaxiGlyph, DotGlyph, ShareGlyph, PlayGlyph, ChevronGlyph, BackGlyph, PayGlyph, LocateGlyph, PinGlyph, StationMark, BellGlyph, FlagGlyph, modeOf } from "../icons.tsx";
 
-type When = { kind: "now" } | { kind: "depart" | "arrive"; ms: number };
 
 interface PlanResult { itineraries: Itinerary[]; resolved: Resolved; refusal?: { code: number; title: string; detail: string } }
 
@@ -37,7 +37,7 @@ export function PlanScreen({ onPay }: { onPay: (at?: LatLon, routeType?: number)
     const types = prefs.modes.length ? prefs.modes : undefined;
     return api("plan", {
       from: f, to: [to.lat, to.lon], routeTypes: types,
-      when: when.kind === "now" ? 0 : when.ms, timeType: when.kind === "arrive" ? 1 : 2,
+      when: when.kind === "depart" || when.kind === "arrive" ? when.ms : 0, timeType: when.kind === "arrive" ? 1 : when.kind === "last" ? 3 : 2,
     }, signal);
   });
 
@@ -90,8 +90,6 @@ export function PlanScreen({ onPay }: { onPay: (at?: LatLon, routeType?: number)
       onBack={() => setChosen(null)} onPay={onPay} />;
   }
 
-  const whenText = when.kind === "now" ? T("Leave now", "יציאה עכשיו")
-    : `${when.kind === "depart" ? T("Leave at", "יציאה ב-") : T("Arrive by", "הגעה עד ")}${new Date(when.ms).toLocaleString(prefs.lang === "he" ? "he-IL" : "en-GB", { weekday: "short", hour: "2-digit", minute: "2-digit" })}`;
 
   return (
     <div className="screen">
@@ -107,8 +105,8 @@ export function PlanScreen({ onPay }: { onPay: (at?: LatLon, routeType?: number)
           </button>
           <button className="icon-btn swap" onClick={swap} aria-label={T("Swap", "החלפה")}><SwapGlyph size={20} /></button>
         </div>
+        <WhenButton when={when} onClick={() => setTimeSheet(true)} />
         <div className="chips scroll-x">
-          <button className={"chip" + (when.kind !== "now" ? " on" : "")} onClick={() => setTimeSheet(true)}><ClockGlyph size={16} />{whenText}</button>
           {MODE_FILTERS.map(f => {
             const on = f.types.every(t => prefs.modes.includes(t));
             return <button key={f.types.join()} className={"chip" + (on ? " on" : "")}
@@ -154,31 +152,9 @@ export function PlanScreen({ onPay }: { onPay: (at?: LatLon, routeType?: number)
         )}
       </div>
 
-      {timeSheet && <TimeSheet when={when} onDone={w => { setWhen(w); setTimeSheet(false); }} onClose={() => setTimeSheet(false)} />}
+      {timeSheet && <WhenSheet when={when} onDone={w => { setWhen(w); setTimeSheet(false); }} onClose={() => setTimeSheet(false)} />}
       {saving && <SaveFavourite place={saving} onDone={() => setSaving(null)} />}
     </div>
-  );
-}
-
-function TimeSheet({ when, onDone, onClose }: { when: When; onDone: (w: When) => void; onClose: () => void }) {
-  const [kind, setKind] = useState<When["kind"]>(when.kind);
-  const initial = when.kind === "now" ? Date.now() : when.ms;
-  const local = (ms: number) => { const d = new Date(ms - new Date().getTimezoneOffset() * 60000); return d.toISOString().slice(0, 16); };
-  const [value, setValue] = useState(local(initial));
-  return (
-    <Sheet onClose={onClose} title={T("When", "מתי")}>
-      <div className="stack">
-        <div className="segmented">
-          {(["now", "depart", "arrive"] as const).map(k => (
-            <button key={k} className={kind === k ? "on" : ""} onClick={() => setKind(k)}>
-              {k === "now" ? T("Now", "עכשיו") : k === "depart" ? T("Leave at", "יציאה ב-") : T("Arrive by", "הגעה עד")}
-            </button>
-          ))}
-        </div>
-        {kind !== "now" && <input className="field" type="datetime-local" value={value} onChange={e => setValue(e.target.value)} />}
-        <button className="btn primary" onClick={() => { const ms = new Date(value).getTime(); onDone(kind === "now" || !Number.isFinite(ms) ? { kind: "now" } : { kind, ms }); }}>{T("Done", "סיום")}</button>
-      </div>
-    </Sheet>
   );
 }
 
@@ -267,10 +243,31 @@ function DepTime({ d, now }: { d: Departure; now: number }) {
 
 const PAYABLE: Record<number, number> = { 3: 3, 0: 0, 2: 2, 7: 5, 5: 5 }; // GTFS route type -> Moovit pay mode
 
-export function TripDetail({ trip, resolved: first, from, to, onBack, onPay }: {
+// The way with the line chosen for each ride that several lines can do, so the map, the vehicles on it, the
+// steps, live directions and the lock screen all follow the line the rider picked.
+function chooseLines(trip: Itinerary, picks: Record<number, number>): Itinerary {
+  if (!Object.keys(picks).length) return trip;
+  return { ...trip, legs: trip.legs.map((l, i) => {
+    const o = l.kind === "ride" && picks[i] != null ? options(l)[picks[i]] : undefined;
+    return o ? { ...o, kind: "ride", alternatives: l.alternatives, alternativeLineIds: l.alternativeLineIds } : l;
+  }) };
+}
+
+// Which of a ride's lines is the one shown.
+const pickOf = (leg: Leg) => {
+  const opts = options(leg);
+  const k = opts.findIndex(o => o.lineId === leg.lineId && String(o.tripId) === String(leg.tripId));
+  return k >= 0 ? k : Math.max(0, opts.findIndex(o => o.lineId === leg.lineId));
+};
+type PickLine = (legIndex: number, option: number) => void;
+
+export function TripDetail({ trip: planned, resolved: first, from, to, onBack, onPay }: {
   trip: Itinerary; resolved: Resolved; from: string; to: string; onBack: () => void; onPay: (at?: LatLon, routeType?: number) => void;
 }) {
-  const live = useTripLive(trip);
+  const live = useTripLive(planned);
+  const [picks, setPicks] = useState<Record<number, number>>({});
+  const trip = useMemo(() => chooseLines(planned, picks), [planned, picks]);
+  const pickLine: PickLine = (i, k) => setPicks(p => ({ ...p, [i]: k }));
   const now = useNow(10000);
   const [navigating, setNavigating] = useState(false);
   const [shareNote, setShareNote] = useState<string | null>(null);
@@ -311,7 +308,7 @@ export function TripDetail({ trip, resolved: first, from, to, onBack, onPay }: {
   useEffect(() => () => endTrip(), []);
 
   if (navigating) return <Navigate trip={trip} r={r} live={live.data?.arrivals} here={here} lines={lines} ends={ends} vehicles={vehicles}
-    from={from} to={to} onPay={onPay} onShare={share} onExit={() => setNavigating(false)} />;
+    from={from} to={to} onPay={onPay} onShare={share} onExit={() => setNavigating(false)} onPick={pickLine} />;
 
   const mins = Math.max(1, Math.round((trip.arr - trip.dep) / 60));
   const b = boardingOf(trip, r, now);
@@ -319,7 +316,7 @@ export function TripDetail({ trip, resolved: first, from, to, onBack, onPay }: {
     <div className="screen trip">
       {/* As Moovit shows a way: the map on top with its buttons floating on it, the steps in a sheet over it. */}
       <div className="trip-map">
-        <MapView className="map-full" lines={lines} points={[...ends, ...vehicles]} fit={all} fitKey={trip.guid} user={here} />
+        <MapView className="map-full" lines={lines} points={[...ends, ...vehicles]} fit={all} fitKey={`${trip.guid}:${JSON.stringify(picks)}`} user={here} />
         <button className="plate-btn trip-back" data-back onClick={goBack(onBack)} aria-label={T("Back", "חזרה")}><BackGlyph /></button>
         <button className="plate-btn trip-share" onClick={share} aria-label={T("Share", "שיתוף")}><ShareGlyph /></button>
       </div>
@@ -337,7 +334,7 @@ export function TripDetail({ trip, resolved: first, from, to, onBack, onPay }: {
         {shareNote && <div className="pad"><Note>{shareNote}</Note></div>}
         {lockNote && <div className="pad"><Note tone="warn">{lockNote}</Note></div>}
         {live.error && <div className="pad"><Note tone="warn">{T("Live times are unavailable right now.", "זמני אמת אינם זמינים כרגע.")}</Note></div>}
-        <Timeline trip={trip} r={r} live={live.data?.arrivals} now={now} from={from} to={to} onPay={onPay} stopAt={stopAt} />
+        <Timeline trip={trip} r={r} live={live.data?.arrivals} now={now} from={from} to={to} onPay={onPay} stopAt={stopAt} onPick={pickLine} />
       </DragSheet>
       <div className="trip-cta">
         <button className="setup-btn lit" onClick={() => setNavigating(true)}><PlayGlyph size={16} />{T("Start", "יציאה לדרך")}</button>
@@ -375,9 +372,9 @@ function Step({ color, walk, children }: { color: string; walk?: boolean; childr
   );
 }
 
-function Timeline({ trip, r, live, now, from, to, onPay, stopAt }: {
+function Timeline({ trip, r, live, now, from, to, onPay, stopAt, onPick }: {
   trip: Itinerary; r: Resolved; live?: Arrival[]; now: number; from: string; to: string;
-  onPay: (at?: LatLon, routeType?: number) => void; stopAt: (id: number) => LatLon | null;
+  onPay: (at?: LatLon, routeType?: number) => void; stopAt: (id: number) => LatLon | null; onPick: PickLine;
 }) {
   const legs = trip.legs.filter(l => l.kind !== "wait" && !(l.kind === "walk" && l.arr - l.dep < 30));
   const colorOf = (l: Leg | undefined) => !l ? null : l.kind === "ride" ? modeColor(routeTypeOf(r, l.lineId)) : l.kind === "walk" ? WALK : "var(--accent)";
@@ -387,7 +384,8 @@ function Timeline({ trip, r, live, now, from, to, onPay, stopAt }: {
     const next = legs[i + 1];
     const wait = (() => { const k = trip.legs.indexOf(l); return trip.legs[k - 1]?.kind === "wait" ? trip.legs[k - 1] : undefined; })();
     if (l.kind === "ride") {
-      out.push(<RideSteps key={i} leg={l} wait={wait} r={r} live={live} now={now} onPay={onPay} stopAt={stopAt} below={colorOf(next)} prev={colorOf(legs[i - 1])} />);
+      out.push(<RideSteps key={i} leg={l} wait={wait} r={r} live={live} now={now} onPay={onPay} stopAt={stopAt} below={colorOf(next)} prev={colorOf(legs[i - 1])}
+        onPick={k => onPick(trip.legs.indexOf(l), k)} />);
       return;
     }
     const mins = Math.max(1, Math.round((l.arr - l.dep) / 60));
@@ -405,14 +403,14 @@ function Timeline({ trip, r, live, now, from, to, onPay, stopAt }: {
 }
 
 // A ride: the stop you get on at (with the next departures, live), the ride, and the stop you get off at.
-function RideSteps({ leg, wait, r, live, now, onPay, stopAt, prev, below }: {
+function RideSteps({ leg, wait, r, live, now, onPay, stopAt, prev, below, onPick }: {
   leg: Leg; wait?: Leg; r: Resolved; live?: Arrival[]; now: number; onPay: (at?: LatLon, routeType?: number) => void;
-  stopAt: (id: number) => LatLon | null; prev: string | null; below: string | null;
+  stopAt: (id: number) => LatLon | null; prev: string | null; below: string | null; onPick: (option: number) => void;
 }) {
   const [open, setOpen] = useState(false);
-  const [pick, setPick] = useState(0);
   const opts = options(leg);
-  const ride = opts[pick] ?? leg;
+  const pick = pickOf(leg);
+  const ride = leg;
   const type = routeTypeOf(r, ride.lineId);
   const color = modeColor(type);
   const line = r.lines[ride.lineId];
@@ -428,13 +426,13 @@ function RideSteps({ leg, wait, r, live, now, onPay, stopAt, prev, below }: {
     <Step color={color}>
       <div className="tl-line">
         {opts.map((o, k) => (
-          <button key={k} className={"badge-btn" + (k === pick ? " on" : "")} onClick={() => setPick(k)} disabled={opts.length < 2}>
+          <button key={k} className={"badge-btn" + (k === pick ? " on" : "")} onClick={() => onPick(k)} disabled={opts.length < 2}>
             <LineBadge number={r.lines[o.lineId]?.number || o.shortName} type={routeTypeOf(r, o.lineId)} />
           </button>
         ))}
       </div>
       {line?.destination && <div className="tl-dest" dir="auto">{T("towards ", "לכיוון ")}{line.destination}</div>}
-      {opts.length > 1 && <div className="dim small">{T("Any of these lines will do: tap one to see its times.", "כל אחד מהקווים האלה מתאים: הקישו על אחד כדי לראות את הזמנים שלו.")}</div>}
+      {opts.length > 1 && <div className="dim small">{T("Any of these lines will do: tap one to see its times and its route on the map.", "כל אחד מהקווים האלה מתאים: הקישו על אחד כדי לראות את הזמנים והמסלול שלו במפה.")}</div>}
       {wait?.alertText && <Note tone="warn">{wait.alertText}</Note>}
       <button className="link tl-stops" onClick={() => setOpen(!open)} disabled={!between.length}>
         {between.length > 0 && <ChevronGlyph size={12} open={open} />}
@@ -519,9 +517,9 @@ function tripLiveOf(trip: Itinerary, r: Resolved, live: Arrival[] | undefined, n
   })();
 }
 
-function Navigate({ trip, r, live, here, lines, ends, vehicles, from, to, onPay, onShare, onExit }: {
+function Navigate({ trip, r, live, here, lines, ends, vehicles, from, to, onPay, onShare, onExit, onPick }: {
   trip: Itinerary; r: Resolved; live?: Arrival[]; here: LatLon | null; lines: MapLine[]; ends: MapPoint[]; vehicles: MapPoint[];
-  from: string; to: string; onPay: (at?: LatLon, routeType?: number) => void; onShare: () => void; onExit: () => void;
+  from: string; to: string; onPay: (at?: LatLon, routeType?: number) => void; onShare: () => void; onExit: () => void; onPick: PickLine;
 }) {
   const cards = useMemo(() => cardsOf(trip), [trip]);
   const [step, setStep] = useState(0);
@@ -621,7 +619,7 @@ function Navigate({ trip, r, live, here, lines, ends, vehicles, from, to, onPay,
         {/* Pulled down to its heading to see the map, up again for the whole step; sideways for the next step. */}
         <DragSheet key={step} className="ld-card card" detents={el => [0, Math.max(0, el.offsetHeight - 64)]}>
           <div className="sheet-grip" data-grip data-toggle />
-          <div {...swipe}><StepCard card={card} trip={trip} r={r} live={live} now={now} here={here} from={from} to={to} endOf={endOf} /></div>
+          <div {...swipe}><StepCard card={card} trip={trip} r={r} live={live} now={now} here={here} from={from} to={to} endOf={endOf} onPick={onPick} /></div>
         </DragSheet>
       </div>
       <div className="ld-actions">
@@ -633,11 +631,10 @@ function Navigate({ trip, r, live, here, lines, ends, vehicles, from, to, onPay,
   );
 }
 
-function StepCard({ card, trip, r, live, now, here, from, to, endOf }: {
+function StepCard({ card, trip, r, live, now, here, from, to, endOf, onPick }: {
   card: Card; trip: Itinerary; r: Resolved; live?: Arrival[]; now: number; here: LatLon | null; from: string; to: string;
-  endOf: (l: Leg) => LatLon | null;
+  endOf: (l: Leg) => LatLon | null; onPick: PickLine;
 }) {
-  const [pick, setPick] = useState(0);
   const stop = (id: number) => r.stops[id];
   const far = (l: Leg) => { const e = endOf(l); return here && e ? distanceText(metres(here, e)) : l.meters > 0 ? distanceText(l.meters) : ""; };
   const head = (text: string, end?: React.ReactNode) => <div className="ld-band" data-grip data-toggle><b>{text}</b>{end}</div>;
@@ -697,7 +694,9 @@ function StepCard({ card, trip, r, live, now, here, from, to, endOf }: {
 
   // Riding: where to get off, and the stops of the line you're on, the one you're at lit.
   const opts = options(card.ride);
-  const ride = opts[pick] ?? card.ride;
+  const ride = card.ride;
+  const pick = pickOf(ride);
+  const setPick = (k: number) => onPick(trip.legs.indexOf(card.ride), k);
   const n = Math.max(1, ride.stops.length - 1);
   const mins = Math.max(1, Math.round((ride.arr - ride.dep) / 60));
   const at = here ? ride.stops.map((id, i) => ({ i, m: (() => { const s = stop(id); return s?.lat != null && s?.lon != null ? metres(here, [s.lat, s.lon]) : Infinity; })() }))

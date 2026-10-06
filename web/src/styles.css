@@ -691,3 +691,29 @@ h2 { font-size: 19px; }
 .trip .trip-sheet .trip-grip { height: 20px; }
 .ld-map { overflow: hidden; }
 .ld-actions { position: relative; z-index: 5; }
+
+/* When to travel, as Moovit's: a pill, a list of choices, and a wheel of day, hour and minute. */
+.when-btn {
+  align-self: flex-start; display: inline-flex; align-items: center; gap: 10px; min-height: 44px; padding: 0 18px;
+  border: 1.5px solid var(--border-strong); border-radius: 999px; color: var(--text); font-size: 16px; font-weight: 700; white-space: nowrap;
+}
+.when-btn .glyph { rotate: 90deg; color: var(--muted); }
+.when-list { display: flex; flex-direction: column; }
+.when-row { width: 100%; text-align: start; padding: 18px 4px; font-size: 18px; color: var(--text); border-bottom: 1px solid var(--border); }
+.when-row:last-child { border-bottom: 0; }
+.when-row.accent, .when-row.on { color: var(--accent-fg); }
+.when-head { display: grid; grid-template-columns: 40px 1fr 40px; align-items: center; gap: 8px; padding-bottom: 14px; margin: 0 -16px 8px; padding-inline: 16px; border-bottom: 1px solid var(--border); }
+.when-head b { text-align: center; font-size: 17px; font-weight: 600; }
+.when-x { width: 36px; height: 36px; border-radius: 50%; background: var(--plate-strong); display: grid; place-items: center; color: var(--text); }
+.wheels { position: relative; display: flex; gap: 6px; height: 220px; margin: 8px 0 18px; }
+.wheels::before { content: ""; position: absolute; inset-inline: 0; top: 90px; height: 40px; border-radius: 10px; background: var(--plate-strong); pointer-events: none; }
+.time-wheel {
+  position: relative; width: 64px; height: 100%; overflow-y: scroll; scroll-snap-type: y mandatory; padding: 90px 0; scrollbar-width: none;
+  -webkit-mask-image: linear-gradient(transparent, #000 32%, #000 68%, transparent); mask-image: linear-gradient(transparent, #000 32%, #000 68%, transparent);
+}
+.time-wheel::-webkit-scrollbar { display: none; }
+.time-wheel.grow { flex: 1; }
+.time-wheel-item { height: 40px; line-height: 40px; text-align: center; scroll-snap-align: center; font-size: 21px; color: var(--dim); white-space: nowrap; transition: color .15s, font-size .15s; cursor: pointer; }
+.time-wheel-item.on { color: var(--text); font-size: 24px; font-weight: 600; }
+.time-wheel.grow .time-wheel-item { text-align: end; padding-inline-end: 12px; }
+.when-done { width: 100%; }
