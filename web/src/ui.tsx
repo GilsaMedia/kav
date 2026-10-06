@@ -81,7 +81,8 @@ function plateFor(type: number) {
 export function LineBadge({ number, type, small }: { number: string; type: number; small?: boolean }) {
   const plate = plateFor(type);
   // Trains are named for their whole route ("Herzliya - Jerusalem/Yitzhak Navon"): the mode reads better on a badge.
-  const text = !number || number.length > 8 ? modeName(type) : number;
+  // Several numbers on one plate ("72 / 27 / 282") stay numbers, however long.
+  const text = !number || (number.length > 8 && !number.includes(" / ")) ? modeName(type) : number;
   const style = plate ? { "--plate-fill": plate[0], "--plate-edge": plate[1], "--plate-ink": plate[2], "--plate-glyph": plate[2] } as CSSProperties : undefined;
   return <span className={"badge" + (small ? " small" : "")} style={style} dir="auto" title={number}>
     <ModeGlyph type={type} size={small ? 11 : 12} />{text}

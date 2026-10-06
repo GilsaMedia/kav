@@ -508,3 +508,9 @@ h2 { font-size: 19px; }
 .home-list > li:active { background: var(--plate); }
 .home-fav .dest { font-size: 18px; }
 .home-trip .dest { font-size: 17px; }
+.arrives { display: flex; flex-direction: column; gap: 3px; color: var(--muted); }
+.arrives.short { display: inline; font-size: 14px; }
+.soon-text { color: var(--text); }
+.soon-text b, .live-text b { font-size: 17px; }
+.it-foot { display: flex; flex-direction: column; gap: 2px; font-size: 13px; }
+.it-foot .dim { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

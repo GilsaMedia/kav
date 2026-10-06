@@ -319,3 +319,34 @@ export const isLive = (d: Departure) => d.status !== 3 && !d.frequency && d.vehi
 export const isCancelled = (d: Departure) => d.status === 3;
 export const routeTypeOf = (r: Resolved, lineId: number) => { const l = r.lines[lineId]; return l ? r.routeTypes[l.agencyId] ?? 3 : 3; };
 export const options = (l: Leg) => (l.alternatives.length ? l.alternatives : [l]);
+
+// The first ride of a way there, from where you get on: when the vehicle is at that stop (live when
+// Moovit tracks it), how long you ride, and how long you walk before it.
+export interface Boarding { ride: Leg; at: number; live: boolean; dep: Departure | null; stop: string; rideMin: number; walkMin: number; numbers: string[] }
+
+export function boardingOf(it: Itinerary, r: Resolved, now: number): Boarding | null {
+  const i = it.legs.findIndex(l => l.kind === "ride");
+  if (i < 0) return null;
+  const ride = it.legs[i];
+  const before = it.legs[i - 1]?.kind === "wait" ? options(it.legs[i - 1]).find(w => w.lineId === ride.lineId) : undefined;
+  const deps = [...(before?.nextDeps ?? []), ...ride.nextDeps].filter(d => timeOf(d) >= now - 30);
+  // The very vehicle this way is planned on, else the next one of the line.
+  const dep = deps.find(d => String(d.tripId) === String(ride.tripId)) ?? deps.sort((a, b) => timeOf(a) - timeOf(b))[0] ?? null;
+  const walk = it.legs.slice(0, i).filter(l => l.kind === "walk").reduce((s, l) => s + Math.max(0, l.arr - l.dep), 0);
+  return {
+    ride, dep, at: dep ? timeOf(dep) : ride.dep, live: !!dep && isLive(dep), stop: r.stops[ride.fromStop]?.name ?? "",
+    rideMin: Math.max(1, Math.round((ride.arr - ride.dep) / 60)), walkMin: Math.round(walk / 60),
+    numbers: [...new Set(options(ride).map(o => r.lines[o.lineId]?.number || o.shortName).filter(Boolean))].slice(0, 3),
+  };
+}
+
+// The way that gets you onto a vehicle soonest from now, the earlier arrival breaking a tie.
+export function soonest(its: Itinerary[], r: Resolved, now: number): { it: Itinerary; b: Boarding | null } | null {
+  let best: { it: Itinerary; b: Boarding | null } | null = null;
+  for (const it of its) {
+    const b = boardingOf(it, r, now);
+    if (!b || b.at < now - 30) continue;
+    if (!best || !best.b || b.at < best.b.at || (b.at === best.b.at && it.arr < best.it.arr)) best = { it, b };
+  }
+  return best ?? (its[0] ? { it: its[0], b: boardingOf(its[0], r, now) } : null);
+}

@@ -1,13 +1,13 @@
 // Planning a trip: where from and to, the ways there, one of them in detail, and walking through it.
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
-  T, api, usePrefs, setPrefs, rememberTrip, useHere, useLoad, useNow, clock, minutesText, distanceText, metres, shekels, failure,
+  T, api, usePrefs, setPrefs, rememberTrip, boardingOf, useHere, useLoad, useNow, clock, minutesText, distanceText, metres, shekels, failure,
   timeOf, isLive, isCancelled, routeTypeOf, options, modeColor, modeName, MODE_FILTERS, mergeResolved, emptyResolved,
   type Place, type Itinerary, type Leg, type Resolved, type Arrival, type LatLon, type Departure,
 } from "../core.ts";
 import { Header, LineBadge, Spinner, Note, LiveDot, PlacePicker, SaveFavourite, HERE_NAME, Sheet, Eta, isLate } from "../ui.tsx";
 import { MapView, type MapLine, type MapPoint } from "../MapView.tsx";
-import { Home } from "./Home.tsx";
+import { Home, Arrives } from "./Home.tsx";
 import { isNative, keepAwake } from "../native.ts";
 import { SwapGlyph, ClockGlyph, StarGlyph, CloseGlyph, RecentGlyph, WalkGlyph, BikeGlyph, TaxiGlyph, DotGlyph, ShareGlyph, PlayGlyph, ChevronGlyph } from "../icons.tsx";
 
@@ -183,7 +183,8 @@ function legLabel(l: Leg, r: Resolved) {
 }
 
 function ItineraryCard({ it, resolved, onClick }: { it: Itinerary; resolved: Resolved; onClick: () => void }) {
-  const firstRide = it.legs.find(l => l.kind === "ride");
+  const now = useNow(15000);
+  const b = boardingOf(it, resolved, now);
   const mins = Math.max(0, Math.round((it.arr - it.dep) / 60));
   return (
     // As Moovit lays a result out: the way there on the left, the whole trip in minutes large on the right.
@@ -201,9 +202,11 @@ function ItineraryCard({ it, resolved, onClick }: { it: Itinerary; resolved: Res
         ))}
       </div>
       <div className="it-time">{clock(it.dep)} – {clock(it.arr)}{it.fare > 0 && <span className="dim"> · {shekels(it.fare)}</span>}</div>
-      <div className="it-foot dim">
-        {firstRide && <span>{T("from", "מ")}{" "}<span dir="auto">{resolved.stops[firstRide.fromStop]?.name ?? ""}</span> · {clock(firstRide.dep)}</span>}
-      </div>
+      {/* The first vehicle: when it is at the stop you get on at, and how long you ride it. */}
+      {b && <div className="it-foot">
+        <Arrives b={b} now={now} short />
+        <div className="dim" dir="auto">{T("at", "ב")} {b.stop}</div>
+      </div>}
       </div>
       <span className="eta it-total">{mins < 60 ? <><b>{mins}</b><small>{T("min", "דק׳")}</small></> : <><b>{Math.floor(mins / 60)}:{String(mins % 60).padStart(2, "0")}</b><small>{T("hours", "שעות")}</small></>}</span>
     </button>

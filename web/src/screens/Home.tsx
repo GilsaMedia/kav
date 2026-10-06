@@ -2,8 +2,8 @@
 // saved place right now, paying for a ride, the saved places and the trips planned lately.
 import { useRef, useState } from "react";
 import {
-  T, api, usePrefs, getPrefs, setPrefs, useHere, useLoad, useNow, clock, agoText, timeOf, isLive, routeTypeOf, options,
-  type Place, type Favourite, type Itinerary, type Resolved, type RecentTrip, type LatLon,
+  T, api, usePrefs, getPrefs, setPrefs, useHere, useLoad, useNow, clock, agoText, routeTypeOf, soonest,
+  type Place, type Favourite, type Itinerary, type Resolved, type RecentTrip, type LatLon, type Boarding,
 } from "../core.ts";
 import { LineBadge, LiveWaves } from "../ui.tsx";
 import { SearchGlyph, TripGlyph, BriefcaseGlyph, PinGlyph, MoreGlyph, FromToGlyph, PayGlyph } from "../icons.tsx";
@@ -114,22 +114,32 @@ function QuickWay({ to, here, brief }: { to: Place; here: LatLon | null; brief?:
     from: here, to: [to.lat, to.lon], routeTypes: prefs.modes.length ? prefs.modes : undefined, when: 0, timeType: 2,
   }, s), 120000, true);
   if (!here) return brief ? null : <div className="dim small frequent-wait">{T("Waiting for your location…", "ממתינים למיקום שלכם…")}</div>;
-  const best = plan.data?.itineraries.find(it => it.legs.some(l => l.kind === "ride")) ?? plan.data?.itineraries[0];
-  if (!best) return brief ? null : <div className="dim small frequent-wait">{plan.loading ? T("Finding the way…", "מחפשים דרך…") : plan.error ? T("No way found right now.", "לא נמצאה דרך כרגע.") : ""}</div>;
+  const pick = plan.data ? soonest(plan.data.itineraries, plan.data.resolved, now) : null;
+  if (!pick) return brief ? null : <div className="dim small frequent-wait">{plan.loading ? T("Finding the way…", "מחפשים דרך…") : plan.error ? T("No way found right now.", "לא נמצאה דרך כרגע.") : ""}</div>;
+  const { it: best, b } = pick;
   const r = plan.data!.resolved;
-  const mins = Math.max(1, Math.round((best.arr - best.dep) / 60));
-  const ride = best.legs.find(l => l.kind === "ride");
-  const numbers = ride ? options(ride).map(o => r.lines[o.lineId]?.number || o.shortName).filter(Boolean) : [];
-  const badge = ride && <LineBadge number={[...new Set(numbers)].slice(0, 3).join(" / ")} type={routeTypeOf(r, ride.lineId)} />;
-  if (brief) return <div className="quick brief">{badge}<span className="dim">{T(`Duration: ${mins} min`, `משך: ${mins} דק׳`)}</span></div>;
-  const first = ride?.nextDeps[0];
-  const leaves = ride ? Math.max(0, Math.round(((first ? timeOf(first) : ride.dep) - now) / 60)) : null;
-  const live = !!first && isLive(first);
+  const mins = Math.max(1, Math.round((best.arr - now) / 60));
+  const badge = b && <LineBadge number={b.numbers.join(" / ")} type={routeTypeOf(r, b.ride.lineId)} />;
+  if (brief) return <div className="quick brief">{badge}{b ? <Arrives b={b} now={now} short /> : <span className="dim">{T(`${mins} min`, `${mins} דק׳`)}</span>}</div>;
   return (
     <div className="quick">
       <div><b>{T(`${mins} min`, `${mins} דק׳`)}</b> <span className="dim">• {T(`Arrive at ${clock(best.arr)}`, `הגעה ב-${clock(best.arr)}`)}</span></div>
       {badge && <div className="quick-lines">{badge}</div>}
-      {leaves != null && <div className="quick-leaves">{T("Leaves in", "יוצא בעוד")} <span className={live ? "live-text" : ""}>{live && <LiveWaves />}<b>{leaves}</b> {T("min", "דק׳")}</span></div>}
+      {b && <Arrives b={b} now={now} />}
+    </div>
+  );
+}
+
+// When the vehicle is at your stop, and how long you ride it.
+export function Arrives({ b, now, short }: { b: Boarding; now: number; short?: boolean }) {
+  const m = Math.max(0, Math.round((b.at - now) / 60));
+  const when = <span className={b.live ? "live-text" : "soon-text"}>{b.live && <LiveWaves />}<b>{m <= 0 ? T("now", "עכשיו") : m}</b>{m > 0 && " " + T("min", "דק׳")}</span>;
+  if (short) return <span className="arrives short">{T("Here in", "מגיע בעוד")} {when}<span className="dim"> · {T(`ride ${b.rideMin} min`, `נסיעה ${b.rideMin} דק׳`)}</span></span>;
+  return (
+    <div className="arrives">
+      <div>{T("At your stop in", "בתחנה שלך בעוד")} {when}</div>
+      <div className="dim small" dir="auto">{b.stop}{b.walkMin > 0 ? T(` · ${b.walkMin} min walk`, ` · ${b.walkMin} דק׳ הליכה`) : ""}</div>
+      <div className="dim small">{T(`Ride: ${b.rideMin} min`, `זמן נסיעה: ${b.rideMin} דק׳`)}</div>
     </div>
   );
 }
