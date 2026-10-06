@@ -3,6 +3,7 @@ import { useRef, useState } from "react";
 import { T, api, useHere, useLoad, useNow, clock, minutesText, distanceText, timeOf, isLive, isCancelled, modeColor, type Arrival, type Resolved } from "../core.ts";
 import { Header, LineBadge, Spinner, Note, LiveDot } from "../ui.tsx";
 import { MapView } from "../MapView.tsx";
+import { StationMark } from "../icons.tsx";
 
 interface Stop { i: number; name: string; city: string; code: number; lat: number; lon: number; type: number; metres?: number }
 
@@ -30,7 +31,7 @@ export function StationsScreen() {
         <ul className="list">
           {list?.map(s => (
             <li key={s.i} className="row" onClick={() => setOpen(s)}>
-              <span className="row-icon" style={{ color: modeColor(s.type) }}>●</span>
+              <span className="row-icon"><StationMark type={s.type} /></span>
               <div className="row-main"><div dir="auto">{s.name}</div><div className="dim">{s.city}{s.code > 0 ? ` · ${s.code}` : ""}</div></div>
               {s.metres != null && <span className="dim small">{distanceText(s.metres)}</span>}
             </li>

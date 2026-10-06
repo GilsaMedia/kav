@@ -22,9 +22,11 @@ else. Browsers can't call Moovit directly, so this part has to live on a compute
 
 ### Getting the IPA
 
-GitHub builds it on every push to the `ios` branch: open the repository's **Actions** tab → **iOS
-app** → the newest run → **Artifacts** → **Kav-ipa**, and unzip it to get `Kav.ipa`. To build a new one
-with the latest timetable, push any change to `ios`.
+GitHub builds it on every push to the `ios` branch and publishes it on the
+[Releases](https://github.com/GilsaMedia/kav/releases) page as **Kav for iPhone** with the version in
+`package.json`: download `Kav.ipa` from that release's assets. The Sunday build refreshes the timetable
+by replacing the IPA in the current version's release. For a new release, raise `version` in
+`package.json` and push.
 
 On a Mac you can build it yourself too:
 

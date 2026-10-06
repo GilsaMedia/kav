@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import jsQR from "jsqr";
 import { T, api, useLoad, useNow, clock, shekels, failure, locateOnce, ApiError, type LatLon } from "../core.ts";
 import { Header, Spinner, Note, Qr, Sheet } from "../ui.tsx";
+import { ModeGlyph, QrGlyph, MinusGlyph, PlusGlyph, BackGlyph } from "../icons.tsx";
 
 interface Price { agorot: number; code: string }
 interface Cost { price: Price; full: Price; reasons: string[] }
@@ -23,9 +24,9 @@ const money = (p?: Price | null) => p ? (p.code === "ILS" ? shekels(p.agorot) : 
 const secs = (t: number) => t > 1e12 ? Math.floor(t / 1000) : t;
 
 const MODES = [
-  { routeType: 2, label: () => T("Train", "רכבת"), icon: "🚆" },
-  { routeType: 0, label: () => T("Light rail", "רכבת קלה"), icon: "🚊" },
-  { routeType: 5, label: () => T("Carmelit", "כרמלית"), icon: "🚡" },
+  { routeType: 2, label: () => T("Train", "רכבת"), },
+  { routeType: 0, label: () => T("Light rail", "רכבת קלה"), },
+  { routeType: 5, label: () => T("Carmelit", "כרמלית"), },
 ];
 
 async function payAt(): Promise<LatLon | null> { try { return await locateOnce(); } catch { return null; } }
@@ -62,9 +63,9 @@ export function PayScreen({ start, onStarted }: { start: { at?: LatLon; routeTyp
             "Moovit's app has the payment account now. Sign in here again to move it back to Kav.",
             "חשבון התשלום עבר לאפליקציה של Moovit. התחברו כאן שוב כדי להחזיר אותו ל-Kav.")}
             <button className="link" onClick={async () => { await api("pay/signout", {}); state.reload(); }}>{T("Sign in again", "התחברות מחדש")}</button></Note>}
-          <button className="btn primary big" onClick={() => setFlow({ kind: "bus" })}>▣ {T("Scan the QR code on the bus", "סריקת הברקוד באוטובוס")}</button>
+          <button className="btn primary big" onClick={() => setFlow({ kind: "bus" })}><QrGlyph size={20} />{T("Scan the QR code on the bus", "סריקת הברקוד באוטובוס")}</button>
           <div className="grid3">
-            {MODES.map(m => <button key={m.routeType} className="btn tile" onClick={() => setFlow({ kind: "station", routeType: m.routeType })}><span>{m.icon}</span>{m.label()}</button>)}
+            {MODES.map(m => <button key={m.routeType} className="btn tile" onClick={() => setFlow({ kind: "station", routeType: m.routeType })}><ModeGlyph type={m.routeType} size={26} />{m.label()}</button>)}
           </div>
           <WalletView key={walletKey} highlight={bought} onExit={t => setFlow({ kind: "exit", ticket: t })} />
           <button className="btn" onClick={() => setFlow({ kind: "history" })}>{T("History and bills", "היסטוריה וחיובים")}</button>
@@ -232,7 +233,7 @@ function Summary({ quote, fallback, guests, setGuests }: { quote: Quote | null; 
       {me && me.full.agorot > me.price.agorot && <div className="dim small">{T("Full fare", "מחיר מלא")} {money(me.full)}{me.reasons.length ? " · " + me.reasons.join(", ") : ""}</div>}
       <div className="ticket-top">
         <span>{T("Other passengers", "נוסעים נוספים")}</span>
-        <span className="stepper"><button onClick={() => setGuests(Math.max(0, guests - 1))}>−</button><b>{guests}</b><button onClick={() => setGuests(Math.min(9, guests + 1))}>+</button></span>
+        <span className="stepper"><button onClick={() => setGuests(Math.max(0, guests - 1))} aria-label="-"><MinusGlyph size={14} /></button><b>{guests}</b><button onClick={() => setGuests(Math.min(9, guests + 1))} aria-label="+"><PlusGlyph size={14} /></button></span>
       </div>
       {guests > 0 && <div className="dim small">{guests} × {money(other?.price)}</div>}
       <div className="ticket-top total"><span>{T("Total", "סה״כ")}</span><b>{total != null ? money({ agorot: total, code: me!.price.code }) : "—"}</b></div>
@@ -407,7 +408,7 @@ function StationPurchase({ routeType, at: given, onBack, onBought }: { routeType
 
   return (
     <div className="screen">
-      <Header title={`${mode.icon} ${mode.label()}`} back={onBack} />
+      <Header title={mode.label()} back={onBack} />
       <div className="scroll">
         <div className="pad stack">
           {loading && <Spinner text={T("Finding the station…", "מחפשים את התחנה…")} />}
@@ -489,9 +490,9 @@ function History({ onBack }: { onBack: () => void }) {
         <div className="pad stack">
           {billing.data?.current && <div className="card pad ticket-top"><span>{T("This period so far", "התקופה הנוכחית עד כה")}</span><b>{money(billing.data.current.price)}</b></div>}
           <div className="row-btns">
-            <button className="btn" onClick={() => setMonth(m => m - 1)}>‹</button>
+            <button className="btn" onClick={() => setMonth(m => m - 1)} aria-label={T("Previous month", "החודש הקודם")}><BackGlyph size={16} /></button>
             <b className="grow center">{label}</b>
-            <button className="btn" disabled={month >= today.getFullYear() * 12 + today.getMonth()} onClick={() => setMonth(m => m + 1)}>›</button>
+            <button className="btn" disabled={month >= today.getFullYear() * 12 + today.getMonth()} onClick={() => setMonth(m => m + 1)} aria-label={T("Next month", "החודש הבא")}><BackGlyph size={16} style={{ rotate: "180deg" }} /></button>
           </div>
           {history.loading && <Spinner />}
           {history.error && <Note tone="error">{history.error}</Note>}

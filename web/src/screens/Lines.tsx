@@ -3,6 +3,7 @@ import { useMemo, useRef, useState } from "react";
 import { T, api, useLoad, useNow, clock, minutesText, timeOf, isLive, modeColor, modeName, type Arrival, type LatLon, type StopInfo, type LineInfo } from "../core.ts";
 import { Header, LineBadge, Spinner, Note, LiveDot } from "../ui.tsx";
 import { MapView } from "../MapView.tsx";
+import { ChevronGlyph } from "../icons.tsx";
 
 interface LineGroup { id: number; number: string; name: string; cities: string; agencyId: number; agency: string; routeType: number }
 
@@ -121,7 +122,7 @@ function LineDetail({ group, onBack }: { group: LineGroup; onBack: () => void })
 // Collapsed to its title until tapped: Moovit's notices run long.
 function AlertNote({ a }: { a: Alert }) {
   const [open, setOpen] = useState(false);
-  return <Note tone="warn"><button className="alert-title" onClick={() => setOpen(!open)}>{open ? "▾" : "▸"} <b>{a.title || a.label}</b></button>
+  return <Note tone="warn"><button className="alert-title" onClick={() => setOpen(!open)}><ChevronGlyph size={12} open={open} /><b>{a.title || a.label}</b></button>
     {open && a.body && <div className="alert-body">{a.html ? stripHtml(a.body) : a.body}</div>}</Note>;
 }
 

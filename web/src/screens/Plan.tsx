@@ -8,6 +8,7 @@ import {
 import { Header, LineBadge, Spinner, Note, LiveDot, PlacePicker, SaveFavourite, HERE_NAME, Sheet } from "../ui.tsx";
 import { MapView, type MapLine, type MapPoint } from "../MapView.tsx";
 import { isNative, keepAwake } from "../native.ts";
+import { SwapGlyph, ClockGlyph, StarGlyph, CloseGlyph, RecentGlyph, WalkGlyph, BikeGlyph, TaxiGlyph, DotGlyph, ShareGlyph, PlayGlyph, ChevronGlyph } from "../icons.tsx";
 
 type When = { kind: "now" } | { kind: "depart" | "arrive"; ms: number };
 
@@ -82,10 +83,10 @@ export function PlanScreen({ onPay }: { onPay: (at?: LatLon, routeType?: number)
           <button className="end" onClick={() => setPicking("to")}>
             <span className="end-dot to" /><span className={"end-text" + (to ? "" : " dim")} dir="auto">{to?.name ?? T("Choose a destination", "בחרו יעד")}</span>
           </button>
-          <button className="icon-btn swap" onClick={swap} aria-label={T("Swap", "החלפה")}>⇅</button>
+          <button className="icon-btn swap" onClick={swap} aria-label={T("Swap", "החלפה")}><SwapGlyph size={20} /></button>
         </div>
         <div className="chips scroll-x">
-          <button className="chip" onClick={() => setTimeSheet(true)}>🕑 {whenText}</button>
+          <button className={"chip" + (when.kind !== "now" ? " on" : "")} onClick={() => setTimeSheet(true)}><ClockGlyph size={16} />{whenText}</button>
           {MODE_FILTERS.map(f => {
             const on = f.types.every(t => prefs.modes.includes(t));
             return <button key={f.types.join()} className={"chip" + (on ? " on" : "")}
@@ -99,15 +100,15 @@ export function PlanScreen({ onPay }: { onPay: (at?: LatLon, routeType?: number)
           <ul className="list">
             {prefs.favourites.map(f => (
               <li key={f.label + f.lat} className="row" onClick={() => setTo(f)}>
-                <span className="row-icon">★</span><div className="row-main"><div>{f.label}</div><div className="dim" dir="auto">{f.name}</div></div>
-                <button className="icon-btn" onClick={e => { e.stopPropagation(); setPrefs({ favourites: prefs.favourites.filter(x => x !== f) }); }}>✕</button>
+                <span className="row-icon lit"><StarGlyph size={18} filled /></span><div className="row-main"><div>{f.label}</div><div className="dim" dir="auto">{f.name}</div></div>
+                <button className="icon-btn" onClick={e => { e.stopPropagation(); setPrefs({ favourites: prefs.favourites.filter(x => x !== f) }); }} aria-label={T("Remove", "הסרה")}><CloseGlyph size={16} /></button>
               </li>
             ))}
             {prefs.recents.length > 0 && <li className="list-head">{T("Recent", "אחרונים")}</li>}
             {prefs.recents.slice(0, 8).map((p, i) => (
               <li key={i} className="row" onClick={() => setTo(p)}>
-                <span className="row-icon">↺</span><div className="row-main"><div dir="auto">{p.name}</div>{p.detail && <div className="dim" dir="auto">{p.detail}</div>}</div>
-                <button className="icon-btn" onClick={e => { e.stopPropagation(); setSaving(p); }} aria-label={T("Save", "שמירה")}>☆</button>
+                <span className="row-icon"><RecentGlyph size={18} /></span><div className="row-main"><div dir="auto">{p.name}</div>{p.detail && <div className="dim" dir="auto">{p.detail}</div>}</div>
+                <button className="icon-btn" onClick={e => { e.stopPropagation(); setSaving(p); }} aria-label={T("Save", "שמירה")}><StarGlyph size={18} /></button>
               </li>
             ))}
             {!prefs.recents.length && !prefs.favourites.length && <li className="pad dim">{T("Search for a place to get there by public transport.", "חפשו מקום כדי להגיע אליו בתחבורה ציבורית.")}</li>}
@@ -121,12 +122,12 @@ export function PlanScreen({ onPay }: { onPay: (at?: LatLon, routeType?: number)
             {plan.data?.refusal && <Note tone="warn"><b>{plan.data.refusal.title}</b><br />{plan.data.refusal.detail}</Note>}
             {plan.data && !plan.loading && !its.length && !plan.data.refusal && <Note>{T("No routes found.", "לא נמצאו מסלולים.")}</Note>}
             {its.map((it, i) => (
-              <div key={it.guid + i}>
+              <div key={it.guid + i} className="it-wrap">
                 {it.section && it.section !== its[i - 1]?.section && <div className="list-head">{it.section}</div>}
                 <ItineraryCard it={it} resolved={plan.data!.resolved} onClick={() => setChosen(i)} />
               </div>
             ))}
-            {to && <button className="link center" onClick={() => setSaving(to)}>☆ {T("Save this destination", "שמירת היעד")}</button>}
+            {to && <button className="link center" onClick={() => setSaving(to)}><StarGlyph size={16} />{T("Save this destination", "שמירת היעד")}</button>}
           </div>
         )}
       </div>
@@ -178,11 +179,11 @@ function ItineraryCard({ it, resolved, onClick }: { it: Itinerary; resolved: Res
       <div className="it-legs">
         {it.legs.filter(l => l.kind !== "wait").map((l, i) => (
           <span key={i} className="it-leg">
-            {i > 0 && <span className="dim">›</span>}
+            {i > 0 && <span className="sep">›</span>}
             {l.kind === "ride" ? options(l).slice(0, 3).map((o, k) => <LineBadge key={k} number={legLabel(o, resolved)} type={routeTypeOf(resolved, o.lineId)} small />)
-              : l.kind === "walk" ? <span className="walk">🚶{l.arr > l.dep ? Math.max(1, Math.round((l.arr - l.dep) / 60)) : ""}</span>
+              : l.kind === "walk" ? <span className="walk"><WalkGlyph size={13} />{l.arr > l.dep ? Math.max(1, Math.round((l.arr - l.dep) / 60)) : ""}</span>
               : l.kind === "taxi" ? <LineBadge number={T("Taxi", "מונית")} type={715} small />
-              : l.kind === "bike" ? <span>🚲</span> : <span className="dim">•</span>}
+              : l.kind === "bike" ? <BikeGlyph size={16} /> : <span className="dim">•</span>}
           </span>
         ))}
       </div>
@@ -273,12 +274,12 @@ function TripDetail({ trip, resolved: first, from, to, onBack, onPay }: {
   return (
     <div className="screen">
       <Header title={`${clock(trip.dep)} – ${clock(trip.arr)}`} sub={`${minutesText(Math.round((trip.arr - trip.dep) / 60))}${trip.fare > 0 ? " · " + shekels(trip.fare) : ""}`}
-        back={onBack} right={<button className="icon-btn" onClick={share} aria-label={T("Share", "שיתוף")}>⤴</button>} />
+        back={onBack} right={<button className="plate-btn" onClick={share} aria-label={T("Share", "שיתוף")}><ShareGlyph /></button>} />
       <MapView className="map-half" lines={lines} points={[...ends, ...vehicles]} fit={all} fitKey={trip.guid} user={here} />
       <div className="scroll">
         <div className="pad stack">
           {shareNote && <Note>{shareNote}</Note>}
-          <button className="btn primary" onClick={() => setNavigating(true)}>▶ {T("Start", "יציאה לדרך")}</button>
+          <button className="btn primary" onClick={() => setNavigating(true)}><PlayGlyph size={14} />{T("Start", "יציאה לדרך")}</button>
           <ol className="legs">
             {legs.map((l, i) => {
               if (l.kind === "wait") return null;
@@ -305,7 +306,7 @@ function LegRow({ leg, wait, r, live, now, last, dest, onPay, stopAt }: {
     const target = leg.toStop > 0 ? stopName(leg.toStop) : last ? dest : "";
     return (
       <li className="leg walk-leg">
-        <span className="leg-icon">🚶</span>
+        <span className="leg-icon"><WalkGlyph size={18} /></span>
         <div>
           <div>{T("Walk", "הליכה")} {minutesText(mins)}{leg.meters > 0 ? ` · ${distanceText(leg.meters)}` : ""}</div>
           {target && <div className="dim" dir="auto">{T("to", "אל")} {target}</div>}
@@ -335,16 +336,16 @@ function LegRow({ leg, wait, r, live, now, last, dest, onPay, stopAt }: {
         <div className="leg-stop"><b dir="auto">{stopName(ride.fromStop)}</b> <span className="dim">{clock(ride.dep)}</span></div>
         <div className="deps">{deps.slice(0, 4).map((d, k) => <DepTime key={k} d={d} now={now} />)}{!deps.length && mine == null && <span className="dim">{clock(ride.dep)}</span>}</div>
         {wait?.alertText && <Note tone="warn">{wait.alertText}</Note>}
-        {between.length > 0 && <button className="link" onClick={() => setOpen(!open)}>{open ? "▾" : "▸"} {T(`${between.length + 1} stops`, `${between.length + 1} תחנות`)} · {minutesText(Math.round((ride.arr - ride.dep) / 60))}</button>}
+        {between.length > 0 && <button className="link" onClick={() => setOpen(!open)}><ChevronGlyph size={12} open={open} />{T(`${between.length + 1} stops`, `${between.length + 1} תחנות`)} · {minutesText(Math.round((ride.arr - ride.dep) / 60))}</button>}
         {open && <ul className="stops-mini">{between.map(s => <li key={s} dir="auto">{stopName(s) || `#${s}`}</li>)}</ul>}
         <div className="leg-stop"><b dir="auto">{stopName(ride.toStop)}</b> <span className="dim">{clock(ride.arr)}</span></div>
         {payMode != null && <button className="btn small" onClick={() => onPay(stopAt(ride.fromStop) ?? undefined, payMode)}>{T("Pay for this ride", "תשלום על הנסיעה")}</button>}
       </li>
     );
   }
-  if (leg.kind === "taxi") return <li className="leg"><span className="leg-icon">🚕</span><div>{T("Taxi", "מונית")} · {minutesText(Math.round((leg.arr - leg.dep) / 60))}</div></li>;
-  if (leg.kind === "bike") return <li className="leg"><span className="leg-icon">🚲</span><div>{T("Bike", "אופניים")} · {minutesText(Math.round((leg.arr - leg.dep) / 60))}</div></li>;
-  return <li className="leg"><span className="leg-icon">•</span><div className="dim">{minutesText(Math.round((leg.arr - leg.dep) / 60))}</div></li>;
+  if (leg.kind === "taxi") return <li className="leg"><span className="leg-icon"><TaxiGlyph size={18} /></span><div>{T("Taxi", "מונית")} · {minutesText(Math.round((leg.arr - leg.dep) / 60))}</div></li>;
+  if (leg.kind === "bike") return <li className="leg"><span className="leg-icon"><BikeGlyph size={18} /></span><div>{T("Bike", "אופניים")} · {minutesText(Math.round((leg.arr - leg.dep) / 60))}</div></li>;
+  return <li className="leg"><span className="leg-icon"><DotGlyph size={14} /></span><div className="dim">{minutesText(Math.round((leg.arr - leg.dep) / 60))}</div></li>;
 }
 
 // ---- on the way ------------------------------------------------------------------------------

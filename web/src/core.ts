@@ -10,9 +10,13 @@ export interface Place { name: string; detail: string; lat: number; lon: number;
 export interface Favourite extends Place { label: string }
 export interface Prefs {
   lang: "he" | "en"; look: Look; privateSearch: boolean; recents: Place[]; favourites: Favourite[]; modes: number[];
+  accent: string; liquid: boolean;
 }
 
-const DEFAULTS: Prefs = { lang: "he", look: "black", privateSearch: true, recents: [], favourites: [], modes: [] };
+export const DEFAULT_ACCENT = "#9ABEFF";
+const DEFAULTS: Prefs = {
+  lang: "he", look: "dark", privateSearch: true, recents: [], favourites: [], modes: [], accent: DEFAULT_ACCENT, liquid: true,
+};
 const KEY = "kav-prefs";
 
 function readPrefs(): Prefs {
@@ -35,6 +39,9 @@ export function usePrefs(): Prefs {
 export function applyLook() {
   const html = document.documentElement;
   html.dataset.look = prefs.look;
+  html.dataset.glass = prefs.liquid ? "liquid" : "solid";
+  // Accents are always pale, so text on them stays dark in every look.
+  html.style.setProperty("--accent", /^#[0-9a-f]{6}$/i.test(prefs.accent) ? prefs.accent : DEFAULT_ACCENT);
   html.lang = prefs.lang;
   html.dir = prefs.lang === "he" ? "rtl" : "ltr";
   document.querySelector('meta[name="theme-color"]')?.setAttribute("content", prefs.look === "light" ? "#F6F6F3" : prefs.look === "dark" ? "#101012" : "#000000");

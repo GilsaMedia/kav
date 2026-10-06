@@ -25,11 +25,9 @@ account, no App Store. You install it with your own Apple ID.
 
 **1. Download the app**
 
-1. Open [Actions → iOS app](https://github.com/GilsaMedia/kav/actions/workflows/ios.yml)
-   (sign in to GitHub first).
-2. Click the newest run with a green ✓.
-3. At the bottom, under **Artifacts**, click **Kav-ipa**.
-4. Unzip the download. Inside is `Kav.ipa`.
+1. Open [Releases](https://github.com/GilsaMedia/kav/releases) and find the newest
+   **Kav for iPhone** release.
+2. Under **Assets**, download `Kav.ipa`.
 
 **2. Put it on your iPhone with [Sideloadly](https://sideloadly.io)** (Mac or Windows)
 

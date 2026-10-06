@@ -1,6 +1,7 @@
-# Builds Kav for iOS as an unsigned IPA, to sign and install with Sideloadly or AltStore.
+# Builds Kav for iOS as an unsigned IPA, to sign and install with Sideloadly or AltStore, and puts it
+# on the Releases page as "Kav for iPhone <version>" (the version in web/package.json).
 # Run it from the Actions tab (Run workflow), or push to the ios branch. A Sunday build keeps the
-# timetable inside the app current.
+# timetable inside the app current by replacing the IPA in that version's release.
 name: iOS app
 
 on:
@@ -11,12 +12,19 @@ on:
   schedule:
     - cron: "0 3 * * 0"
 
+permissions:
+  contents: write
+
 jobs:
   ipa:
     runs-on: macos-15
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
+
+      - name: Version
+        id: version
+        run: echo "name=$(node -p 'require("./web/package.json").version')" >> "$GITHUB_OUTPUT"
 
       - uses: actions/setup-node@v4
         with:
@@ -42,6 +50,7 @@ jobs:
           xcodebuild -project web/ios/App/App.xcodeproj -scheme App -configuration Release \
             -sdk iphoneos -destination 'generic/platform=iOS' -derivedDataPath build \
             CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
+            MARKETING_VERSION=${{ steps.version.outputs.name }} CURRENT_PROJECT_VERSION=${{ github.run_number }} \
             build > build.log 2>&1 || { grep -n -A3 "error:" build.log | head -80; tail -n 40 build.log; exit 1; }
           tail -n 5 build.log
           test -d build/Build/Products/Release-iphoneos/App.app
@@ -58,3 +67,20 @@ jobs:
           name: Kav-ipa
           path: Kav.ipa
           retention-days: 30
+
+      # Never marked latest: the Android app updates itself from the latest release.
+      - name: Release
+        if: github.ref == 'refs/heads/ios'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ios-v${{ steps.version.outputs.name }}
+          target_commitish: ${{ github.sha }}
+          name: Kav for iPhone ${{ steps.version.outputs.name }}
+          make_latest: false
+          files: Kav.ipa
+          body: |
+            Kav for iPhone ${{ steps.version.outputs.name }}, with this week's timetable (build ${{ github.run_number }}).
+
+            The Android app's look, now on iPhone: its dark, OLED black and light palettes and your choice of accent colour, liquid glass bars and buttons (or solid ones), the floating tab bar, the drawn icons and line plates, and the motion: screens that slide in and fade back, lists that lift into place one after another, sheets that rise, the breathing live dot and the loading line.
+
+            **Installing:** download `Kav.ipa` below and install it with Sideloadly or AltStore using your Apple ID. See the README on the `ios` branch for the steps. With a free Apple ID the app has to be reinstalled or refreshed every 7 days.

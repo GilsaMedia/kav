@@ -3,6 +3,7 @@ import { useRef, useState } from "react";
 import { T, api, useHere, useLoad, useNow, minutesText, timeOf, isLive, modeColor, mergeResolved, emptyResolved, type Arrival, type Resolved, type LatLon } from "../core.ts";
 import { Header, LineBadge, Spinner, Note, LiveDot } from "../ui.tsx";
 import { MapView, type MapPoint } from "../MapView.tsx";
+import { LocateGlyph, CloseGlyph } from "../icons.tsx";
 
 interface LiveStop { id: number; name: string; lat: number; lon: number; code: number }
 interface LiveData { stops: LiveStop[]; arrivals: Arrival[]; poll: number; pending: number; resolved: Resolved }
@@ -75,10 +76,10 @@ export function LiveScreen() {
         {live.loading && !live.data && <Spinner text={T("Finding the stops around you…", "מחפשים את התחנות סביבכם…")} />}
         {live.error && <Note tone="warn">{live.error}</Note>}
         {live.data && live.data.pending > 0 && <div className="dim small">{T(`Matching ${live.data.pending} more stops…`, `מתאימים עוד ${live.data.pending} תחנות…`)}</div>}
-        {look && here && <button className="link" onClick={() => setLook(null)}>◎ {T("Back to my location", "חזרה למיקום שלי")}</button>}
+        {look && here && <button className="link" onClick={() => setLook(null)}><LocateGlyph size={16} />{T("Back to my location", "חזרה למיקום שלי")}</button>}
         {focus && (
           <div className="focus-head">
-            <button className="link" onClick={() => setFocus(null)}>✕</button>
+            <button className="icon-btn" onClick={() => setFocus(null)} aria-label={T("Close", "סגירה")}><CloseGlyph size={16} /></button>
             {focusStop && <b dir="auto">{focusStop.name}</b>}
             {focusVehicle && <><LineBadge number={r.lines[focusVehicle.lineId]?.number ?? "…"} type={typeOf(focusVehicle.lineId)} />
               <span dir="auto">{T("to", "ל")}{r.lines[focusVehicle.lineId]?.destination ?? ""}</span></>}
