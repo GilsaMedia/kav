@@ -302,6 +302,7 @@ export function SaveFavourite({ place, onDone }: { place: Place; onDone: () => v
 export function liveWhy(r: { ok: boolean; why?: string }): string {
   if (r.ok) return T("Lock your phone or look at the Dynamic Island: the trip is there.", "נעלו את הטלפון או הסתכלו על ה-Dynamic Island: הנסיעה שם.");
   if (r.why === "disabled") return T("Live Activities are off for Kav, so the trip isn't on your lock screen. Turn them on in Settings → Kav → Live Activities.", "Live Activities כבויות עבור Kav, ולכן הנסיעה לא במסך הנעילה. הפעילו אותן ב-הגדרות → Kav → Live Activities.");
+  if (r.why === "container") return T("Kav is running inside LiveContainer, so iOS never sees its lock screen part and can't show the trip there. Install Kav.ipa directly with Sideloadly, AltStore or SideStore, not inside LiveContainer, to get it.", "Kav רצה בתוך LiveContainer, ולכן iOS לא רואה את החלק של מסך הנעילה ולא יכולה להציג שם את הנסיעה. כדי לקבל אותו, התקינו את Kav.ipa ישירות עם Sideloadly, AltStore או SideStore, לא בתוך LiveContainer.");
   if (r.why === "ios") return T("The lock screen trip needs iOS 16.2 or newer.", "הנסיעה במסך הנעילה דורשת iOS 16.2 ומעלה.");
   if (r.why === "missing") return T("This copy of Kav has no lock screen part. Install the newest Kav.ipa.", "בעותק הזה של Kav אין את החלק של מסך הנעילה. התקינו את Kav.ipa החדש.");
   if (r.why === "browser") return T("Only in the iPhone app.", "רק באפליקציה לאייפון.");

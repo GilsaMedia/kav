@@ -147,6 +147,14 @@ public class KavNativePlugin: CAPPlugin, CAPBridgedPlugin, URLSessionDownloadDel
             live: call.getBool("live") ?? false, step: call.getInt("step") ?? 0, steps: call.getInt("steps") ?? 1, minutes: 0)
     }
 
+    // Kav run by another app rather than installed: its bundle lies in the host's data (LiveContainer keeps
+    // its apps in Documents/Applications) instead of where iOS installs apps, or the host says so.
+    private static var hosted: Bool {
+        let path = Bundle.main.bundlePath.lowercased()
+        return path.contains("livecontainer") || path.contains("/documents/applications/")
+            || ProcessInfo.processInfo.environment["LC_HOME_PATH"] != nil
+    }
+
     // Keeps the card in whole minutes, as Moovit's: Kav stays awake in the background on location, as
     // navigation does, and counts the minutes again every 20 seconds.
     private var keeper: AnyObject?
@@ -155,6 +163,9 @@ public class KavNativePlugin: CAPPlugin, CAPBridgedPlugin, URLSessionDownloadDel
     // when it can't, so the app can tell the person.
     @objc func liveStart(_ call: CAPPluginCall) {
         guard #available(iOS 16.2, *) else { return call.resolve(["ok": false, "why": "ios"]) }
+        // Run inside LiveContainer (or another app that hosts apps), Kav isn't installed as itself: iOS
+        // never sees its lock screen extension, so there's nothing it could show.
+        if Self.hosted { return call.resolve(["ok": false, "why": "container"]) }
         guard ActivityAuthorizationInfo().areActivitiesEnabled else { return call.resolve(["ok": false, "why": "disabled"]) }
         let state = Self.tripState(call)
         let attributes = KavTripAttributes(destination: call.getString("destination") ?? "")
