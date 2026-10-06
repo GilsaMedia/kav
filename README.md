@@ -18,6 +18,45 @@
   <a href="https://www.buymeacoffee.com/Noamm"><img alt="Buy Me A Coffee" src="https://www.buymeacoffee.com/assets/img/custom_images/orange_img.png"></a>
 </p>
 
+## Install on iPhone
+
+This branch has Kav as an iPhone app too. It works on its own: no computer, no
+account, no App Store. You install it with your own Apple ID.
+
+**1. Download the app**
+
+1. Open [Actions → iOS app](https://github.com/GilsaMedia/kav/actions/workflows/ios.yml)
+   (sign in to GitHub first).
+2. Click the newest run with a green ✓.
+3. At the bottom, under **Artifacts**, click **Kav-ipa**.
+4. Unzip the download. Inside is `Kav.ipa`.
+
+**2. Put it on your iPhone with [Sideloadly](https://sideloadly.io)** (Mac or Windows)
+
+1. Install Sideloadly and open it.
+2. Connect the iPhone with a cable. Unlock it and tap **Trust This Computer** if it asks.
+3. Drag `Kav.ipa` into Sideloadly.
+4. Type your Apple ID email and press **Start**, then your Apple ID password when
+   asked. A free Apple ID is fine. Sideloadly sends it only to Apple, to sign the app.
+5. Wait for **Done**.
+
+**3. Allow it on the iPhone**
+
+1. **Settings → General → VPN & Device Management** → tap your Apple ID → **Trust**.
+2. On iOS 16 or newer: **Settings → Privacy & Security → Developer Mode** → on.
+   The phone restarts; confirm **Turn On** afterwards.
+3. Open **Kav**. Allow location when it asks, and tap **Download the map**
+   (185 MB, once; Wi-Fi is best).
+
+**Every 7 days**
+
+A free Apple ID signs apps for 7 days. When Kav stops opening, repeat step 2 with
+the same `Kav.ipa` (or a newer one). Your places and settings stay.
+[AltStore](https://altstore.io) can renew it for you over Wi-Fi instead.
+
+**With a Mac and Xcode** you can skip the download: see
+[web/README.md](web/README.md#the-iphone-app).
+
 An Android app for getting around on public transport in Israel. No ads, no
 account, no analytics, nothing phoning home about where you go. Hebrew and
 English, and it lays itself out right to left when you pick Hebrew.
