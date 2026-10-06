@@ -1,0 +1,4 @@
+node_modules/
+dist/
+# The map, the timetable, Moovit sessions and the HTTPS keys stay on this machine.
+data/

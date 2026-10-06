@@ -57,6 +57,11 @@ it. It updates itself from the same page. No store, no update service.
 First launch fetches the map, about 176 MB once. It lives on the phone from then
 on, so the map works offline and no tile server sees where you look.
 
+## On the web (iPhone)
+
+[`web/`](web/README.md) runs Kav in a browser: a React app and a small server on your own
+computer, so it works on an iPhone too.
+
 ## Building it
 
 You need a JDK and the Android SDK. There's a script that fetches both into

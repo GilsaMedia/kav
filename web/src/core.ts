@@ -1,0 +1,253 @@
+// Shared plumbing: preferences, language, the API, time and place helpers, and the data shapes the server sends.
+import { useEffect, useRef, useState, useSyncExternalStore } from "react";
+
+// ---- preferences (this phone only) -----------------------------------------------------------
+
+export type Look = "black" | "dark" | "light";
+export interface Place { name: string; detail: string; lat: number; lon: number; type?: number }
+export interface Favourite extends Place { label: string }
+export interface Prefs {
+  lang: "he" | "en"; look: Look; privateSearch: boolean; recents: Place[]; favourites: Favourite[]; modes: number[];
+}
+
+const DEFAULTS: Prefs = { lang: "he", look: "black", privateSearch: true, recents: [], favourites: [], modes: [] };
+const KEY = "kav-prefs";
+
+function readPrefs(): Prefs {
+  try { return { ...DEFAULTS, ...JSON.parse(localStorage.getItem(KEY) ?? "{}") }; } catch { return { ...DEFAULTS }; }
+}
+let prefs = readPrefs();
+const listeners = new Set<() => void>();
+
+export function setPrefs(change: Partial<Prefs>) {
+  prefs = { ...prefs, ...change };
+  try { localStorage.setItem(KEY, JSON.stringify(prefs)); } catch { /* private mode */ }
+  applyLook();
+  listeners.forEach(l => l());
+}
+export const getPrefs = () => prefs;
+export function usePrefs(): Prefs {
+  return useSyncExternalStore(cb => { listeners.add(cb); return () => listeners.delete(cb); }, () => prefs);
+}
+
+export function applyLook() {
+  const html = document.documentElement;
+  html.dataset.look = prefs.look;
+  html.lang = prefs.lang;
+  html.dir = prefs.lang === "he" ? "rtl" : "ltr";
+  document.querySelector('meta[name="theme-color"]')?.setAttribute("content", prefs.look === "light" ? "#F6F6F3" : prefs.look === "dark" ? "#101012" : "#000000");
+}
+
+export function remember(p: Place) {
+  const recents = [p, ...prefs.recents.filter(r => r.name !== p.name || Math.abs(r.lat - p.lat) > 1e-4)].slice(0, 12);
+  setPrefs({ recents });
+}
+
+// English first, then Hebrew, as the Android app writes its strings.
+export const T = (en: string, he: string) => (prefs.lang === "he" ? he : en);
+
+// ---- the API ---------------------------------------------------------------------------------
+
+export class ApiError extends Error {
+  status: number; title: string | null;
+  constructor(status: number, message: string, title: string | null) { super(message); this.status = status; this.title = title; }
+}
+
+export async function api<T = any>(path: string, body?: unknown, signal?: AbortSignal): Promise<T> {
+  const sep = path.includes("?") ? "&" : "?";
+  const url = `/api/${path}${sep}lang=${prefs.lang}&private=${prefs.privateSearch ? 1 : 0}`;
+  const res = await fetch(url, body === undefined ? { signal } : {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), signal,
+  });
+  const out = await res.json().catch(() => ({}));
+  if (!res.ok) throw new ApiError(res.status, out.error ?? `HTTP ${res.status}`, out.title ?? null);
+  return out as T;
+}
+
+export function failure(e: unknown): string {
+  if (e instanceof ApiError) {
+    if (e.status === 502 || e.status === 500) return T("Couldn't reach Moovit. Try again in a moment.", "אין חיבור ל-Moovit. נסו שוב בעוד רגע.");
+    return e.message;
+  }
+  if (e instanceof TypeError) return T("No connection to the Kav server.", "אין חיבור לשרת של Kav.");
+  return (e as Error)?.message ?? String(e);
+}
+
+// Loads once per key, keeps the last answer while reloading, and drops answers to stale keys.
+export function useLoad<T>(key: string | null, load: (signal: AbortSignal) => Promise<T>, everyMs?: number | (() => number)) {
+  const [state, setState] = useState<{ data: T | null; error: string | null; loading: boolean }>({ data: null, error: null, loading: !!key });
+  const [tick, setTick] = useState(0);
+  const loadRef = useRef(load); loadRef.current = load;
+  useEffect(() => { setState({ data: null, error: null, loading: !!key }); }, [key]);
+  useEffect(() => {
+    if (!key) return;
+    const ac = new AbortController();
+    let timer: number | undefined;
+    setState(s => ({ ...s, loading: true }));
+    loadRef.current(ac.signal).then(
+      data => { if (!ac.signal.aborted) setState({ data, error: null, loading: false }); },
+      e => { if (!ac.signal.aborted) setState(s => ({ ...s, error: failure(e), loading: false })); },
+    ).finally(() => {
+      if (ac.signal.aborted || !everyMs) return;
+      const ms = typeof everyMs === "function" ? everyMs() : everyMs;
+      timer = window.setTimeout(() => { if (document.visibilityState === "visible") setTick(t => t + 1); else waitVisible(() => setTick(t => t + 1)); }, ms);
+    });
+    return () => { ac.abort(); clearTimeout(timer); };
+  }, [key, tick]);
+  return { ...state, reload: () => setTick(t => t + 1) };
+}
+
+function waitVisible(f: () => void) {
+  const on = () => { if (document.visibilityState === "visible") { document.removeEventListener("visibilitychange", on); f(); } };
+  document.addEventListener("visibilitychange", on);
+}
+
+// ---- location --------------------------------------------------------------------------------
+
+export type LatLon = [number, number];
+let here: LatLon | null = null;
+let accuracy = 0;
+const hereListeners = new Set<() => void>();
+let watching = 0;
+let watchId: number | null = null;
+export let locationDenied = false;
+
+function startWatch() {
+  if (watchId != null || !("geolocation" in navigator)) return;
+  watchId = navigator.geolocation.watchPosition(
+    p => { here = [p.coords.latitude, p.coords.longitude]; accuracy = p.coords.accuracy; locationDenied = false; hereListeners.forEach(l => l()); },
+    e => { if (e.code === e.PERMISSION_DENIED) { locationDenied = true; hereListeners.forEach(l => l()); } },
+    { enableHighAccuracy: true, maximumAge: 5000, timeout: 30000 },
+  );
+}
+function stopWatch() { if (watchId != null) { navigator.geolocation.clearWatch(watchId); watchId = null; } }
+
+// The phone's position while a screen that needs it is open.
+export function useHere(active = true): LatLon | null {
+  const v = useSyncExternalStore(cb => { hereListeners.add(cb); return () => hereListeners.delete(cb); }, () => here);
+  useEffect(() => {
+    if (!active) return;
+    watching++; startWatch();
+    return () => { if (--watching === 0) stopWatch(); };
+  }, [active]);
+  return v;
+}
+export const currentHere = () => here;
+export const currentAccuracy = () => accuracy;
+
+export function locateOnce(timeout = 12000): Promise<LatLon> {
+  if (here) return Promise.resolve(here);
+  return new Promise((resolve, reject) => {
+    if (!("geolocation" in navigator)) return reject(new Error(T("Location isn't available.", "המיקום אינו זמין.")));
+    navigator.geolocation.getCurrentPosition(
+      p => { here = [p.coords.latitude, p.coords.longitude]; hereListeners.forEach(l => l()); resolve(here); },
+      e => reject(new Error(e.code === e.PERMISSION_DENIED
+        ? T("Location is off for Kav. Allow it in Settings → Safari → Location.", "המיקום כבוי עבור Kav. אפשרו אותו בהגדרות → Safari → מיקום.")
+        : T("Couldn't find your location.", "לא הצלחנו למצוא את המיקום שלכם."))),
+      { enableHighAccuracy: true, timeout, maximumAge: 10000 },
+    );
+  });
+}
+
+export function metres(a: LatLon, b: LatLon): number {
+  const r = 6_371_000, toR = Math.PI / 180;
+  const dLa = (b[0] - a[0]) * toR, dLo = (b[1] - a[1]) * toR;
+  const x = Math.sin(dLa / 2) ** 2 + Math.cos(a[0] * toR) * Math.cos(b[0] * toR) * Math.sin(dLo / 2) ** 2;
+  return 2 * r * Math.asin(Math.min(1, Math.sqrt(x)));
+}
+
+export const distanceText = (m: number) => m < 1000 ? T(`${Math.round(m / 10) * 10} m`, `${Math.round(m / 10) * 10} מ׳`) : T(`${(m / 1000).toFixed(1)} km`, `${(m / 1000).toFixed(1)} ק״מ`);
+
+// ---- time ------------------------------------------------------------------------------------
+
+const hm = new Intl.DateTimeFormat("en-GB", { timeZone: "Asia/Jerusalem", hour: "2-digit", minute: "2-digit", hourCycle: "h23" });
+export const clock = (utc: number) => hm.format(new Date(utc * 1000));
+export const nowSec = () => Math.floor(Date.now() / 1000);
+
+export function useNow(everyMs = 15000) {
+  const [now, setNow] = useState(nowSec);
+  useEffect(() => { const t = setInterval(() => setNow(nowSec()), everyMs); return () => clearInterval(t); }, [everyMs]);
+  return now;
+}
+
+export function minutesText(mins: number) {
+  if (mins <= 0) return T("now", "עכשיו");
+  if (mins < 60) return T(`${mins} min`, `${mins} דק׳`);
+  const h = Math.floor(mins / 60), m = mins % 60;
+  return m ? T(`${h} h ${m} min`, `${h} ש׳ ${m} דק׳`) : T(`${h} h`, `${h} ש׳`);
+}
+
+export const shekels = (agorot: number) => "₪" + (agorot / 100).toFixed(2).replace(/\.00$/, "");
+
+// ---- modes -----------------------------------------------------------------------------------
+
+// GTFS route types, as Moovit's agencies carry them.
+export function modeName(type: number) {
+  switch (type) {
+    case 0: return T("Light rail", "רכבת קלה");
+    case 1: return T("Metro", "מטרו");
+    case 2: return T("Train", "רכבת");
+    case 4: return T("Ferry", "מעבורת");
+    case 5: return T("Cable car", "רכבל");
+    case 6: return T("Cable car", "רכבל");
+    case 7: return T("Carmelit", "כרמלית");
+    case 715: return T("Shared taxi", "מונית שירות");
+    default: return T("Bus", "אוטובוס");
+  }
+}
+
+export function modeColor(type: number) {
+  switch (type) {
+    case 0: return "#D8232A";
+    case 1: return "#8950D4";
+    case 2: return "#1F6FD0";
+    case 5: case 6: return "#8950D4";
+    case 7: return "#0A822E";
+    case 715: return "#F5C518";
+    default: return "#3E9B5C";
+  }
+}
+
+export const MODE_FILTERS: { types: number[]; label: () => string }[] = [
+  { types: [3], label: () => T("Bus", "אוטובוס") },
+  { types: [2], label: () => T("Train", "רכבת") },
+  { types: [0, 1], label: () => T("Light rail", "רכבת קלה") },
+  { types: [5, 6, 7], label: () => T("Cable", "רכבל וכרמלית") },
+  { types: [4], label: () => T("Ferry", "מעבורת") },
+];
+
+// ---- what the server sends -------------------------------------------------------------------
+
+export interface Departure {
+  tripId: number | string; staticUtc: number; rtUtc: number; statisticalUtc: number; status: number; certainty: number;
+  traffic: number; frequency: boolean; rtDropped: boolean; vehicleStatus: number; alert: number; platform: string;
+}
+export interface Arrival extends Departure {
+  stopId: number; lineId: number; tracked: boolean; lat: number; lon: number; vehicleId: string; sampleUtc: number;
+  nextStopIndex: number; stopIndex: number; patternStops: number; tripShapeId: number; patternId: number;
+}
+export interface Leg {
+  kind: "walk" | "wait" | "ride" | "taxi" | "bike" | "other"; lineId: number; tripId: number | string; dep: number; arr: number;
+  stops: number[]; fromStop: number; toStop: number; meters: number; nextDeps: Departure[]; shortName: string; pathway: boolean;
+  fare: number; currency: string; shape: LatLon[]; alertCategory: number; alertText: string;
+  taxiPickup: LatLon | null; taxiDropoff: LatLon | null; alternatives: Leg[]; alternativeLineIds: number[];
+}
+export interface Itinerary {
+  guid: string; group: number; legs: Leg[]; dep: number; arr: number; fare: number; currency: string; co2g: number;
+  accessible: boolean; tags: string[]; section: string; sectionId: number; wire: string;
+}
+export interface LineInfo { groupId: number; number: string; agencyId: number; origin: string; destination: string; caption: string }
+export interface StopInfo { id: number; name: string; code: string; lat: number | null; lon: number | null }
+export interface Resolved {
+  lines: Record<number, LineInfo>; stops: Record<number, StopInfo>; routeTypes: Record<number, number>; agencies: Record<number, string>;
+}
+export const emptyResolved = (): Resolved => ({ lines: {}, stops: {}, routeTypes: {}, agencies: {} });
+export const mergeResolved = (a: Resolved, b?: Resolved | null): Resolved => b ? ({
+  lines: { ...a.lines, ...b.lines }, stops: { ...a.stops, ...b.stops }, routeTypes: { ...a.routeTypes, ...b.routeTypes }, agencies: { ...a.agencies, ...b.agencies },
+}) : a;
+
+export const timeOf = (d: Departure) => d.rtUtc > 0 ? d.rtUtc : d.statisticalUtc > 0 ? d.statisticalUtc : d.staticUtc;
+export const isLive = (d: Departure) => d.status !== 3 && !d.frequency && d.vehicleStatus !== 2 && d.rtUtc > 0 && d.vehicleStatus !== 3;
+export const isCancelled = (d: Departure) => d.status === 3;
+export const routeTypeOf = (r: Resolved, lineId: number) => { const l = r.lines[lineId]; return l ? r.routeTypes[l.agencyId] ?? 3 : 3; };
+export const options = (l: Leg) => (l.alternatives.length ? l.alternatives : [l]);
