@@ -2,8 +2,8 @@ import ActivityKit
 import SwiftUI
 import WidgetKit
 
-// The trip on the lock screen and in the Dynamic Island, as Moovit shows one: the line, what is next,
-// and a countdown that keeps running with Kav in the background.
+// The trip on the lock screen and in the Dynamic Island, laid out as Moovit's: what to do now, a track
+// of the whole trip that fills as it goes, and a live countdown the system keeps running with Kav asleep.
 @main
 struct KavLiveBundle: WidgetBundle {
     var body: some Widget {
@@ -15,48 +15,36 @@ struct KavTripLive: Widget {
     var body: some WidgetConfiguration {
         ActivityConfiguration(for: KavTripAttributes.self) { ctx in
             LockScreen(s: ctx.state, destination: ctx.attributes.destination)
-                .activityBackgroundTint(Color.black.opacity(0.82))
+                .activityBackgroundTint(Color(white: 0.12).opacity(0.86))
                 .activitySystemActionForegroundColor(.white)
         } dynamicIsland: { ctx in
             let s = ctx.state
+            let accent = Color(hex: s.accent)
             return DynamicIsland {
                 DynamicIslandExpandedRegion(.leading) {
-                    Plate(s: s).padding(.leading, 6).padding(.top, 4)
+                    PhaseBadge(s: s, size: 44).padding(.leading, 4)
                 }
                 DynamicIslandExpandedRegion(.trailing) {
-                    Countdown(s: s)
-                        .font(.system(size: 26, weight: .bold, design: .rounded).monospacedDigit())
-                        .foregroundColor(Color(hex: s.accent))
-                        .frame(maxWidth: 110, alignment: .trailing)
-                        .padding(.trailing, 6).padding(.top, 2)
+                    When(s: s, size: 24).padding(.trailing, 4)
                 }
                 DynamicIslandExpandedRegion(.center) {
-                    Text(s.label).font(.caption.weight(.semibold)).foregroundColor(.secondary).lineLimit(1)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(s.title).font(.subheadline.weight(.semibold)).lineLimit(2)
+                        Text(s.detail).font(.caption).foregroundColor(.secondary).lineLimit(1)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
                 DynamicIslandExpandedRegion(.bottom) {
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text(s.stop).font(.headline).lineLimit(1)
-                        HStack(spacing: 6) {
-                            Steps(s: s)
-                            Spacer()
-                            Image(systemName: "flag.checkered").font(.caption2)
-                            Text(s.arrive, style: .time).font(.caption.monospacedDigit())
-                        }
-                        .foregroundColor(.secondary)
-                    }
-                    .padding(.horizontal, 6)
+                    Track(s: s).padding(.horizontal, 6).padding(.top, 4)
                 }
             } compactLeading: {
-                Plate(s: s, compact: true)
+                PhaseBadge(s: s, size: 26)
             } compactTrailing: {
-                Countdown(s: s)
-                    .font(.system(size: 15, weight: .semibold, design: .rounded).monospacedDigit())
-                    .foregroundColor(Color(hex: s.accent))
-                    .frame(maxWidth: 52)
+                When(s: s, size: 15, compact: true)
             } minimal: {
-                Image(systemName: symbol(s)).foregroundColor(Color(hex: s.accent))
+                Image(systemName: phaseSymbol(s)).font(.system(size: 12, weight: .bold)).foregroundColor(accent)
             }
-            .keylineTint(Color(hex: s.accent))
+            .keylineTint(accent)
         }
     }
 }
@@ -66,100 +54,118 @@ private struct LockScreen: View {
     let destination: String
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(alignment: .center, spacing: 12) {
-                Plate(s: s)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(s.label).font(.caption.weight(.semibold)).foregroundColor(.white.opacity(0.7)).lineLimit(1)
-                    Text(s.stop).font(.headline).foregroundColor(.white).lineLimit(1)
-                }
-                Spacer(minLength: 4)
-                VStack(alignment: .trailing, spacing: 0) {
-                    if s.live {
-                        Image(systemName: "dot.radiowaves.up.forward").font(.caption2).foregroundColor(Color(hex: s.accent))
-                    }
-                    Countdown(s: s)
-                        .font(.system(size: 30, weight: .bold, design: .rounded).monospacedDigit())
-                        .foregroundColor(Color(hex: s.accent))
-                        .multilineTextAlignment(.trailing)
-                        .frame(maxWidth: 120, alignment: .trailing)
-                }
-            }
+        VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 6) {
-                Steps(s: s)
+                Circle().fill(Color(hex: s.accent)).frame(width: 9, height: 9)
+                Text("Kav").font(.subheadline.weight(.bold)).foregroundColor(.white)
                 Spacer()
-                Image(systemName: "flag.checkered").font(.caption2)
-                Text(destination).font(.caption).lineLimit(1)
-                Text(s.arrive, style: .time).font(.caption.monospacedDigit())
+                if !s.line.isEmpty { Plate(s: s) }
             }
-            .foregroundColor(.white.opacity(0.7))
+            Track(s: s)
+            HStack(alignment: .top, spacing: 12) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(s.title).font(.headline).foregroundColor(.white).lineLimit(2)
+                    Text(s.detail).font(.subheadline).foregroundColor(.white.opacity(0.7)).lineLimit(1)
+                }
+                Spacer(minLength: 6)
+                When(s: s, size: 22)
+            }
         }
         .padding(16)
     }
 }
 
-// The line on its colour, with the mode before it; walking shows a figure instead.
-private struct Plate: View {
+// The whole trip as a track, from setting off to arriving, filling as time goes; the phase's sign rides
+// at its start, the vehicle and the flag at its end.
+private struct Track: View {
     let s: KavTripAttributes.ContentState
+
+    var body: some View {
+        let accent = Color(hex: s.accent)
+        HStack(spacing: 8) {
+            Image(systemName: phaseSymbol(s)).font(.system(size: 17, weight: .semibold)).foregroundColor(.white)
+            if s.arrive > s.depart {
+                ProgressView(timerInterval: s.depart...s.arrive, countsDown: false) { EmptyView() } currentValueLabel: { EmptyView() }
+                    .progressViewStyle(.linear).tint(accent)
+            } else {
+                Capsule().fill(Color.white.opacity(0.3)).frame(height: 4)
+            }
+            Image(systemName: s.phase == "ride" ? "flag.checkered" : modeSymbol(s.mode)).font(.system(size: 17, weight: .semibold)).foregroundColor(.white)
+        }
+    }
+}
+
+// When it happens: the signal when it's live, then the minutes and seconds left, counted by the system.
+private struct When: View {
+    let s: KavTripAttributes.ContentState
+    let size: CGFloat
     var compact = false
 
     var body: some View {
-        if s.line.isEmpty {
-            Image(systemName: symbol(s)).font(compact ? .caption : .title3).foregroundColor(Color(hex: s.accent))
-        } else {
-            HStack(spacing: compact ? 2 : 4) {
-                Image(systemName: symbol(s)).font(compact ? .system(size: 10, weight: .bold) : .caption.weight(.bold))
-                Text(s.line).font(.system(size: compact ? 13 : 17, weight: .bold, design: .rounded)).lineLimit(1)
-                    .minimumScaleFactor(0.6)
-            }
-            .foregroundColor(.white)
-            .padding(.horizontal, compact ? 5 : 8).padding(.vertical, compact ? 2 : 5)
-            .background(RoundedRectangle(cornerRadius: compact ? 5 : 7).fill(Color(hex: s.color)))
-        }
-    }
-}
-
-// Minutes and seconds to the moment, counted by the system so it runs with the app asleep.
-private struct Countdown: View {
-    let s: KavTripAttributes.ContentState
-
-    var body: some View {
-        let now = Date()
-        if s.target > now {
-            Text(timerInterval: now...s.target, countsDown: true)
-        } else {
-            Text(s.phase == "wait" ? "Now" : "—")
-        }
-    }
-}
-
-// One dot per step of the trip, the current one long.
-private struct Steps: View {
-    let s: KavTripAttributes.ContentState
-
-    var body: some View {
+        let accent = Color(hex: s.accent)
         HStack(spacing: 3) {
-            ForEach(0..<max(1, min(s.steps, 8)), id: \.self) { i in
-                Capsule().fill(i == s.step ? Color(hex: s.accent) : Color.white.opacity(0.3))
-                    .frame(width: i == s.step ? 14 : 5, height: 5)
+            if s.live { Image(systemName: "wifi").rotationEffect(.degrees(45)).font(.system(size: size * 0.62, weight: .bold)) }
+            if s.target > Date() {
+                Text(timerInterval: Date()...s.target, countsDown: true)
+                    .monospacedDigit()
+                    .frame(maxWidth: compact ? 50 : 96, alignment: .trailing)
+            } else {
+                Text(s.phase == "wait" ? "Now" : "—")
             }
         }
+        .font(.system(size: size, weight: .bold, design: .rounded))
+        .foregroundColor(accent)
+        .lineLimit(1)
     }
 }
 
-private func symbol(_ s: KavTripAttributes.ContentState) -> String {
+// What to do now, in a ring: an hourglass while waiting, the vehicle while riding, a figure walking.
+private struct PhaseBadge: View {
+    let s: KavTripAttributes.ContentState
+    let size: CGFloat
+
+    var body: some View {
+        ZStack {
+            Circle().stroke(Color.white.opacity(0.35), lineWidth: size * 0.09)
+            Image(systemName: phaseSymbol(s)).font(.system(size: size * 0.42, weight: .bold)).foregroundColor(.white)
+        }
+        .frame(width: size, height: size)
+    }
+}
+
+// The line on its colour, with the mode before it.
+private struct Plate: View {
+    let s: KavTripAttributes.ContentState
+
+    var body: some View {
+        HStack(spacing: 4) {
+            Image(systemName: modeSymbol(s.mode)).font(.caption.weight(.bold))
+            Text(s.line).font(.system(size: 15, weight: .bold, design: .rounded)).lineLimit(1).minimumScaleFactor(0.6)
+        }
+        .foregroundColor(.white)
+        .padding(.horizontal, 7).padding(.vertical, 4)
+        .background(RoundedRectangle(cornerRadius: 6).fill(Color(hex: s.color)))
+    }
+}
+
+private func phaseSymbol(_ s: KavTripAttributes.ContentState) -> String {
     switch s.phase {
+    case "wait": return "hourglass"
     case "walk": return "figure.walk"
     case "arrive": return "flag.checkered"
-    default:
-        switch s.mode {
-        case "tram": return "tram.fill"
-        case "train", "subway": return "train.side.front.car"
-        case "cable", "gondola", "funicular": return "cablecar.fill"
-        case "ferry": return "ferry.fill"
-        case "taxi": return "car.fill"
-        default: return "bus.fill"
-        }
+    default: return modeSymbol(s.mode)
+    }
+}
+
+private func modeSymbol(_ mode: String) -> String {
+    switch mode {
+    case "tram": return "tram.fill"
+    case "train", "subway": return "train.side.front.car"
+    case "cable", "gondola", "funicular": return "cablecar.fill"
+    case "ferry": return "ferry.fill"
+    case "taxi": return "car.fill"
+    case "walk": return "flag.checkered"
+    default: return "bus.fill"
     }
 }
 

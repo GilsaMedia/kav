@@ -139,16 +139,18 @@ public class KavNativePlugin: CAPPlugin, CAPBridgedPlugin, URLSessionDownloadDel
     private static func tripState(_ call: CAPPluginCall) -> KavTripAttributes.ContentState {
         func date(_ key: String) -> Date { Date(timeIntervalSince1970: (call.getDouble(key) ?? 0) / 1000) }
         return KavTripAttributes.ContentState(
-            phase: call.getString("phase") ?? "wait", label: call.getString("label") ?? "", stop: call.getString("stop") ?? "",
+            phase: call.getString("phase") ?? "wait", title: call.getString("title") ?? "", detail: call.getString("detail") ?? "",
+            label: call.getString("label") ?? "", stop: call.getString("stop") ?? "",
             line: call.getString("line") ?? "", mode: call.getString("mode") ?? "bus", color: call.getString("color") ?? "#3E9B5C",
-            accent: call.getString("accent") ?? "#9ABEFF", target: date("target"), arrive: date("arrive"),
+            accent: call.getString("accent") ?? "#9ABEFF", target: date("target"), depart: date("depart"), arrive: date("arrive"),
             live: call.getBool("live") ?? false, step: call.getInt("step") ?? 0, steps: call.getInt("steps") ?? 1)
     }
 
-    // liveStart({ destination, ...state }): one trip at a time, so any earlier one ends first.
+    // liveStart({ destination, ...state }): one trip at a time, so any earlier one ends first. Says why not
+    // when it can't, so the app can tell the person.
     @objc func liveStart(_ call: CAPPluginCall) {
-        guard #available(iOS 16.2, *) else { return call.resolve(["ok": false]) }
-        guard ActivityAuthorizationInfo().areActivitiesEnabled else { return call.resolve(["ok": false]) }
+        guard #available(iOS 16.2, *) else { return call.resolve(["ok": false, "why": "ios"]) }
+        guard ActivityAuthorizationInfo().areActivitiesEnabled else { return call.resolve(["ok": false, "why": "disabled"]) }
         let state = Self.tripState(call)
         let attributes = KavTripAttributes(destination: call.getString("destination") ?? "")
         Task {
@@ -157,7 +159,7 @@ public class KavNativePlugin: CAPPlugin, CAPBridgedPlugin, URLSessionDownloadDel
                 _ = try Activity.request(attributes: attributes,
                     content: ActivityContent(state: state, staleDate: state.arrive.addingTimeInterval(30 * 60)), pushType: nil)
                 call.resolve(["ok": true])
-            } catch { call.reject(error.localizedDescription) }
+            } catch { call.resolve(["ok": false, "why": error.localizedDescription]) }
         }
     }
 

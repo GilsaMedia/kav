@@ -1,10 +1,10 @@
 import { useState, type ComponentType } from "react";
-import { T, usePrefs, setPrefs, type LatLon, type Look } from "./core.ts";
+import { T, usePrefs, getPrefs, setPrefs, type LatLon, type Look } from "./core.ts";
 import { AccentPicker } from "./Accent.tsx";
 import { Onboarding, SupportPrompt } from "./Onboarding.tsx";
-import { Header, stayPut } from "./ui.tsx";
-import { DirectionsGlyph, StationTabGlyph, LinesTabGlyph, LiveTabGlyph, TicketGlyph, GearGlyph } from "./icons.tsx";
-import { isNative, removeMap, getMapState } from "./native.ts";
+import { Header, stayPut, useLeaving } from "./ui.tsx";
+import { DirectionsGlyph, StationTabGlyph, LinesTabGlyph, LiveTabGlyph, TicketGlyph, GearGlyph, CloseGlyph } from "./icons.tsx";
+import { isNative, removeMap, getMapState, tryTripLive, type LiveResult } from "./native.ts";
 import { PlanScreen } from "./screens/Plan.tsx";
 import { StationsScreen } from "./screens/Stations.tsx";
 import { LinesScreen } from "./screens/Lines.tsx";
@@ -29,6 +29,8 @@ export function App() {
   const [liveSeen, setLiveSeen] = useState(false);
   if (tab === "live" && !liveSeen) setLiveSeen(true);
   const [payStart, setPayStart] = useState<{ at?: LatLon; routeType?: number } | null>(null);
+  // Paying from a trip: a sheet over it with only the payment, the trip still underneath.
+  const [paySheet, setPaySheet] = useState<{ at?: LatLon; routeType?: number } | null>(null);
   // Tabs crossfade, as on Android: the screen inside doesn't slide.
   const go = (t: Tab) => { if (t !== tab) stayPut(); setTab(t); try { sessionStorage.setItem("kav-tab", t); } catch { /* ignore */ } };
 
@@ -39,7 +41,7 @@ export function App() {
     <div className="app" key={prefs.lang}>
       <main className="main">
         {/* Screens stay mounted, so a trip or a board is still there after a look at another tab. */}
-        <div hidden={tab !== "plan"} className="tab-page"><PlanScreen onPay={(at, routeType) => { setPayStart({ at, routeType }); go("pay"); }} /></div>
+        <div hidden={tab !== "plan"} className="tab-page"><PlanScreen onPay={(at, routeType) => setPaySheet({ at, routeType })} /></div>
         <div hidden={tab !== "stations"} className="tab-page"><StationsScreen /></div>
         <div hidden={tab !== "lines"} className="tab-page"><LinesScreen /></div>
         {/* Live stays too once opened: its map and vehicles are there when you come back. */}
@@ -54,6 +56,7 @@ export function App() {
           </button>
         ))}
       </nav>
+      {paySheet && <PaySheet start={paySheet} onClose={() => setPaySheet(null)} />}
       {!prefs.supportShown && <SupportPrompt onDone={() => setPrefs({ supportShown: true })} />}
     </div>
   );
@@ -83,6 +86,7 @@ function Settings() {
             </div>
             <input type="checkbox" className="switch" checked={prefs.liquid} onChange={e => setPrefs({ liquid: e.target.checked })} />
           </label>
+          <LockScreenTest />
           <div className="list-head">{T("Accent", "צבע הדגשה")}</div>
           <div className="card pad stack center-items"><AccentPicker /></div>
           <div className="list-head">{T("Privacy", "פרטיות")}</div>
@@ -105,6 +109,51 @@ function Settings() {
             "Kav לרשת רצה על המחשב שלכם: היא מתכננת עם Moovit, קוראת את לוח הזמנים של משרד התחבורה, ומציירת את OpenStreetMap מקובץ שעל המחשב. בלי פרסומות, בלי חשבון ובלי מעקב.")}</p>
           <p className="dim small">Map data © OpenStreetMap contributors, Protomaps · Timetable: Israel Ministry of Transport · <a href="https://github.com/ImNoammm/kav" target="_blank" rel="noreferrer">Kav</a> (GPL-3.0)</p>
         </div>
+      </div>
+    </div>
+  );
+}
+
+// The trip on the lock screen and in the Dynamic Island: a sample to see it, and why not when it can't.
+function LockScreenTest() {
+  const [result, setResult] = useState<LiveResult | null>(null);
+  const [busy, setBusy] = useState(false);
+  const why = (r: LiveResult) => r.ok ? T("Lock your phone or look at the Dynamic Island: a sample trip is there for two minutes.", "נעלו את הטלפון או הסתכלו על ה-Dynamic Island: נסיעה לדוגמה מוצגת שם לשתי דקות.")
+    : r.why === "disabled" ? T("Live Activities are off for Kav. Turn them on in Settings → Kav → Live Activities.", "Live Activities כבויות עבור Kav. הפעילו אותן ב-הגדרות → Kav → Live Activities.")
+    : r.why === "ios" ? T("This needs iOS 16.2 or newer.", "צריך iOS 16.2 ומעלה.")
+    : r.why === "missing" ? T("This copy of Kav has no lock screen part. Install the newest Kav.ipa.", "בעותק הזה של Kav אין את החלק של מסך הנעילה. התקינו את Kav.ipa החדש.")
+    : r.why === "browser" ? T("Only in the iPhone app.", "רק באפליקציה לאייפון.")
+    : T(`iOS said no: ${r.why}. If you installed with Sideloadly, make sure "Remove app extensions" is off.`, `iOS סירבה: ${r.why}. אם התקנתם עם Sideloadly, ודאו ש-"Remove app extensions" כבוי.`);
+  const run = async () => {
+    setBusy(true);
+    const now = Date.now();
+    setResult(await tryTripLive({
+      phase: "wait", title: T("Wait for one of these options", "המתינו לאחת מהאפשרויות"), detail: T("72 Train station / 27 Rosh HaAyin", "72 תחנת רכבת / 27 ראש העין"),
+      label: T("72 at your stop in", "72 בתחנה בעוד"), stop: T("Sample trip", "נסיעה לדוגמה"), line: "72 / 27", mode: "bus", color: "#3E9B5C",
+      accent: getPrefs().accent, target: now + 4 * 60_000, depart: now - 60_000, arrive: now + 12 * 60_000, live: true, step: 1, steps: 5,
+    }));
+    setBusy(false);
+  };
+  return (
+    <div className="card pad stack">
+      <div>
+        <div>{T("Lock screen and Dynamic Island", "מסך נעילה ו-Dynamic Island")}</div>
+        <div className="dim small">{T("While you follow a trip, Kav shows the next step and a live countdown there, as Moovit does.", "בזמן נסיעה, Kav מציגה שם את השלב הבא וספירה לאחור בזמן אמת, כמו Moovit.")}</div>
+      </div>
+      <button className="btn" onClick={run} disabled={busy}>{T("Try it", "נסו את זה")}</button>
+      {result && <div className={"small " + (result.ok ? "dim" : "")} style={result.ok ? undefined : { color: "var(--problem)" }}>{why(result)}</div>}
+    </div>
+  );
+}
+
+function PaySheet({ start, onClose }: { start: { at?: LatLon; routeType?: number }; onClose: () => void }) {
+  const [leaving, leave] = useLeaving(onClose, 260);
+  return (
+    <div className={"pay-sheet-backdrop" + (leaving ? " leaving" : "")} onClick={leave}>
+      <div className="pay-sheet" onClick={e => e.stopPropagation()} role="dialog" aria-label={T("Pay", "תשלום")}>
+        <div className="trip-grip" />
+        <button className="plate-btn pay-sheet-close" data-back onClick={leave} aria-label={T("Close", "סגירה")}><CloseGlyph size={18} /></button>
+        <PayScreen start={start} onStarted={() => {}} />
       </div>
     </div>
   );

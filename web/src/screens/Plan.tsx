@@ -306,7 +306,7 @@ export function TripDetail({ trip, resolved: first, from, to, onBack, onPay }: {
       {/* As Moovit shows a way: the map on top with its buttons floating on it, the steps in a sheet over it. */}
       <div className="trip-map">
         <MapView className="map-full" lines={lines} points={[...ends, ...vehicles]} fit={all} fitKey={trip.guid} user={here} />
-        <button className="plate-btn trip-back" onClick={goBack(onBack)} aria-label={T("Back", "חזרה")}><BackGlyph /></button>
+        <button className="plate-btn trip-back" data-back onClick={goBack(onBack)} aria-label={T("Back", "חזרה")}><BackGlyph /></button>
         <button className="plate-btn trip-share" onClick={share} aria-label={T("Share", "שיתוף")}><ShareGlyph /></button>
       </div>
       <div className="scroll trip-sheet">
@@ -522,19 +522,32 @@ function Navigate({ trip, r, live, here, lines, ends, vehicles, from, to, onPay,
   const firstRide = trip.legs.find(l => l.kind === "ride");
   const nextRide = card.kind === "wait" || card.kind === "ride" ? card.ride : card.kind === "walk" ? card.next : card.kind === "start" ? firstRide : undefined;
   const tripLive: TripLive = (() => {
-    const base = { accent: getPrefs().accent, arrive: trip.arr * 1000, step, steps: cards.length };
-    if (!nextRide) return { ...base, phase: card.kind === "arrive" ? "arrive" : "walk", label: T("Arrive in", "הגעה בעוד"), stop: to, line: "", mode: "walk", color: "#9C9CA5", target: trip.arr * 1000, live: false };
+    const base = { accent: getPrefs().accent, depart: trip.dep * 1000, arrive: trip.arr * 1000, step, steps: cards.length };
+    if (!nextRide) return {
+      ...base, phase: card.kind === "arrive" ? "arrive" : "walk",
+      title: card.kind === "arrive" ? T("You've arrived", "הגעתם") : T(`Walk to ${to}`, `הליכה אל ${to}`),
+      detail: T(`Arrival at ${clock(trip.arr)}`, `הגעה ב-${clock(trip.arr)}`),
+      label: T("Arrive in", "הגעה בעוד"), stop: to, line: "", mode: "walk", color: "#9C9CA5", target: trip.arr * 1000, live: false,
+    };
     const type = routeTypeOf(r, nextRide.lineId);
     const numbers = [...new Set(options(nextRide).map(o => r.lines[o.lineId]?.number || o.shortName).filter(Boolean))].slice(0, 2);
     const deps = departuresFor(nextRide, waitBefore(nextRide), live, now);
     const mine = deps.find(d => String(d.tripId) === String(nextRide.tripId)) ?? deps[0];
     const common = { ...base, line: numbers.join(" / "), mode: modeOf(type), color: modeColor(type), live: !!mine && isLive(mine) };
+    // The lines that will do, each with where it goes: "27 ראש העין / 72 תחנת רכבת…".
+    const lineList = options(nextRide).map(o => `${r.lines[o.lineId]?.number || o.shortName} ${r.lines[o.lineId]?.destination ?? ""}`.trim()).slice(0, 3).join(" / ");
+    const from = r.stops[nextRide.fromStop]?.name ?? "", off = r.stops[nextRide.toStop]?.name ?? "";
     if (card.kind === "ride") {
       const late = mine && mine.rtUtc > 0 && mine.staticUtc > 0 ? mine.rtUtc - mine.staticUtc : 0;
-      return { ...common, phase: "ride", label: T("Get off in", "ירידה בעוד"), stop: r.stops[nextRide.toStop]?.name ?? "", target: (nextRide.arr + late) * 1000 };
+      const n = Math.max(1, nextRide.stops.length - 1);
+      return { ...common, phase: "ride", title: T(`Ride ${n} stops to ${off}`, `נסיעה ${n} תחנות עד ${off}`), detail: lineList,
+        label: T("Get off in", "ירידה בעוד"), stop: off, target: (nextRide.arr + late) * 1000 };
     }
-    return { ...common, phase: "wait", label: T(`${numbers[0] ?? ""} at your stop in`, `${numbers[0] ?? ""} בתחנה בעוד`),
-      stop: r.stops[nextRide.fromStop]?.name ?? "", target: (mine ? timeOf(mine) : nextRide.dep) * 1000 };
+    const several = options(nextRide).length > 1;
+    const title = card.kind === "walk" ? T(`Walk to ${from}`, `הליכה אל ${from}`)
+      : several ? T("Wait for one of these options", "המתינו לאחת מהאפשרויות") : T(`Wait for ${numbers[0] ?? ""}`, `המתינו ל-${numbers[0] ?? ""}`);
+    return { ...common, phase: card.kind === "walk" ? "walk" : "wait", title, detail: lineList,
+      label: T(`${numbers[0] ?? ""} at your stop in`, `${numbers[0] ?? ""} בתחנה בעוד`), stop: from, target: (mine ? timeOf(mine) : nextRide.dep) * 1000 };
   })();
   const shown = JSON.stringify(tripLive);
   useEffect(() => { showTrip(to, tripLive); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [shown]);
@@ -558,7 +571,7 @@ function Navigate({ trip, r, live, here, lines, ends, vehicles, from, to, onPay,
   return (
     <div className="screen live-dir">
       <header className="ld-head">
-        <button className="ld-icon" onClick={goBack(onExit)} aria-label={T("Back", "חזרה")}><BackGlyph /></button>
+        <button className="ld-icon" data-back onClick={goBack(onExit)} aria-label={T("Back", "חזרה")}><BackGlyph /></button>
         <div className="ld-title">
           <div>{T("Live Directions", "ניווט חי")}</div>
           <b>{clock(trip.arr)} • {minutesText(left)}</b>

@@ -19,7 +19,7 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
   return (
     <div className="setup screen" key={page}>
       <div className="setup-top">
-        {page > 0 ? <button className="plate-btn" onClick={back} aria-label={T("Back", "חזרה")}><BackGlyph /></button> : <span />}
+        {page > 0 ? <button className="plate-btn" data-back onClick={back} aria-label={T("Back", "חזרה")}><BackGlyph /></button> : <span />}
         <div className="setup-dots">{Array.from({ length: PAGES }, (_, i) => <span key={i} className={i === page ? "on" : ""} />)}</div>
       </div>
       <div className="setup-body">

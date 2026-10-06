@@ -641,3 +641,27 @@ h2 { font-size: 19px; }
 .tab-label { font-size: 12px; font-weight: 700; letter-spacing: -.01em; white-space: nowrap; }
 .tabbar button .glyph { transition: transform .3s var(--spring-pop); }
 .tabbar button:active .glyph { transform: scale(.88); }
+
+/* Paying from a trip: a sheet that rises over it with the payment alone. */
+.pay-sheet-backdrop { position: fixed; inset: 0; z-index: 60; background: var(--scrim); display: flex; align-items: flex-end; animation: fade-in .2s backwards; }
+.pay-sheet {
+  position: relative; width: 100%; height: calc(100% - env(safe-area-inset-top) - 28px); background: var(--bg);
+  border-radius: 24px 24px 0 0; overflow: hidden; box-shadow: 0 -10px 40px var(--shadow); animation: sheet-in .46s var(--spring) backwards;
+  display: flex; flex-direction: column;
+}
+.pay-sheet > .screen { flex: 1; min-height: 0; animation: none; }
+.pay-sheet .header { padding-top: 14px; padding-inline-end: 64px; }
+.pay-sheet .scroll { padding-bottom: calc(env(safe-area-inset-bottom) + 24px); }
+.pay-sheet-close { position: absolute; top: 18px; inset-inline-end: 14px; z-index: 5; width: 40px; height: 40px; }
+.pay-sheet-backdrop.leaving { animation: fade-out .26s both; pointer-events: none; }
+.pay-sheet-backdrop.leaving .pay-sheet { animation: sheet-out .26s var(--ease-in) both; }
+
+/* The arrow a swipe from the edge pulls in. */
+.edge-back {
+  position: fixed; z-index: 100; inset-inline-start: 8px; width: 40px; height: 40px; border-radius: 20px; pointer-events: none;
+  display: grid; place-items: center; opacity: 0; color: var(--text); background: var(--s3); box-shadow: 0 4px 16px var(--shadow);
+  transform: translateY(-50%) translateX(-46px);
+  transition: background-color .15s, color .15s;
+}
+.edge-back.rtl svg { transform: scaleX(-1); }
+.edge-back.ready { background: var(--accent); color: var(--on-accent); }

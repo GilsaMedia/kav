@@ -12,7 +12,7 @@ interface KavNativePlugin {
   download(o: { url: string; name: string; size: number }): Promise<{ size: number }>;
   remove(o: { name: string }): Promise<void>;
   keepAwake(o: { on: boolean }): Promise<void>;
-  liveStart(o: TripLive & { destination: string }): Promise<{ ok: boolean }>;
+  liveStart(o: TripLive & { destination: string }): Promise<{ ok: boolean; why?: string }>;
   liveUpdate(o: TripLive): Promise<{ ok: boolean }>;
   liveEnd(): Promise<void>;
   addListener(event: "downloadProgress", f: (e: { done: number; total: number }) => void): Promise<PluginListenerHandle>;
@@ -135,19 +135,42 @@ export function keepAwake(on: boolean) {
 // ---- the trip on the lock screen and in the Dynamic Island ------------------------------------
 
 export interface TripLive {
-  phase: "wait" | "ride" | "walk" | "arrive"; label: string; stop: string; line: string; mode: string;
-  color: string; accent: string; target: number; arrive: number; live: boolean; step: number; steps: number;
+  phase: "wait" | "ride" | "walk" | "arrive"; title: string; detail: string; label: string; stop: string; line: string; mode: string;
+  color: string; accent: string; target: number; depart: number; arrive: number; live: boolean; step: number; steps: number;
 }
+
+// Why the lock screen did not take the trip, if it didn't: "disabled" (Live Activities are off for Kav in
+// Settings), "ios" (older than 16.2), "missing" (the app was built without them) or iOS's own words.
+export type LiveResult = { ok: boolean; why?: string };
+let lastResult: LiveResult | null = null;
+export const liveResult = () => lastResult;
 
 // Started once per trip, then updated; a phone without Live Activities just says no.
 let started = false;
 export function showTrip(destination: string, t: TripLive) {
   if (!isNative) return;
-  if (!started) { started = true; KavNative.liveStart({ destination, ...t }).catch(() => { started = false; }); }
+  if (!started) {
+    started = true;
+    KavNative.liveStart({ destination, ...t })
+      .then(r => { lastResult = r; if (!r.ok) started = false; })
+      .catch(e => { lastResult = { ok: false, why: /not implemented/i.test(String(e?.message)) ? "missing" : String(e?.message ?? e) }; started = false; });
+  }
   else KavNative.liveUpdate(t).catch(() => {});
 }
 export function endTrip() {
   if (!isNative || !started) return;
   started = false;
   KavNative.liveEnd().catch(() => {});
+}
+
+// From Settings: a two-minute sample trip, to see it on the lock screen and to learn why if it can't be.
+export async function tryTripLive(t: TripLive): Promise<LiveResult> {
+  if (!isNative) return { ok: false, why: "browser" };
+  try {
+    const r = await KavNative.liveStart({ destination: t.stop, ...t });
+    if (r.ok) setTimeout(() => KavNative.liveEnd().catch(() => {}), 120_000);
+    return lastResult = r;
+  } catch (e) {
+    return lastResult = { ok: false, why: /not implemented/i.test(String((e as Error)?.message)) ? "missing" : String((e as Error)?.message ?? e) };
+  }
 }
