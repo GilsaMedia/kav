@@ -1,12 +1,12 @@
 # Builds Kav for iOS as an unsigned IPA, to sign and install with Sideloadly or AltStore.
-# Run it from the Actions tab (Run workflow), or push to the web branch. A Sunday build keeps the
+# Run it from the Actions tab (Run workflow), or push to the ios branch. A Sunday build keeps the
 # timetable inside the app current.
 name: iOS app
 
 on:
   workflow_dispatch:
   push:
-    branches: [web]
+    branches: [ios]
     paths: ["web/**", "tools/export_web_bundle.py", "tools/fetch.sh", ".github/workflows/ios.yml"]
   schedule:
     - cron: "0 3 * * 0"
