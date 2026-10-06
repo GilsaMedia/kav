@@ -8,6 +8,7 @@ import {
 import { Header, LineBadge, Spinner, Note, LiveDot, PlacePicker, SaveFavourite, HERE_NAME, Sheet, Eta, NextTimes, isLate, goBack, liveWhy } from "../ui.tsx";
 import { MapView, type MapLine, type MapPoint } from "../MapView.tsx";
 import { Home, Arrives, type Opened } from "./Home.tsx";
+import { DragSheet } from "../sheet.tsx";
 import { isNative, keepAwake, showTrip, endTrip, type TripLive } from "../native.ts";
 import { SwapGlyph, ClockGlyph, StarGlyph, CloseGlyph, RecentGlyph, WalkGlyph, BikeGlyph, TaxiGlyph, DotGlyph, ShareGlyph, PlayGlyph, ChevronGlyph, BackGlyph, PayGlyph, LocateGlyph, PinGlyph, StationMark, BellGlyph, FlagGlyph, modeOf } from "../icons.tsx";
 
@@ -321,8 +322,9 @@ export function TripDetail({ trip, resolved: first, from, to, onBack, onPay }: {
         <button className="plate-btn trip-back" data-back onClick={goBack(onBack)} aria-label={T("Back", "חזרה")}><BackGlyph /></button>
         <button className="plate-btn trip-share" onClick={share} aria-label={T("Share", "שיתוף")}><ShareGlyph /></button>
       </div>
-      <div className="scroll trip-sheet">
-        <div className="trip-grip" />
+      {/* Dragged up for every step, down to see the map: three resting heights, from all up to the summary. */}
+      <DragSheet className="trip-sheet" start={1} detents={el => { const h = el.offsetHeight; return [0, Math.round(h * 0.42), Math.max(0, h - 200)]; }}>
+        <div className="trip-grip" data-grip data-toggle />
         <div className="trip-sum">
           <div className="grow">
             <div className="trip-sum-time">{clock(trip.dep)} – {clock(trip.arr)}{trip.fare > 0 && <span className="dim"> · {shekels(trip.fare)}</span>}</div>
@@ -335,7 +337,7 @@ export function TripDetail({ trip, resolved: first, from, to, onBack, onPay }: {
         {lockNote && <div className="pad"><Note tone="warn">{lockNote}</Note></div>}
         {live.error && <div className="pad"><Note tone="warn">{T("Live times are unavailable right now.", "זמני אמת אינם זמינים כרגע.")}</Note></div>}
         <Timeline trip={trip} r={r} live={live.data?.arrivals} now={now} from={from} to={to} onPay={onPay} stopAt={stopAt} />
-      </div>
+      </DragSheet>
       <div className="trip-cta">
         <button className="setup-btn lit" onClick={() => setNavigating(true)}><PlayGlyph size={16} />{T("Start", "יציאה לדרך")}</button>
       </div>
@@ -614,9 +616,11 @@ function Navigate({ trip, r, live, here, lines, ends, vehicles, from, to, onPay,
         <MapView className="map-full" lines={lines} points={[...ends, ...vehicles]} user={here} follow={follow ? here : null}
           fit={stepCoords.length ? stepCoords : lines.flatMap(l => l.coords)} fitKey={`nav${trip.guid}:${step}`} onMove={() => setFollow(false)} />
         <button className="plate-btn ld-locate" onClick={() => setFollow(true)} aria-label={T("Recenter", "מרכוז")}><LocateGlyph /></button>
-        <div className="ld-card card" key={step} {...swipe}>
-          <StepCard card={card} trip={trip} r={r} live={live} now={now} here={here} from={from} to={to} endOf={endOf} />
-        </div>
+        {/* Pulled down to its heading to see the map, up again for the whole step; sideways for the next step. */}
+        <DragSheet key={step} className="ld-card card" detents={el => [0, Math.max(0, el.offsetHeight - 64)]}>
+          <div className="sheet-grip" data-grip data-toggle />
+          <div {...swipe}><StepCard card={card} trip={trip} r={r} live={live} now={now} here={here} from={from} to={to} endOf={endOf} /></div>
+        </DragSheet>
       </div>
       <div className="ld-actions">
         <button className="ld-act stop" onClick={onExit}><span className="ld-square" />{T("Stop", "עצירה")}</button>
@@ -634,7 +638,7 @@ function StepCard({ card, trip, r, live, now, here, from, to, endOf }: {
   const [pick, setPick] = useState(0);
   const stop = (id: number) => r.stops[id];
   const far = (l: Leg) => { const e = endOf(l); return here && e ? distanceText(metres(here, e)) : l.meters > 0 ? distanceText(l.meters) : ""; };
-  const head = (text: string, end?: React.ReactNode) => <div className="ld-band"><b>{text}</b>{end}</div>;
+  const head = (text: string, end?: React.ReactNode) => <div className="ld-band" data-grip data-toggle><b>{text}</b>{end}</div>;
 
   if (card.kind === "start") return <>
     {head(T("Start from", "יוצאים מ"))}
