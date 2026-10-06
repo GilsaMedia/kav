@@ -7,6 +7,7 @@ import {
 } from "../core.ts";
 import { Header, LineBadge, Spinner, Note, LiveDot, PlacePicker, SaveFavourite, HERE_NAME, Sheet } from "../ui.tsx";
 import { MapView, type MapLine, type MapPoint } from "../MapView.tsx";
+import { isNative, keepAwake } from "../native.ts";
 
 type When = { kind: "now" } | { kind: "depart" | "arrive"; ms: number };
 
@@ -363,8 +364,9 @@ function Navigate({ trip, r, live, here, lines, ends, vehicles, onExit }: {
   useEffect(() => {
     let lock: { release: () => Promise<void> } | null = null;
     const wl = (navigator as any).wakeLock;
-    wl?.request("screen").then((l: any) => { lock = l; }).catch(() => {});
-    return () => { lock?.release().catch(() => {}); };
+    if (isNative) keepAwake(true);
+    else wl?.request("screen").then((l: any) => { lock = l; }).catch(() => {});
+    return () => { keepAwake(false); lock?.release().catch(() => {}); };
   }, []);
 
   // The step moves on by itself near the end of a walk or a ride.

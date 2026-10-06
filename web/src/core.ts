@@ -1,5 +1,7 @@
 // Shared plumbing: preferences, language, the API, time and place helpers, and the data shapes the server sends.
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { Geolocation } from "@capacitor/geolocation";
+import { isNative, callLocal, LocalError } from "./native.ts";
 
 // ---- preferences (this phone only) -----------------------------------------------------------
 
@@ -55,6 +57,15 @@ export class ApiError extends Error {
 
 export async function api<T = any>(path: string, body?: unknown, signal?: AbortSignal): Promise<T> {
   const sep = path.includes("?") ? "&" : "?";
+  if (isNative) {
+    // In the app the backend runs on the phone itself.
+    try { return await callLocal(`${path}${sep}lang=${prefs.lang}&private=${prefs.privateSearch ? 1 : 0}`, body); }
+    catch (e) {
+      if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
+      if (e instanceof LocalError) throw new ApiError(e.status, e.message, e.title);
+      throw e;
+    }
+  }
   const url = `/api/${path}${sep}lang=${prefs.lang}&private=${prefs.privateSearch ? 1 : 0}`;
   const res = await fetch(url, body === undefined ? { signal } : {
     method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), signal,
@@ -69,7 +80,7 @@ export function failure(e: unknown): string {
     if (e.status === 502 || e.status === 500) return T("Couldn't reach Moovit. Try again in a moment.", "אין חיבור ל-Moovit. נסו שוב בעוד רגע.");
     return e.message;
   }
-  if (e instanceof TypeError) return T("No connection to the Kav server.", "אין חיבור לשרת של Kav.");
+  if (e instanceof TypeError) return isNative ? T("No internet connection.", "אין חיבור לאינטרנט.") : T("No connection to the Kav server.", "אין חיבור לשרת של Kav.");
   return (e as Error)?.message ?? String(e);
 }
 
@@ -112,15 +123,33 @@ let watching = 0;
 let watchId: number | null = null;
 export let locationDenied = false;
 
+let nativeWatch: Promise<string> | null = null;
+
+function fix(lat: number, lon: number, acc: number) {
+  here = [lat, lon]; accuracy = acc; locationDenied = false; hereListeners.forEach(l => l());
+}
+function denied() { locationDenied = true; hereListeners.forEach(l => l()); }
+
 function startWatch() {
+  if (isNative) {
+    // The app asks iOS itself, so the location prompt names Kav rather than a web page.
+    nativeWatch ??= Geolocation.watchPosition({ enableHighAccuracy: true, maximumAge: 5000, timeout: 30000 }, (p, err) => {
+      if (p) fix(p.coords.latitude, p.coords.longitude, p.coords.accuracy);
+      else if (err && /denied|permission/i.test(String((err as Error).message ?? err))) denied();
+    });
+    return;
+  }
   if (watchId != null || !("geolocation" in navigator)) return;
   watchId = navigator.geolocation.watchPosition(
-    p => { here = [p.coords.latitude, p.coords.longitude]; accuracy = p.coords.accuracy; locationDenied = false; hereListeners.forEach(l => l()); },
-    e => { if (e.code === e.PERMISSION_DENIED) { locationDenied = true; hereListeners.forEach(l => l()); } },
+    p => fix(p.coords.latitude, p.coords.longitude, p.coords.accuracy),
+    e => { if (e.code === e.PERMISSION_DENIED) denied(); },
     { enableHighAccuracy: true, maximumAge: 5000, timeout: 30000 },
   );
 }
-function stopWatch() { if (watchId != null) { navigator.geolocation.clearWatch(watchId); watchId = null; } }
+function stopWatch() {
+  if (nativeWatch) { const w = nativeWatch; nativeWatch = null; w.then(id => Geolocation.clearWatch({ id })).catch(() => {}); }
+  if (watchId != null) { navigator.geolocation.clearWatch(watchId); watchId = null; }
+}
 
 // The phone's position while a screen that needs it is open.
 export function useHere(active = true): LatLon | null {
@@ -137,6 +166,13 @@ export const currentAccuracy = () => accuracy;
 
 export function locateOnce(timeout = 12000): Promise<LatLon> {
   if (here) return Promise.resolve(here);
+  if (isNative) {
+    return Geolocation.getCurrentPosition({ enableHighAccuracy: true, timeout, maximumAge: 10000 }).then(
+      p => { fix(p.coords.latitude, p.coords.longitude, p.coords.accuracy); return here!; },
+      e => { throw new Error(/denied|permission/i.test(String(e?.message ?? e))
+        ? T("Location is off for Kav. Allow it in Settings → Kav → Location.", "המיקום כבוי עבור Kav. אפשרו אותו בהגדרות → Kav → מיקום.")
+        : T("Couldn't find your location.", "לא הצלחנו למצוא את המיקום שלכם.")); });
+  }
   return new Promise((resolve, reject) => {
     if (!("geolocation" in navigator)) return reject(new Error(T("Location isn't available.", "המיקום אינו זמין.")));
     navigator.geolocation.getCurrentPosition(

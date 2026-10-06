@@ -1,12 +1,10 @@
-// What the server keeps between runs: the two Moovit users (one for browsing, one for paying) and
-// the timetable-to-Moovit stop ids it has learned. Kept in data/state.json, readable only by its owner.
-import fs from "node:fs";
-import path from "node:path";
+// What the backend keeps between runs: the two Moovit users (one for browsing, one for paying) and
+// the timetable-to-Moovit stop ids it has learned. Saved through the platform: a file on a computer,
+// the app's own storage on a phone.
 import * as M from "./moovit.ts";
 import { Unauthorized } from "./pay.ts";
+import { platform } from "./platform.ts";
 
-const DATA = path.join(import.meta.dirname, "..", "data");
-const FILE = path.join(DATA, "state.json");
 const WEEK_MS = 7 * 86_400_000;
 
 interface Saved {
@@ -16,33 +14,34 @@ interface Saved {
   stopIds?: Record<string, number>;
 }
 
-let saved: Saved = {};
-try { saved = JSON.parse(fs.readFileSync(FILE, "utf8")); } catch { /* first run */ }
-
 // Each install tells Moovit about one phone of its own.
 const PHONES = [
   ["Google oriole", "14_34", "Pixel 6", "AP2A.240905.003"], ["Google panther", "14_34", "Pixel 7", "AP2A.240905.003"],
   ["samsung dm1qxxx", "14_34", "SM-S911B", "UP1A.231005.007"], ["samsung a54xnsxx", "14_34", "SM-A546E", "UP1A.231005.007"],
   ["Xiaomi garnet_global", "14_34", "23124RA7EO", "UKQ1.231003.002"],
 ];
-if (!saved.device) {
-  const [model, os, name, build] = PHONES[Math.floor(Math.random() * PHONES.length)];
-  saved.device = { model, os, agent: `Dalvik/2.1.0 (Linux; U; Android 14; ${name} Build/${build})` };
-}
-Object.assign(M.device, saved.device);
 
-let writing: NodeJS.Timeout | null = null;
+let saved: Saved = {};
+export let stopIds: Record<string, number> = {};
+
+// Reads what was saved. Called once the platform is set.
+export function initState() {
+  try { saved = JSON.parse(platform().load() ?? "{}"); } catch { saved = {}; }
+  if (!saved.device) {
+    const [model, os, name, build] = PHONES[Math.floor(Math.random() * PHONES.length)];
+    saved.device = { model, os, agent: `Dalvik/2.1.0 (Linux; U; Android 14; ${name} Build/${build})` };
+  }
+  Object.assign(M.device, saved.device);
+  saved.stopIds ??= {};
+  stopIds = saved.stopIds;
+  persist();
+}
+
+let writing: ReturnType<typeof setTimeout> | null = null;
 export function persist() {
   if (writing) return;
-  writing = setTimeout(() => {
-    writing = null;
-    fs.mkdirSync(DATA, { recursive: true });
-    const tmp = FILE + ".tmp";
-    fs.writeFileSync(tmp, JSON.stringify(saved), { mode: 0o600 });
-    fs.renameSync(tmp, FILE);
-  }, 200);
+  writing = setTimeout(() => { writing = null; platform().save(JSON.stringify(saved)); }, 200);
 }
-persist();
 
 const fresh = (s?: M.MoovitSession) => !!s && s.accessExpiresUtc - Date.now() / 1000 > 60;
 
@@ -102,6 +101,4 @@ export function signOut() { saved.pay = undefined; saved.paySignedIn = false; pe
 
 // ---- timetable stops to Moovit ids -----------------------------------------------------------
 
-saved.stopIds ??= {};
-export const stopIds = saved.stopIds;
 export function learnStopId(key: string, id: number) { if (stopIds[key] !== id) { stopIds[key] = id; persist(); } }

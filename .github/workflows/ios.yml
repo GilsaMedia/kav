@@ -1,0 +1,60 @@
+# Builds Kav for iOS as an unsigned IPA, to sign and install with Sideloadly or AltStore.
+# Run it from the Actions tab (Run workflow), or push to the web branch. A Sunday build keeps the
+# timetable inside the app current.
+name: iOS app
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [web]
+    paths: ["web/**", "tools/export_web_bundle.py", "tools/fetch.sh", ".github/workflows/ios.yml"]
+  schedule:
+    - cron: "0 3 * * 0"
+
+jobs:
+  ipa:
+    runs-on: macos-15
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install dependencies
+        working-directory: web
+        run: npm ci
+
+      - name: This week's timetable
+        run: |
+          tools/fetch.sh
+          KAV_REGION=il KAV_BBOX=national KAV_OUT="$PWD/web/data" python3 tools/export_web_bundle.py
+
+      - name: Build the app's web part
+        working-directory: web
+        run: npm run build:ios
+
+      - name: Build the app
+        run: |
+          xcodebuild -project web/ios/App/App.xcodeproj -scheme App -configuration Release \
+            -sdk iphoneos -destination 'generic/platform=iOS' -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
+            build > build.log 2>&1 || { grep -n -A3 "error:" build.log | head -80; tail -n 40 build.log; exit 1; }
+          tail -n 5 build.log
+          test -d build/Build/Products/Release-iphoneos/App.app
+
+      - name: Package the IPA
+        run: |
+          mkdir -p Payload
+          cp -R build/Build/Products/Release-iphoneos/App.app Payload/
+          zip -qry Kav.ipa Payload
+          ls -l Kav.ipa
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Kav-ipa
+          path: Kav.ipa
+          retention-days: 30

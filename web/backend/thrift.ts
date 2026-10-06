@@ -1,29 +1,38 @@
 // Thrift binary protocol, as Moovit's app speaks it. Mirrors android/.../data/Thrift.kt.
+// Plain Uint8Array and DataView, so it runs in Node and in the iOS app alike.
 
 export const TType = {
   STOP: 0, BOOL: 2, BYTE: 3, DOUBLE: 4, I16: 6, I32: 8, I64: 10,
   STRING: 11, STRUCT: 12, MAP: 13, SET: 14, LIST: 15,
 } as const;
 
-// Thrift structs decode to field-id keyed maps; i64 values decode to numbers (safe for
-// epoch millis and trip ids up to 2^53).
+// Thrift structs decode to field-id keyed maps.
 export type TStruct = Map<number, any>;
 
-export class TWriter {
-  private chunks: number[] = [];
-  bytes(): Buffer { return Buffer.from(this.chunks); }
+const utf8 = new TextEncoder();
+const fromUtf8 = new TextDecoder();
 
-  byte(v: number): this { this.chunks.push(v & 0xff); return this; }
+export class TWriter {
+  private buf = new Uint8Array(256);
+  private n = 0;
+
+  private room(k: number) {
+    if (this.n + k <= this.buf.length) return;
+    let size = this.buf.length * 2;
+    while (size < this.n + k) size *= 2;
+    const next = new Uint8Array(size); next.set(this.buf.subarray(0, this.n)); this.buf = next;
+  }
+  bytes(): Uint8Array { return this.buf.slice(0, this.n); }
+
+  byte(v: number): this { this.room(1); this.buf[this.n++] = v & 0xff; return this; }
   i16(v: number): this { this.byte(v >>> 8); this.byte(v); return this; }
   i32(v: number): this { for (const s of [24, 16, 8, 0]) this.byte(v >>> s); return this; }
-  i64(v: number | bigint): this {
-    const b = Buffer.alloc(8); b.writeBigInt64BE(BigInt(v));
-    for (const x of b) this.chunks.push(x);
-    return this;
+  i64(v: number | bigint | string): this {
+    this.room(8); new DataView(this.buf.buffer).setBigInt64(this.n, BigInt(v)); this.n += 8; return this;
   }
-  dbl(v: number): this { const b = Buffer.alloc(8); b.writeDoubleBE(v); for (const x of b) this.chunks.push(x); return this; }
-  str(s: string): this { const r = Buffer.from(s, "utf8"); this.i32(r.length); for (const x of r) this.chunks.push(x); return this; }
-  raw(b: Uint8Array): this { for (const x of b) this.chunks.push(x); return this; }
+  dbl(v: number): this { this.room(8); new DataView(this.buf.buffer).setFloat64(this.n, v); this.n += 8; return this; }
+  raw(b: Uint8Array): this { this.room(b.length); this.buf.set(b, this.n); this.n += b.length; return this; }
+  str(s: string): this { const r = utf8.encode(s); this.i32(r.length); return this.raw(r); }
 
   field(type: number, id: number): this { return this.byte(type).i16(id); }
   stop(): this { return this.byte(TType.STOP); }
@@ -49,21 +58,22 @@ export class TWriter {
 
 export class TReader {
   private p = 0;
-  private d: Buffer;
-  constructor(d: Buffer) { this.d = d; }
+  private d: Uint8Array;
+  private v: DataView;
+  constructor(d: Uint8Array) { this.d = d; this.v = new DataView(d.buffer, d.byteOffset, d.byteLength); }
 
   hasMore() { return this.p < this.d.length; }
   byte() { return this.d[this.p++]; }
-  i16() { const v = this.d.readInt16BE(this.p); this.p += 2; return v; }
-  i32() { const v = this.d.readInt32BE(this.p); this.p += 4; return v; }
+  i16() { const v = this.v.getInt16(this.p); this.p += 2; return v; }
+  i32() { const v = this.v.getInt32(this.p); this.p += 4; return v; }
   // A number when it fits; trip ids past 2^53 stay exact as strings.
   i64(): number | string {
-    const v = this.d.readBigInt64BE(this.p); this.p += 8;
+    const v = this.v.getBigInt64(this.p); this.p += 8;
     const n = Number(v);
     return Number.isSafeInteger(n) ? n : v.toString();
   }
-  dbl() { const v = this.d.readDoubleBE(this.p); this.p += 8; return v; }
-  str() { const n = this.i32(); const s = this.d.toString("utf8", this.p, this.p + n); this.p += n; return s; }
+  dbl() { const v = this.v.getFloat64(this.p); this.p += 8; return v; }
+  str() { const n = this.i32(); const s = fromUtf8.decode(this.d.subarray(this.p, this.p + n)); this.p += n; return s; }
 
   readStruct(): TStruct {
     const out: TStruct = new Map();
@@ -102,8 +112,7 @@ export class TReader {
   }
 }
 
-// Moovit's tagged-JSON form of Thrift ({"1":{"str":"x"}}), written back as binary.
-// Mirrors ThriftJson.kt.
+// Moovit's tagged-JSON form of Thrift ({"1":{"str":"x"}}), written back as binary. Mirrors ThriftJson.kt.
 function typeOf(tag: string): number {
   switch (tag) {
     case "tf": return TType.BOOL; case "i8": case "byte": return TType.BYTE; case "i16": return TType.I16;

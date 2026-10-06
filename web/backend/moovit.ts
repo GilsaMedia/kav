@@ -1,7 +1,6 @@
 // Moovit's app API, as Kav's Android app speaks it. Mirrors android/.../data/Moovit.kt.
-import https from "node:https";
-import zlib from "node:zlib";
-import crypto from "node:crypto";
+import { gunzipSync } from "fflate";
+import { platform } from "./platform.ts";
 import { TWriter, TReader, TType, thriftFields, type TStruct } from "./thrift.ts";
 
 export interface MoovitSession {
@@ -38,58 +37,52 @@ function withRev(h: Record<string, string>): Record<string, string> {
   return out;
 }
 
-interface Reply { code: number; raw: Buffer; headers: Record<string, string | string[] | undefined> }
+interface Reply { code: number; raw: Uint8Array; headers: Record<string, string> }
 
-function request(method: string, url: string, headers: Record<string, string>, body?: Buffer, timeoutMs = 25000): Promise<Reply> {
-  return new Promise((resolve, reject) => {
-    const req = https.request(url, { method, headers: body ? { ...headers, "Content-Length": String(body.length) } : headers }, res => {
-      const chunks: Buffer[] = [];
-      res.on("data", c => chunks.push(c));
-      res.on("end", () => {
-        let raw = Buffer.concat(chunks);
-        try { if (res.headers["content-encoding"] === "gzip" && raw.length) raw = zlib.gunzipSync(raw); } catch { /* keep raw */ }
-        resolve({ code: res.statusCode ?? 0, raw, headers: res.headers });
-      });
-      res.on("error", reject);
-    });
-    req.setTimeout(timeoutMs, () => req.destroy(new Error("timeout")));
-    req.on("error", reject);
-    if (body) req.write(body);
-    req.end();
-  });
+const isGzip = (b: Uint8Array) => b.length > 2 && b[0] === 0x1f && b[1] === 0x8b;
+
+async function request(method: string, url: string, headers: Record<string, string>, body?: Uint8Array, timeoutMs = 25000): Promise<Reply> {
+  const r = await platform().request(method, url, headers, body, timeoutMs);
+  let raw = r.body;
+  // Some HTTP stacks unpack gzip themselves; the rest is unpacked here.
+  if (isGzip(raw)) { try { raw = gunzipSync(raw); } catch { /* keep raw */ } }
+  return { code: r.code, raw, headers: r.headers };
 }
 
 function adoptRevision(r: Reply): boolean {
   if (r.code !== 412) return false;
-  const fresh = String(r.headers[REV_HEADER.toLowerCase()] ?? "").trim();
+  const fresh = (r.headers[REV_HEADER.toLowerCase()] ?? "").trim();
   if (!fresh || fresh === metroRev) return false;
   metroRev = fresh;
   return true;
 }
 
-export async function post(base: string, path: string, body: Buffer, headers: Record<string, string>,
-  readMs = 25000, revision = true): Promise<[number, Buffer]> {
+export async function post(base: string, path: string, body: Uint8Array, headers: Record<string, string>,
+  readMs = 25000, revision = true): Promise<[number, Uint8Array]> {
   for (let attempt = 0; attempt < 2; attempt++) {
     const r = await request("POST", base + path, revision ? withRev(headers) : headers, body, readMs);
     if (!revision) {
-      const rev = String(r.headers[REV_HEADER.toLowerCase()] ?? "").trim();
+      const rev = (r.headers[REV_HEADER.toLowerCase()] ?? "").trim();
       if (rev) metroRev = rev;
     }
     if (attempt === 0 && (adoptRevision(r) || r.code === 412)) continue;
     return [r.code, r.raw];
   }
-  return [412, Buffer.alloc(0)];
+  return [412, new Uint8Array(0)];
 }
 
-async function get(base: string, path: string, headers: Record<string, string>): Promise<[number, Buffer]> {
+async function get(base: string, path: string, headers: Record<string, string>): Promise<[number, Uint8Array]> {
   for (let attempt = 0; attempt < 2; attempt++) {
     const url = path.replace(/(metro_revision|metroRevisionNumber)=\d+/, `$1=${metroRev}`);
     const r = await request("GET", base + url, withRev(headers));
     if (attempt === 0 && (adoptRevision(r) || r.code === 412)) continue;
     return [r.code, r.raw];
   }
-  return [412, Buffer.alloc(0)];
+  return [412, new Uint8Array(0)];
 }
+
+const decoder = new TextDecoder();
+const text = (b: Uint8Array) => decoder.decode(b);
 
 // Moovit's JSON carries 64-bit ids; any past 2^53 are kept exact as strings.
 export function parseJson(text: string): any {
@@ -102,9 +95,9 @@ const locale = () => settings.hebrew
   ? new TWriter().strField(1, "he").strField(2, "IL").strField(3, "")
   : new TWriter().strField(1, "en").strField(2, "GB").strField(3, "");
 const dpk = () => new TWriter().strField(1, "").strField(2, "").strField(3, "");
-const hex = (n: number) => crypto.randomBytes(n).toString("hex");
+const hex = (n: number) => Array.from(crypto.getRandomValues(new Uint8Array(n)), b => b.toString(16).padStart(2, "0")).join("");
 
-function createUserBody(lat: number, lon: number): Buffer {
+function createUserBody(lat: number, lon: number): Uint8Array {
   const w = new TWriter();
   w.structField(1, latlon(lat, lon));
   w.structField(3, locale());
@@ -141,7 +134,7 @@ function sessionOf(userKey: string, metroId: number, tokens: any): MoovitSession
 export async function register(lat = NEUTRAL[0], lon = NEUTRAL[1]): Promise<MoovitSession> {
   const [code, raw] = await post(APP4, "UserAuth/CreateUser", createUserBody(lat, lon), userHeaders, 25000, false);
   if (code !== 200) throw new Error(`CreateUser HTTP ${code}`);
-  const rec = parseJson(raw.toString("utf8"))["1"].rec;
+  const rec = parseJson(text(raw))["1"].rec;
   return sessionOf(rec["1"].str, rec["3"].i16, rec["7"].rec["1"].rec);
 }
 
@@ -149,7 +142,7 @@ export async function renew(s: MoovitSession): Promise<MoovitSession> {
   const body = new TWriter().strField(1, s.refreshToken).stop().bytes();
   const [code, raw] = await post(APP4, "UserAuth/RefreshTokens", body, userHeaders, 25000, false);
   if (code !== 200) throw new Error(`RefreshTokens HTTP ${code}`);
-  return sessionOf(s.userKey, s.metroId, parseJson(raw.toString("utf8"))["1"].rec);
+  return sessionOf(s.userKey, s.metroId, parseJson(text(raw))["1"].rec);
 }
 
 let sequence = 0;
@@ -193,7 +186,26 @@ function platformOf(raw?: string): string {
 
 const arrivalsConf = () => new TWriter().boolField(2, false).boolField(3, false).boolField(4, true).boolField(5, true).boolField(6, false);
 
+// Moovit leaves the live times out of an answer for many stops at once, so they're asked five at a time.
 export async function stopArrivals(s: MoovitSession, stopIds: number[]): Promise<{ arrivals: Arrival[]; poll: number }> {
+  const ids = [...new Set(stopIds)];
+  if (ids.length <= 5) return stopArrivalsBatch(s, ids);
+  const batches: number[][] = [];
+  for (let i = 0; i < ids.length; i += 5) batches.push(ids.slice(i, i + 5));
+  const answers = await pool(batches, 6, b => stopArrivalsBatch(s, b));
+  return { arrivals: answers.flatMap(a => a.arrivals), poll: Math.min(...answers.map(a => a.poll)) };
+}
+
+// Now and then Moovit answers with the timetable only. Plenty of departures and not one live time
+// means that happened, so it's asked once more.
+async function stopArrivalsBatch(s: MoovitSession, stopIds: number[]): Promise<{ arrivals: Arrival[]; poll: number }> {
+  const first = await stopArrivalsOnce(s, stopIds);
+  if (first.arrivals.length < 30 || first.arrivals.some(a => a.rtUtc > 0)) return first;
+  const again = await stopArrivalsOnce(s, stopIds).catch(() => first);
+  return again.arrivals.some(a => a.rtUtc > 0) ? again : first;
+}
+
+async function stopArrivalsOnce(s: MoovitSession, stopIds: number[]): Promise<{ arrivals: Arrival[]; poll: number }> {
   if (!stopIds.length) return { arrivals: [], poll: 20 };
   const body = new TWriter().i32ListField(1, stopIds).structField(2, arrivalsConf()).stop().bytes();
   const [code, raw] = await post(APP5, "V4/StopsArrivals", body, authHeaders(s));
@@ -431,7 +443,7 @@ export async function lineCatalogue(s: MoovitSession): Promise<LineGroup[]> {
     [code, raw] = await get(STATIC, `${metroRev}/0/line_search_data_${s.metroId}.gz`, {});
   }
   if (code !== 200) throw new Error(`line catalogue HTTP ${code}`);
-  const data = raw[0] === 0x1f && raw[1] === 0x8b ? zlib.gunzipSync(raw) : raw;
+  const data = isGzip(raw) ? gunzipSync(raw) : raw;
   const r = new TReader(data);
   const out: LineGroup[] = [];
   const n = r.i32();
@@ -490,7 +502,7 @@ const jList = (o: any, k: string): any[] | undefined => jo(o, k)?.lst;
 const items = (arr?: any[]) => (arr ? arr.slice(2).filter(x => x && typeof x === "object") : []);
 const intList = (arr?: any[]) => (arr ? arr.slice(2).filter(x => typeof x === "number") : []) as number[];
 
-function searchBody(query: string, at: LatLon | null, metroId: number, sections = [2, 3, 4, 5]): Buffer {
+function searchBody(query: string, at: LatLon | null, metroId: number, sections = [2, 3, 4, 5]): Uint8Array {
   const w = new TWriter().strField(1, query).i32Field(2, metroId);
   if (at) w.structField(3, latlon(at[0], at[1]));
   return w.i16Field(4, 0).i32ListField(8, sections).structField(9, locale()).stop().bytes();
@@ -501,7 +513,7 @@ export async function searchPlaces(s: MoovitSession, query: string, at: LatLon |
   const [code, raw] = await post(APP5, "V4/CloudSearch/FullSearch", searchBody(query, at, s.metroId), jsonHeaders(s), 4000);
   if (code !== 200) throw new Error(`Search HTTP ${code}`);
   const out: Place[] = [];
-  for (const item of items(jList(parseJson(raw.toString("utf8")), "2"))) {
+  for (const item of items(jList(parseJson(text(raw)), "2"))) {
     const title = jStr(item, "4"); const ll = jRec(item, "6");
     if (!title || !ll) continue;
     out.push({
@@ -519,7 +531,7 @@ export async function searchStopId(s: MoovitSession, name: string, at: LatLon, w
   const [code, raw] = await post(APP5, "V4/CloudSearch/FullSearch", searchBody(name, where, s.metroId, [1]), jsonHeaders(s), 4000);
   if (code !== 200) throw new Error(`Search HTTP ${code}`);
   let best: number | null = null, bestD = 120;
-  for (const item of items(jList(parseJson(raw.toString("utf8")), "2"))) {
+  for (const item of items(jList(parseJson(text(raw)), "2"))) {
     if (jInt(item, "1") !== 1) continue;
     const id = jInt(item, "2"); const ll = jRec(item, "6");
     if (id == null || !ll) continue;
@@ -535,7 +547,7 @@ export async function stopImages(s: MoovitSession, stopId: number): Promise<{ th
   const [code, raw] = await post(APP5, "V5/StopImages/GetStopImages", new TWriter().i32Field(1, stopId).stop().bytes(), jsonHeaders(s), 6000);
   if (code === 204) return { thumb: null, photos: [] };
   if (code !== 200) throw new Error(`Stop images HTTP ${code}`);
-  const root = parseJson(raw.toString("utf8"));
+  const root = parseJson(text(raw));
   return { thumb: jStr(root, "2") ?? null, photos: items(jList(root, "1")).map(i => jStr(i, "1")).filter(Boolean) as string[] };
 }
 
@@ -715,7 +727,7 @@ export class PlannerRefusal extends Error {
 export const TIME_ARRIVAL = 1, TIME_DEPARTURE = 2, TIME_LAST = 3;
 export const ALL_ROUTE_TYPES = [0, 1, 2, 3, 4, 5, 6, 7];
 
-function tripPlanRequest(from: LatLon, to: LatLon, whenMs: number, timeType: number, routeTypes: number[], skipTaxi: boolean): Buffer {
+function tripPlanRequest(from: LatLon, to: LatLon, whenMs: number, timeType: number, routeTypes: number[], skipTaxi: boolean): Uint8Array {
   const locTarget = (lat: number, lon: number, caption: string | null, locType: number, source: number) => {
     const inner = new TWriter();
     if (caption != null) inner.strField(1, caption);
@@ -744,13 +756,13 @@ export async function planItineraries(s: MoovitSession, from: LatLon, to: LatLon
   const body = tripPlanRequest(from, to, whenMs, timeType, routeTypes, skipTaxi);
   const [code, raw] = await post(APP5, "V4/TripPlanner2/Search", body, jsonHeaders(s));
   if (code === 424) {
-    let o: any = null; try { o = parseJson(raw.toString("utf8")); } catch { /* none */ }
+    let o: any = null; try { o = parseJson(text(raw)); } catch { /* none */ }
     throw new PlannerRefusal(jInt(o, "3") ?? 0, jStr(o, "1") ?? "", jStr(o, "2") ?? "");
   }
   if (code !== 200) throw new Error(`TripPlanner HTTP ${code}`);
   const itineraries: Itinerary[] = [];
   let sections: Section[] = [];
-  for (const obj of jsonValues(raw.toString("utf8"))) {
+  for (const obj of jsonValues(text(raw))) {
     const rec = jRec(obj, "1");
     if (rec) { const it = parseItinerary(rec); if (it) itineraries.push(it); }
     const secs = jRec(obj, "2");
@@ -780,7 +792,7 @@ export async function shareItinerary(s: MoovitSession, guid: string, wire: strin
   const body = new TWriter().i32Field(1, 1).strField(2, guid).structField(3, thriftFields(parseJson(wire))).stop().bytes();
   const [code, raw] = await post(APP5, "V5/Sharing/ShareItinerary", body, jsonHeaders(s));
   if (code !== 200) throw new Error(`Share itinerary HTTP ${code}`);
-  const link = jStr(jRec(parseJson(raw.toString("utf8")), "1"), "1");
+  const link = jStr(jRec(parseJson(text(raw)), "1"), "1");
   if (!link) throw new Error("Moovit returned no itinerary link.");
   return link;
 }
@@ -788,7 +800,7 @@ export async function shareItinerary(s: MoovitSession, guid: string, wire: strin
 export async function sharedItinerary(s: MoovitSession, id: string): Promise<{ trip: Itinerary; from: Place | null; to: Place | null }> {
   const [code, raw] = await post(APP5, "V4/TripPlanner2/GetSharedItinerary", new TWriter().strField(1, id).stop().bytes(), jsonHeaders(s));
   if (code !== 200) throw new Error(`Shared itinerary HTTP ${code}`);
-  const root = parseJson(raw.toString("utf8"));
+  const root = parseJson(text(raw));
   const trip = jRec(root, "1") && parseItinerary(jRec(root, "1"));
   if (!trip) throw new Error("This shared trip is no longer available.");
   const request = jRec(root, "2");

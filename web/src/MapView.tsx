@@ -1,18 +1,23 @@
 // The offline map: Protomaps tiles served from the Kav server, styled as the Android app styles them.
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import maplibregl from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
-import { Protocol } from "pmtiles";
-import { usePrefs, type LatLon } from "./core.ts";
+import { Protocol, PMTiles } from "pmtiles";
+import { T, usePrefs, type LatLon } from "./core.ts";
+import { isNative, nativeMapSource, getMapState, subscribeMap, downloadMap, MAP_BYTES } from "./native.ts";
 
-maplibregl.addProtocol("pmtiles", new Protocol().tile);
+const protocol = new Protocol();
+maplibregl.addProtocol("pmtiles", protocol.tile);
+// In the app, the map is a file on the phone; in a browser, the server serves it.
+if (isNative) protocol.add(new PMTiles(nativeMapSource));
+const MAP_SOURCE = () => isNative ? "pmtiles://kav-map" : `pmtiles://${location.origin}/map/israel.pmtiles`;
 
 const styles = new Map<string, Promise<maplibregl.StyleSpecification>>();
 function styleFor(light: boolean) {
   const key = light ? "light" : "black";
   if (!styles.has(key)) styles.set(key, fetch(light ? "/map/style-light.json" : "/map/style.json").then(r => r.text()).then(text => {
     const origin = location.origin;
-    const s = JSON.parse(text.replace("__MAP__", `pmtiles://${origin}/map/israel.pmtiles`).replaceAll("asset://map/", `${origin}/map/`));
+    const s = JSON.parse(text.replace("__MAP__", MAP_SOURCE()).replaceAll("asset://map/", `${origin}/map/`));
     return s;
   }));
   return styles.get(key)!;
@@ -54,7 +59,27 @@ const pointFeatures = (ps: MapPoint[]) => ({
   })),
 });
 
-export function MapView({ lines = [], points = [], fit, fitKey, center, zoom = 14, follow, user, onPoint, onMove, className }: Props) {
+export function MapView(props: Props) {
+  const state = useSyncExternalStore(subscribeMap, getMapState);
+  if (state.k === "ready") return <LiveMap {...props} />;
+  return (
+    <div className={"map map-missing " + (props.className ?? "")}>
+      {state.k === "checking" && <span className="dim">…</span>}
+      {(state.k === "missing" || state.k === "failed") && <>
+        <div>{T("The map lives on your phone, so no tile server sees where you look.", "המפה נשמרת בטלפון, כך ששום שרת מפות לא רואה איפה אתם מסתכלים.")}</div>
+        <button className="btn primary" onClick={downloadMap}>{T(`Download the map (${Math.round(MAP_BYTES / 1e6)} MB, once)`, `הורדת המפה (${Math.round(MAP_BYTES / 1e6)} MB, פעם אחת)`)}</button>
+        {state.k === "failed" && <div className="small" style={{ color: "var(--critical)" }}>{state.why}</div>}
+      </>}
+      {state.k === "downloading" && <>
+        <div>{T("Downloading the map…", "מורידים את המפה…")} {Math.round(state.progress * 100)}%</div>
+        <div className="progress"><div style={{ width: `${state.progress * 100}%` }} /></div>
+        <div className="dim small">{T("Keep Kav open until it finishes.", "השאירו את Kav פתוחה עד שההורדה תסתיים.")}</div>
+      </>}
+    </div>
+  );
+}
+
+function LiveMap({ lines = [], points = [], fit, fitKey, center, zoom = 14, follow, user, onPoint, onMove, className }: Props) {
   const el = useRef<HTMLDivElement>(null);
   const map = useRef<maplibregl.Map | null>(null);
   const [ready, setReady] = useState(false);

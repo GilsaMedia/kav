@@ -1,7 +1,6 @@
 // The national timetable bundle (tools/export_web_bundle.py). Mirrors android/.../data/Net.kt,
 // Search.kt and Board.kt.
-import fs from "node:fs";
-import zlib from "node:zlib";
+import { gunzipSync } from "fflate";
 
 export function metres(la1: number, lo1: number, la2: number, lo2: number): number {
   const r = 6_371_000, toR = Math.PI / 180;
@@ -35,21 +34,23 @@ export class Net {
     return lo;
   }
 
-  static load(path: string): Net {
-    let b = fs.readFileSync(path);
-    if (b[0] === 0x1f && b[1] === 0x8b) b = zlib.gunzipSync(b);
-    const n = new Net(); n.parse(b); return n;
+  // Parsing takes a few seconds on a phone, so it gives way to the screen now and then.
+  static async fromBytes(raw: Uint8Array): Promise<Net> {
+    const b = raw[0] === 0x1f && raw[1] === 0x8b ? gunzipSync(raw) : raw;
+    const n = new Net(); await n.parse(b); return n;
   }
 
-  private parse(b: Buffer) {
+  private async parse(b: Uint8Array) {
+    const pause = () => new Promise(r => setTimeout(r, 0));
+    const utf8 = new TextDecoder();
     let p = 0;
     const vi = () => {
       let sh = 0, r = 0, x: number;
       do { x = b[p++]; r += (x & 0x7f) * 2 ** sh; sh += 7; } while (x & 0x80);
       return r % 2 === 1 ? -(r + 1) / 2 : r / 2;
     };
-    const vs = () => { const n = vi(); const s = b.toString("utf8", p, p + n); p += n; return s; };
-    const magic = b.toString("ascii", 0, 4);
+    const vs = () => { const n = vi(); const s = utf8.decode(b.subarray(p, p + n)); p += n; return s; };
+    const magic = String.fromCharCode(b[0], b[1], b[2], b[3]);
     if (magic !== "KAV5") throw new Error(`bad bundle: ${magic}`);
     p = 4;
     const nS = vi(), nR = vi(), nT = vi(), nC = vi(), nST = vi();
@@ -68,6 +69,7 @@ export class Net {
     this.stStop = new Int32Array(nST); this.stDep = new Int32Array(nST);
     let k = 0;
     for (let t = 0; t < nT; t++) {
+      if (t % 20000 === 0) await pause();
       this.tripRoute[t] = vi(); this.tripDays[t] = vi();
       const n = vi();
       let pt = vi(), ps = 0;
@@ -78,6 +80,7 @@ export class Net {
       }
     }
     this.tripStart[nT] = k;
+    await pause();
     for (let i = 0; i < nS; i++) {
       this.hay.push((this.name[i] + " " + this.cityName(i)).toLowerCase());
       this.words.push(spaced(this.code[i] > 0 ? `${this.name[i]} ${this.code[i]}` : this.name[i]));
@@ -90,6 +93,7 @@ export class Net {
         if (this.stopType[s] < 0 || type < this.stopType[s]) this.stopType[s] = type;
       }
     }
+    await pause();
     this.buildConnections();
   }
 
