@@ -210,7 +210,8 @@ export function PlacePicker({ title, onPick, onClose, allowHere = true }: {
         .finally(() => { if (!ac.signal.aborted) setBusy(false); });
     }, 250);
     return () => { clearTimeout(t); ac.abort(); };
-  }, [q]);
+  // Again once your location is known, so the nearest results come first.
+  }, [q, !!here]);
 
   const pick = (p: Place) => { remember(p); onPick(p); };
   const pickHere = async () => {

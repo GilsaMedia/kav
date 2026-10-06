@@ -521,7 +521,8 @@ export async function searchPlaces(s: MoovitSession, query: string, at: LatLon |
       lat: (jInt(ll, "1") ?? 0) / 1e6, lon: (jInt(ll, "2") ?? 0) / 1e6, type: jInt(item, "1") ?? 5,
     });
   }
-  return out.slice(0, 6);
+  // All of them: the caller puts the nearest first, which may be far down Moovit's own order.
+  return out;
 }
 
 // The timetable keys stops by GTFS code, so Moovit's own id comes from a search.

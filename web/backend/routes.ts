@@ -128,6 +128,10 @@ route("places", async q => {
   let places: M.Place[] = [], error: string | null = null;
   try { places = await M.searchPlaces(await St.browse(), text, standIn(at, q.get("private") !== "0")); }
   catch (e) { error = (e as Error).message; }
+  // The one nearest you first: a Naaman Street in your own town before the one in Tel Aviv. Sorted here,
+  // with your real position, so Moovit still only ever sees the stand-in.
+  if (at) places = places.map(p => ({ p, m: metres(at[0], at[1], p.lat, p.lon) })).sort((a, b) => a.m - b.m).map(x => x.p);
+  places = places.slice(0, 8);
   return { places, stops, error };
 });
 
