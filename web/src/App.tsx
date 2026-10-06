@@ -2,7 +2,7 @@ import { useState, type ComponentType } from "react";
 import { T, usePrefs, getPrefs, setPrefs, type LatLon, type Look } from "./core.ts";
 import { AccentPicker } from "./Accent.tsx";
 import { Onboarding, SupportPrompt } from "./Onboarding.tsx";
-import { Header, stayPut, useLeaving } from "./ui.tsx";
+import { Header, stayPut, useLeaving, liveWhy } from "./ui.tsx";
 import { DirectionsGlyph, StationTabGlyph, LinesTabGlyph, LiveTabGlyph, TicketGlyph, GearGlyph, CloseGlyph } from "./icons.tsx";
 import { isNative, removeMap, getMapState, tryTripLive, type LiveResult } from "./native.ts";
 import { PlanScreen } from "./screens/Plan.tsx";
@@ -118,12 +118,7 @@ function Settings() {
 function LockScreenTest() {
   const [result, setResult] = useState<LiveResult | null>(null);
   const [busy, setBusy] = useState(false);
-  const why = (r: LiveResult) => r.ok ? T("Lock your phone or look at the Dynamic Island: a sample trip is there for two minutes.", "נעלו את הטלפון או הסתכלו על ה-Dynamic Island: נסיעה לדוגמה מוצגת שם לשתי דקות.")
-    : r.why === "disabled" ? T("Live Activities are off for Kav. Turn them on in Settings → Kav → Live Activities.", "Live Activities כבויות עבור Kav. הפעילו אותן ב-הגדרות → Kav → Live Activities.")
-    : r.why === "ios" ? T("This needs iOS 16.2 or newer.", "צריך iOS 16.2 ומעלה.")
-    : r.why === "missing" ? T("This copy of Kav has no lock screen part. Install the newest Kav.ipa.", "בעותק הזה של Kav אין את החלק של מסך הנעילה. התקינו את Kav.ipa החדש.")
-    : r.why === "browser" ? T("Only in the iPhone app.", "רק באפליקציה לאייפון.")
-    : T(`iOS said no: ${r.why}. If you installed with Sideloadly, make sure "Remove app extensions" is off.`, `iOS סירבה: ${r.why}. אם התקנתם עם Sideloadly, ודאו ש-"Remove app extensions" כבוי.`);
+  const why = liveWhy;
   const run = async () => {
     setBusy(true);
     const now = Date.now();

@@ -14,18 +14,19 @@ struct KavLiveBundle: WidgetBundle {
 struct KavTripLive: Widget {
     var body: some WidgetConfiguration {
         ActivityConfiguration(for: KavTripAttributes.self) { ctx in
-            LockScreen(s: ctx.state, destination: ctx.attributes.destination)
+            LockScreen(s: ctx.state, destination: ctx.attributes.destination, stale: ctx.isStale)
                 .activityBackgroundTint(Color(white: 0.12).opacity(0.86))
                 .activitySystemActionForegroundColor(.white)
         } dynamicIsland: { ctx in
             let s = ctx.state
+            let stale = ctx.isStale
             let accent = Color(hex: s.accent)
             return DynamicIsland {
                 DynamicIslandExpandedRegion(.leading) {
                     PhaseBadge(s: s, size: 44).padding(.leading, 4)
                 }
                 DynamicIslandExpandedRegion(.trailing) {
-                    When(s: s, size: 24).padding(.trailing, 4)
+                    When(s: s, size: 24, stale: stale).padding(.trailing, 4)
                 }
                 DynamicIslandExpandedRegion(.center) {
                     VStack(alignment: .leading, spacing: 2) {
@@ -40,7 +41,7 @@ struct KavTripLive: Widget {
             } compactLeading: {
                 PhaseBadge(s: s, size: 26)
             } compactTrailing: {
-                When(s: s, size: 15, compact: true)
+                When(s: s, size: 15, stale: stale, compact: true)
             } minimal: {
                 Image(systemName: phaseSymbol(s)).font(.system(size: 12, weight: .bold)).foregroundColor(accent)
             }
@@ -52,6 +53,7 @@ struct KavTripLive: Widget {
 private struct LockScreen: View {
     let s: KavTripAttributes.ContentState
     let destination: String
+    let stale: Bool
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -68,7 +70,7 @@ private struct LockScreen: View {
                     Text(s.detail).font(.subheadline).foregroundColor(.white.opacity(0.7)).lineLimit(1)
                 }
                 Spacer(minLength: 6)
-                When(s: s, size: 22)
+                When(s: s, size: 22, stale: stale)
             }
         }
         .padding(16)
@@ -99,13 +101,20 @@ private struct Track: View {
 private struct When: View {
     let s: KavTripAttributes.ContentState
     let size: CGFloat
+    var stale = false
     var compact = false
 
     var body: some View {
         let accent = Color(hex: s.accent)
-        HStack(spacing: 3) {
+        HStack(alignment: .firstTextBaseline, spacing: 3) {
             if s.live { Image(systemName: "wifi").rotationEffect(.degrees(45)).font(.system(size: size * 0.62, weight: .bold)) }
-            if s.target > Date() {
+            if !stale && s.minutes > 0 {
+                // "4 min", as Moovit shows it, while Kav keeps the card fresh.
+                Text(String(s.minutes))
+                Text("min").font(.system(size: size * 0.62, weight: .bold, design: .rounded))
+            } else if !stale && s.minutes == 0 && s.target > Date().addingTimeInterval(-60) {
+                Text(s.phase == "wait" || s.phase == "walk" ? "Now" : "0").font(.system(size: size, weight: .bold, design: .rounded))
+            } else if s.target > Date() {
                 Text(timerInterval: Date()...s.target, countsDown: true)
                     .monospacedDigit()
                     .frame(maxWidth: compact ? 50 : 96, alignment: .trailing)

@@ -1,4 +1,5 @@
 import ActivityKit
+import CoreLocation
 import Foundation
 import UIKit
 import Capacitor
@@ -143,8 +144,12 @@ public class KavNativePlugin: CAPPlugin, CAPBridgedPlugin, URLSessionDownloadDel
             label: call.getString("label") ?? "", stop: call.getString("stop") ?? "",
             line: call.getString("line") ?? "", mode: call.getString("mode") ?? "bus", color: call.getString("color") ?? "#3E9B5C",
             accent: call.getString("accent") ?? "#9ABEFF", target: date("target"), depart: date("depart"), arrive: date("arrive"),
-            live: call.getBool("live") ?? false, step: call.getInt("step") ?? 0, steps: call.getInt("steps") ?? 1)
+            live: call.getBool("live") ?? false, step: call.getInt("step") ?? 0, steps: call.getInt("steps") ?? 1, minutes: 0)
     }
+
+    // Keeps the card in whole minutes, as Moovit's: Kav stays awake in the background on location, as
+    // navigation does, and counts the minutes again every 20 seconds.
+    private var keeper: AnyObject?
 
     // liveStart({ destination, ...state }): one trip at a time, so any earlier one ends first. Says why not
     // when it can't, so the app can tell the person.
@@ -153,11 +158,14 @@ public class KavNativePlugin: CAPPlugin, CAPBridgedPlugin, URLSessionDownloadDel
         guard ActivityAuthorizationInfo().areActivitiesEnabled else { return call.resolve(["ok": false, "why": "disabled"]) }
         let state = Self.tripState(call)
         let attributes = KavTripAttributes(destination: call.getString("destination") ?? "")
-        Task {
+        Task { @MainActor in
             for a in Activity<KavTripAttributes>.activities { await a.end(nil, dismissalPolicy: .immediate) }
             do {
-                _ = try Activity.request(attributes: attributes,
-                    content: ActivityContent(state: state, staleDate: state.arrive.addingTimeInterval(30 * 60)), pushType: nil)
+                let activity = try Activity.request(attributes: attributes, content: TripKeeper.content(state), pushType: nil)
+                (self.keeper as? TripKeeper)?.stop()
+                let k = TripKeeper(activity: activity, state: state)
+                self.keeper = k
+                k.start()
                 call.resolve(["ok": true])
             } catch { call.resolve(["ok": false, "why": error.localizedDescription]) }
         }
@@ -166,17 +174,17 @@ public class KavNativePlugin: CAPPlugin, CAPBridgedPlugin, URLSessionDownloadDel
     @objc func liveUpdate(_ call: CAPPluginCall) {
         guard #available(iOS 16.2, *) else { return call.resolve(["ok": false]) }
         let state = Self.tripState(call)
-        Task {
-            for a in Activity<KavTripAttributes>.activities {
-                await a.update(ActivityContent(state: state, staleDate: state.arrive.addingTimeInterval(30 * 60)))
-            }
+        Task { @MainActor in
+            if let k = self.keeper as? TripKeeper { k.state = state; await k.push() }
             call.resolve(["ok": true])
         }
     }
 
     @objc func liveEnd(_ call: CAPPluginCall) {
         guard #available(iOS 16.2, *) else { return call.resolve() }
-        Task {
+        Task { @MainActor in
+            (self.keeper as? TripKeeper)?.stop()
+            self.keeper = nil
             for a in Activity<KavTripAttributes>.activities { await a.end(nil, dismissalPolicy: .immediate) }
             call.resolve()
         }
@@ -193,4 +201,57 @@ class KavViewController: CAPBridgeViewController {
     override open func capacitorDidLoad() {
         bridge?.registerPluginInstance(KavNativePlugin())
     }
+}
+
+// One trip on the lock screen: its card, kept in whole minutes while Kav is in the background.
+@available(iOS 16.2, *)
+@MainActor
+final class TripKeeper: NSObject, CLLocationManagerDelegate {
+    let activity: Activity<KavTripAttributes>
+    var state: KavTripAttributes.ContentState
+    private var timer: Timer?
+    private let location = CLLocationManager()
+
+    init(activity: Activity<KavTripAttributes>, state: KavTripAttributes.ContentState) {
+        self.activity = activity
+        self.state = state
+        super.init()
+    }
+
+    // Whole minutes to the moment, rounded up as Moovit rounds them; stale soon after, so if Kav is stopped
+    // the card falls back to the clock iOS runs by itself instead of showing old minutes.
+    static func content(_ s: KavTripAttributes.ContentState) -> ActivityContent<KavTripAttributes.ContentState> {
+        var s = s
+        s.minutes = max(0, Int((s.target.timeIntervalSinceNow / 60).rounded(.up)))
+        return ActivityContent(state: s, staleDate: Date().addingTimeInterval(75))
+    }
+
+    func start() {
+        timer = Timer.scheduledTimer(withTimeInterval: 20, repeats: true) { [weak self] _ in
+            Task { @MainActor in await self?.push() }
+        }
+        // Location in the background is what keeps a navigating app running, and the timer with it.
+        location.delegate = self
+        location.desiredAccuracy = kCLLocationAccuracyHundredMeters
+        location.distanceFilter = 50
+        location.pausesLocationUpdatesAutomatically = false
+        if Bundle.main.object(forInfoDictionaryKey: "UIBackgroundModes") as? [String] != nil {
+            location.allowsBackgroundLocationUpdates = true
+            location.showsBackgroundLocationIndicator = true
+        }
+        location.startUpdatingLocation()
+    }
+
+    func push() async {
+        await activity.update(Self.content(state))
+    }
+
+    func stop() {
+        timer?.invalidate()
+        timer = nil
+        location.stopUpdatingLocation()
+    }
+
+    nonisolated func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {}
+    nonisolated func locationManager(_ manager: CLLocationManager, didFailWithError error: Error) {}
 }

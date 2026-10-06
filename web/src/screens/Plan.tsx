@@ -5,7 +5,7 @@ import {
   timeOf, isLive, isCancelled, routeTypeOf, options, modeColor, modeName, MODE_FILTERS, mergeResolved, emptyResolved,
   type Place, type Itinerary, type Leg, type Resolved, type Arrival, type LatLon, type Departure,
 } from "../core.ts";
-import { Header, LineBadge, Spinner, Note, LiveDot, PlacePicker, SaveFavourite, HERE_NAME, Sheet, Eta, NextTimes, isLate, goBack } from "../ui.tsx";
+import { Header, LineBadge, Spinner, Note, LiveDot, PlacePicker, SaveFavourite, HERE_NAME, Sheet, Eta, NextTimes, isLate, goBack, liveWhy } from "../ui.tsx";
 import { MapView, type MapLine, type MapPoint } from "../MapView.tsx";
 import { Home, Arrives, type Opened } from "./Home.tsx";
 import { isNative, keepAwake, showTrip, endTrip, type TripLive } from "../native.ts";
@@ -296,6 +296,18 @@ export function TripDetail({ trip, resolved: first, from, to, onBack, onPay }: {
     } catch (e) { if ((e as Error).name !== "AbortError") setShareNote(failure(e)); }
   };
 
+  // On the lock screen and in the Dynamic Island from the moment a way is open; Start takes it on from there.
+  const allCards = useMemo(() => cardsOf(trip), [trip]);
+  const preview = tripLiveOf(trip, r, live.data?.arrivals, now, to, allCards, 0);
+  const previewKey = JSON.stringify(preview);
+  const [lockNote, setLockNote] = useState<string | null>(null);
+  useEffect(() => {
+    if (navigating) return;
+    showTrip(to, preview).then(res => setLockNote(res && !res.ok ? liveWhy(res) : null));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [previewKey, navigating]);
+  useEffect(() => () => endTrip(), []);
+
   if (navigating) return <Navigate trip={trip} r={r} live={live.data?.arrivals} here={here} lines={lines} ends={ends} vehicles={vehicles}
     from={from} to={to} onPay={onPay} onShare={share} onExit={() => setNavigating(false)} />;
 
@@ -320,6 +332,7 @@ export function TripDetail({ trip, resolved: first, from, to, onBack, onPay }: {
           <span className="eta it-total">{mins < 60 ? <><b>{mins}</b><small>{T("min", "דק׳")}</small></> : <><b>{Math.floor(mins / 60)}:{String(mins % 60).padStart(2, "0")}</b><small>{T("hours", "שעות")}</small></>}</span>
         </div>
         {shareNote && <div className="pad"><Note>{shareNote}</Note></div>}
+        {lockNote && <div className="pad"><Note tone="warn">{lockNote}</Note></div>}
         {live.error && <div className="pad"><Note tone="warn">{T("Live times are unavailable right now.", "זמני אמת אינם זמינים כרגע.")}</Note></div>}
         <Timeline trip={trip} r={r} live={live.data?.arrivals} now={now} from={from} to={to} onPay={onPay} stopAt={stopAt} />
       </div>
@@ -463,6 +476,46 @@ function cardsOf(trip: Itinerary): Card[] {
   return out;
 }
 
+// What the lock screen and the Dynamic Island show for a step of the trip: the next thing to wait for,
+// counted down. Before boarding, the vehicle at your stop; on it, getting off (moved by its delay); after
+// the last ride, arriving.
+function tripLiveOf(trip: Itinerary, r: Resolved, live: Arrival[] | undefined, now: number, to: string, cards: Card[], step: number): TripLive {
+  const card = cards[step] ?? cards[0];
+  const waitBefore = (l: Leg) => { const k = trip.legs.indexOf(l); return trip.legs[k - 1]?.kind === "wait" ? trip.legs[k - 1] : undefined; };
+  const firstRide = trip.legs.find(l => l.kind === "ride");
+  const nextRide = card.kind === "wait" || card.kind === "ride" ? card.ride : card.kind === "walk" ? card.next : card.kind === "start" ? firstRide : undefined;
+  // Setting off with a walk first reads as the walk.
+  const walking = card.kind === "walk" || (card.kind === "start" && trip.legs[0]?.kind === "walk");
+  return (() => {
+    const base = { accent: getPrefs().accent, depart: trip.dep * 1000, arrive: trip.arr * 1000, step, steps: cards.length };
+    if (!nextRide) return {
+      ...base, phase: card.kind === "arrive" ? "arrive" : "walk",
+      title: card.kind === "arrive" ? T("You've arrived", "הגעתם") : T(`Walk to ${to}`, `הליכה אל ${to}`),
+      detail: T(`Arrival at ${clock(trip.arr)}`, `הגעה ב-${clock(trip.arr)}`),
+      label: T("Arrive in", "הגעה בעוד"), stop: to, line: "", mode: "walk", color: "#9C9CA5", target: trip.arr * 1000, live: false,
+    };
+    const type = routeTypeOf(r, nextRide.lineId);
+    const numbers = [...new Set(options(nextRide).map(o => r.lines[o.lineId]?.number || o.shortName).filter(Boolean))].slice(0, 2);
+    const deps = departuresFor(nextRide, waitBefore(nextRide), live, now);
+    const mine = deps.find(d => String(d.tripId) === String(nextRide.tripId)) ?? deps[0];
+    const common = { ...base, line: numbers.join(" / "), mode: modeOf(type), color: modeColor(type), live: !!mine && isLive(mine) };
+    // The lines that will do, each with where it goes: "27 ראש העין / 72 תחנת רכבת…".
+    const lineList = options(nextRide).map(o => `${r.lines[o.lineId]?.number || o.shortName} ${r.lines[o.lineId]?.destination ?? ""}`.trim()).slice(0, 3).join(" / ");
+    const from = r.stops[nextRide.fromStop]?.name ?? "", off = r.stops[nextRide.toStop]?.name ?? "";
+    if (card.kind === "ride") {
+      const late = mine && mine.rtUtc > 0 && mine.staticUtc > 0 ? mine.rtUtc - mine.staticUtc : 0;
+      const n = Math.max(1, nextRide.stops.length - 1);
+      return { ...common, phase: "ride", title: T(`Ride ${n} stops to ${off}`, `נסיעה ${n} תחנות עד ${off}`), detail: lineList,
+        label: T("Get off in", "ירידה בעוד"), stop: off, target: (nextRide.arr + late) * 1000 };
+    }
+    const several = options(nextRide).length > 1;
+    const title = walking ? T(`Walk to ${from}`, `הליכה אל ${from}`)
+      : several ? T("Wait for one of these options", "המתינו לאחת מהאפשרויות") : T(`Wait for ${numbers[0] ?? ""}`, `המתינו ל-${numbers[0] ?? ""}`);
+    return { ...common, phase: walking ? "walk" : "wait", title, detail: lineList,
+      label: T(`${numbers[0] ?? ""} at your stop in`, `${numbers[0] ?? ""} בתחנה בעוד`), stop: from, target: (mine ? timeOf(mine) : nextRide.dep) * 1000 };
+  })();
+}
+
 function Navigate({ trip, r, live, here, lines, ends, vehicles, from, to, onPay, onShare, onExit }: {
   trip: Itinerary; r: Resolved; live?: Arrival[]; here: LatLon | null; lines: MapLine[]; ends: MapPoint[]; vehicles: MapPoint[];
   from: string; to: string; onPay: (at?: LatLon, routeType?: number) => void; onShare: () => void; onExit: () => void;
@@ -518,37 +571,7 @@ function Navigate({ trip, r, live, here, lines, ends, vehicles, from, to, onPay,
   // The lock screen and the Dynamic Island: the next thing to wait for, counted down by the system so it
   // runs on with Kav in the background. Before boarding, the vehicle at your stop; on it, getting off
   // (moved by its delay); after the last ride, arriving.
-  const waitBefore = (l: Leg) => { const k = trip.legs.indexOf(l); return trip.legs[k - 1]?.kind === "wait" ? trip.legs[k - 1] : undefined; };
-  const firstRide = trip.legs.find(l => l.kind === "ride");
-  const nextRide = card.kind === "wait" || card.kind === "ride" ? card.ride : card.kind === "walk" ? card.next : card.kind === "start" ? firstRide : undefined;
-  const tripLive: TripLive = (() => {
-    const base = { accent: getPrefs().accent, depart: trip.dep * 1000, arrive: trip.arr * 1000, step, steps: cards.length };
-    if (!nextRide) return {
-      ...base, phase: card.kind === "arrive" ? "arrive" : "walk",
-      title: card.kind === "arrive" ? T("You've arrived", "הגעתם") : T(`Walk to ${to}`, `הליכה אל ${to}`),
-      detail: T(`Arrival at ${clock(trip.arr)}`, `הגעה ב-${clock(trip.arr)}`),
-      label: T("Arrive in", "הגעה בעוד"), stop: to, line: "", mode: "walk", color: "#9C9CA5", target: trip.arr * 1000, live: false,
-    };
-    const type = routeTypeOf(r, nextRide.lineId);
-    const numbers = [...new Set(options(nextRide).map(o => r.lines[o.lineId]?.number || o.shortName).filter(Boolean))].slice(0, 2);
-    const deps = departuresFor(nextRide, waitBefore(nextRide), live, now);
-    const mine = deps.find(d => String(d.tripId) === String(nextRide.tripId)) ?? deps[0];
-    const common = { ...base, line: numbers.join(" / "), mode: modeOf(type), color: modeColor(type), live: !!mine && isLive(mine) };
-    // The lines that will do, each with where it goes: "27 ראש העין / 72 תחנת רכבת…".
-    const lineList = options(nextRide).map(o => `${r.lines[o.lineId]?.number || o.shortName} ${r.lines[o.lineId]?.destination ?? ""}`.trim()).slice(0, 3).join(" / ");
-    const from = r.stops[nextRide.fromStop]?.name ?? "", off = r.stops[nextRide.toStop]?.name ?? "";
-    if (card.kind === "ride") {
-      const late = mine && mine.rtUtc > 0 && mine.staticUtc > 0 ? mine.rtUtc - mine.staticUtc : 0;
-      const n = Math.max(1, nextRide.stops.length - 1);
-      return { ...common, phase: "ride", title: T(`Ride ${n} stops to ${off}`, `נסיעה ${n} תחנות עד ${off}`), detail: lineList,
-        label: T("Get off in", "ירידה בעוד"), stop: off, target: (nextRide.arr + late) * 1000 };
-    }
-    const several = options(nextRide).length > 1;
-    const title = card.kind === "walk" ? T(`Walk to ${from}`, `הליכה אל ${from}`)
-      : several ? T("Wait for one of these options", "המתינו לאחת מהאפשרויות") : T(`Wait for ${numbers[0] ?? ""}`, `המתינו ל-${numbers[0] ?? ""}`);
-    return { ...common, phase: card.kind === "walk" ? "walk" : "wait", title, detail: lineList,
-      label: T(`${numbers[0] ?? ""} at your stop in`, `${numbers[0] ?? ""} בתחנה בעוד`), stop: from, target: (mine ? timeOf(mine) : nextRide.dep) * 1000 };
-  })();
+  const tripLive = tripLiveOf(trip, r, live, now, to, cards, step);
   const shown = JSON.stringify(tripLive);
   useEffect(() => { showTrip(to, tripLive); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [shown]);
   useEffect(() => () => endTrip(), []);

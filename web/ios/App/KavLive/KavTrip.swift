@@ -28,6 +28,8 @@ struct KavTripAttributes: ActivityAttributes {
         var live: Bool
         var step: Int
         var steps: Int
+        // Whole minutes left, counted again by the app every 20 seconds while it runs.
+        var minutes: Int
     }
 
     var destination: String

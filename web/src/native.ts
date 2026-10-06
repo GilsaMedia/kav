@@ -147,15 +147,16 @@ export const liveResult = () => lastResult;
 
 // Started once per trip, then updated; a phone without Live Activities just says no.
 let started = false;
-export function showTrip(destination: string, t: TripLive) {
-  if (!isNative) return;
-  if (!started) {
-    started = true;
-    KavNative.liveStart({ destination, ...t })
-      .then(r => { lastResult = r; if (!r.ok) started = false; })
-      .catch(e => { lastResult = { ok: false, why: /not implemented/i.test(String(e?.message)) ? "missing" : String(e?.message ?? e) }; started = false; });
-  }
-  else KavNative.liveUpdate(t).catch(() => {});
+export function showTrip(destination: string, t: TripLive): Promise<LiveResult | null> {
+  if (!isNative) return Promise.resolve(null);
+  if (started) { KavNative.liveUpdate(t).catch(() => {}); return Promise.resolve(lastResult); }
+  started = true;
+  return KavNative.liveStart({ destination, ...t })
+    .then(r => { lastResult = r; if (!r.ok) started = false; return r; })
+    .catch(e => {
+      started = false;
+      return lastResult = { ok: false, why: /not implemented/i.test(String(e?.message)) ? "missing" : String(e?.message ?? e) };
+    });
 }
 export function endTrip() {
   if (!isNative || !started) return;
