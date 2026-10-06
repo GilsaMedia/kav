@@ -202,3 +202,16 @@ export const FromToGlyph = (p: Props) => <svg viewBox="0 0 20 60" width={(p.size
   <circle cx={10} cy={7} r={4.5} /><circle cx={10} cy={53} r={4.5} fill="currentColor" />
   <g fill="currentColor" stroke="none">{[19, 27, 35, 43].map(y => <circle key={y} cx={10} cy={y} r={1.6} />)}</g>
 </svg>;
+
+export const BellGlyph = ({ off, ...p }: Props & { off?: boolean }) => <Glyph {...p} w={8}>
+  <path d="M26 70V46a24 24 0 0 1 48 0v24l8 8H18z" /><path d="M42 86a8 8 0 0 0 16 0" />
+  {off && L(14, 14, 86, 86)}
+</Glyph>;
+
+// The chequered flag at the end of the way.
+export const FlagGlyph = (p: Props) => <Glyph {...p} w={7}>
+  {L(20, 10, 20, 92)}
+  <path d="M20 14h60v40H20z" />
+  <g fill="currentColor" stroke="none"><rect x={20} y={14} width={15} height={10} /><rect x={50} y={14} width={15} height={10} /><rect x={35} y={24} width={15} height={10} />
+    <rect x={65} y={24} width={15} height={10} /><rect x={20} y={34} width={15} height={10} /><rect x={50} y={34} width={15} height={10} /><rect x={35} y={44} width={15} height={10} /><rect x={65} y={44} width={15} height={10} /></g>
+</Glyph>;

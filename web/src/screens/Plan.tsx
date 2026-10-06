@@ -5,11 +5,11 @@ import {
   timeOf, isLive, isCancelled, routeTypeOf, options, modeColor, modeName, MODE_FILTERS, mergeResolved, emptyResolved,
   type Place, type Itinerary, type Leg, type Resolved, type Arrival, type LatLon, type Departure,
 } from "../core.ts";
-import { Header, LineBadge, Spinner, Note, LiveDot, PlacePicker, SaveFavourite, HERE_NAME, Sheet, Eta, isLate } from "../ui.tsx";
+import { Header, LineBadge, Spinner, Note, LiveDot, PlacePicker, SaveFavourite, HERE_NAME, Sheet, Eta, NextTimes, isLate, goBack } from "../ui.tsx";
 import { MapView, type MapLine, type MapPoint } from "../MapView.tsx";
 import { Home, Arrives, type Opened } from "./Home.tsx";
 import { isNative, keepAwake } from "../native.ts";
-import { SwapGlyph, ClockGlyph, StarGlyph, CloseGlyph, RecentGlyph, WalkGlyph, BikeGlyph, TaxiGlyph, DotGlyph, ShareGlyph, PlayGlyph, ChevronGlyph } from "../icons.tsx";
+import { SwapGlyph, ClockGlyph, StarGlyph, CloseGlyph, RecentGlyph, WalkGlyph, BikeGlyph, TaxiGlyph, DotGlyph, ShareGlyph, PlayGlyph, ChevronGlyph, BackGlyph, PayGlyph, LocateGlyph, PinGlyph, StationMark, BellGlyph, FlagGlyph } from "../icons.tsx";
 
 type When = { kind: "now" } | { kind: "depart" | "arrive"; ms: number };
 
@@ -187,6 +187,24 @@ function legLabel(l: Leg, r: Resolved) {
   return line?.number || l.shortName || "";
 }
 
+function LegChain({ it, r }: { it: Itinerary; r: Resolved }) {
+  // Only what moves you: waits and zero-length steps say nothing here.
+  const legs = it.legs.filter(l => l.kind === "ride" || l.kind === "taxi" || l.kind === "bike" || (l.kind === "walk" && l.arr - l.dep >= 30));
+  return (
+    <div className="it-legs">
+      {legs.map((l, i) => (
+        <span key={i} className="it-leg">
+          {i > 0 && <span className="sep">›</span>}
+          {l.kind === "ride" ? options(l).slice(0, 3).map((o, k) => <LineBadge key={k} number={legLabel(o, r)} type={routeTypeOf(r, o.lineId)} small />)
+            : l.kind === "walk" ? <span className="walk"><WalkGlyph size={13} />{Math.max(1, Math.round((l.arr - l.dep) / 60))}</span>
+            : l.kind === "taxi" ? <LineBadge number={T("Taxi", "מונית")} type={715} small />
+            : <BikeGlyph size={16} />}
+        </span>
+      ))}
+    </div>
+  );
+}
+
 function ItineraryCard({ it, resolved, onClick }: { it: Itinerary; resolved: Resolved; onClick: () => void }) {
   const now = useNow(15000);
   const b = boardingOf(it, resolved, now);
@@ -195,17 +213,7 @@ function ItineraryCard({ it, resolved, onClick }: { it: Itinerary; resolved: Res
     // As Moovit lays a result out: the way there on the left, the whole trip in minutes large on the right.
     <button className="card it-card" onClick={onClick}>
       <div className="it-body">
-      <div className="it-legs">
-        {it.legs.filter(l => l.kind !== "wait").map((l, i) => (
-          <span key={i} className="it-leg">
-            {i > 0 && <span className="sep">›</span>}
-            {l.kind === "ride" ? options(l).slice(0, 3).map((o, k) => <LineBadge key={k} number={legLabel(o, resolved)} type={routeTypeOf(resolved, o.lineId)} small />)
-              : l.kind === "walk" ? <span className="walk"><WalkGlyph size={13} />{l.arr > l.dep ? Math.max(1, Math.round((l.arr - l.dep) / 60)) : ""}</span>
-              : l.kind === "taxi" ? <LineBadge number={T("Taxi", "מונית")} type={715} small />
-              : l.kind === "bike" ? <BikeGlyph size={16} /> : <span className="dim">•</span>}
-          </span>
-        ))}
-      </div>
+      <LegChain it={it} r={resolved} />
       <div className="it-time">{clock(it.dep)} – {clock(it.arr)}{it.fare > 0 && <span className="dim"> · {shekels(it.fare)}</span>}</div>
       {/* The first vehicle: when it is at the stop you get on at, and how long you ride it. */}
       {b && <div className="it-foot">
@@ -257,7 +265,7 @@ function DepTime({ d, now }: { d: Departure; now: number }) {
 
 const PAYABLE: Record<number, number> = { 3: 3, 0: 0, 2: 2, 7: 5, 5: 5 }; // GTFS route type -> Moovit pay mode
 
-function TripDetail({ trip, resolved: first, from, to, onBack, onPay }: {
+export function TripDetail({ trip, resolved: first, from, to, onBack, onPay }: {
   trip: Itinerary; resolved: Resolved; from: string; to: string; onBack: () => void; onPay: (at?: LatLon, routeType?: number) => void;
 }) {
   const live = useTripLive(trip);
@@ -288,97 +296,186 @@ function TripDetail({ trip, resolved: first, from, to, onBack, onPay }: {
     } catch (e) { if ((e as Error).name !== "AbortError") setShareNote(failure(e)); }
   };
 
-  if (navigating) return <Navigate trip={trip} r={r} live={live.data?.arrivals} here={here} lines={lines} ends={ends} vehicles={vehicles} onExit={() => setNavigating(false)} />;
+  if (navigating) return <Navigate trip={trip} r={r} live={live.data?.arrivals} here={here} lines={lines} ends={ends} vehicles={vehicles}
+    from={from} to={to} onPay={onPay} onShare={share} onExit={() => setNavigating(false)} />;
 
+  const mins = Math.max(1, Math.round((trip.arr - trip.dep) / 60));
+  const b = boardingOf(trip, r, now);
   return (
-    <div className="screen">
-      <Header title={`${clock(trip.dep)} – ${clock(trip.arr)}`} sub={`${minutesText(Math.round((trip.arr - trip.dep) / 60))}${trip.fare > 0 ? " · " + shekels(trip.fare) : ""}`}
-        back={onBack} right={<button className="plate-btn" onClick={share} aria-label={T("Share", "שיתוף")}><ShareGlyph /></button>} />
-      <MapView className="map-half" lines={lines} points={[...ends, ...vehicles]} fit={all} fitKey={trip.guid} user={here} />
-      <div className="scroll">
-        <div className="pad stack">
-          {shareNote && <Note>{shareNote}</Note>}
-          <button className="btn primary" onClick={() => setNavigating(true)}><PlayGlyph size={14} />{T("Start", "יציאה לדרך")}</button>
-          <ol className="legs">
-            {legs.map((l, i) => {
-              if (l.kind === "wait") return null;
-              const prev = legs[i - 1]?.kind === "wait" ? legs[i - 1] : undefined;
-              return <LegRow key={i} leg={l} wait={prev} r={r} live={live.data?.arrivals} now={now} last={i === legs.length - 1} dest={to} onPay={onPay} stopAt={stopAt} />;
-            })}
-          </ol>
-          {live.error && <Note tone="warn">{T("Live times are unavailable right now.", "זמני אמת אינם זמינים כרגע.")}</Note>}
+    <div className="screen trip">
+      {/* As Moovit shows a way: the map on top with its buttons floating on it, the steps in a sheet over it. */}
+      <div className="trip-map">
+        <MapView className="map-full" lines={lines} points={[...ends, ...vehicles]} fit={all} fitKey={trip.guid} user={here} />
+        <button className="plate-btn trip-back" onClick={goBack(onBack)} aria-label={T("Back", "חזרה")}><BackGlyph /></button>
+        <button className="plate-btn trip-share" onClick={share} aria-label={T("Share", "שיתוף")}><ShareGlyph /></button>
+      </div>
+      <div className="scroll trip-sheet">
+        <div className="trip-grip" />
+        <div className="trip-sum">
+          <div className="grow">
+            <div className="trip-sum-time">{clock(trip.dep)} – {clock(trip.arr)}{trip.fare > 0 && <span className="dim"> · {shekels(trip.fare)}</span>}</div>
+            <LegChain it={trip} r={r} />
+            {b && <Arrives b={b} now={now} short />}
+          </div>
+          <span className="eta it-total">{mins < 60 ? <><b>{mins}</b><small>{T("min", "דק׳")}</small></> : <><b>{Math.floor(mins / 60)}:{String(mins % 60).padStart(2, "0")}</b><small>{T("hours", "שעות")}</small></>}</span>
         </div>
+        {shareNote && <div className="pad"><Note>{shareNote}</Note></div>}
+        {live.error && <div className="pad"><Note tone="warn">{T("Live times are unavailable right now.", "זמני אמת אינם זמינים כרגע.")}</Note></div>}
+        <Timeline trip={trip} r={r} live={live.data?.arrivals} now={now} from={from} to={to} onPay={onPay} stopAt={stopAt} />
+      </div>
+      <div className="trip-cta">
+        <button className="setup-btn lit" onClick={() => setNavigating(true)}><PlayGlyph size={16} />{T("Start", "יציאה לדרך")}</button>
       </div>
     </div>
   );
 }
 
-function LegRow({ leg, wait, r, live, now, last, dest, onPay, stopAt }: {
-  leg: Leg; wait?: Leg; r: Resolved; live?: Arrival[]; now: number; last: boolean; dest: string;
+// ---- the steps, on a rail ----------------------------------------------------------------------
+
+const WALK = "var(--dim)";
+
+// A stop or an end: its time, a dot on the rail, its name. The rail above and below takes the colours of
+// the steps it joins.
+function Stop({ time, above, below, title, big, children }: {
+  time?: number; above: string | null; below: string | null; title: string; big?: boolean; children?: React.ReactNode;
+}) {
+  return (
+    <div className={"tl tl-stop" + (big ? " big" : "")} style={{ "--above": above ?? "transparent", "--below": below ?? "transparent", "--dot": below ?? above ?? WALK } as React.CSSProperties}>
+      <span className="tl-time">{time ? clock(time) : ""}</span>
+      <span className="tl-rail"><i /></span>
+      <div className="tl-body"><div className="tl-title"><bdi>{title}</bdi></div>{children}</div>
+    </div>
+  );
+}
+
+// What happens between two stops: walking (a dotted rail) or riding (the line's colour).
+function Step({ color, walk, children }: { color: string; walk?: boolean; children: React.ReactNode }) {
+  return (
+    <div className={"tl tl-step" + (walk ? " on-foot" : "")} style={{ "--c": color } as React.CSSProperties}>
+      <span className="tl-time" />
+      <span className="tl-rail" />
+      <div className="tl-body">{children}</div>
+    </div>
+  );
+}
+
+function Timeline({ trip, r, live, now, from, to, onPay, stopAt }: {
+  trip: Itinerary; r: Resolved; live?: Arrival[]; now: number; from: string; to: string;
   onPay: (at?: LatLon, routeType?: number) => void; stopAt: (id: number) => LatLon | null;
+}) {
+  const legs = trip.legs.filter(l => l.kind !== "wait" && !(l.kind === "walk" && l.arr - l.dep < 30));
+  const colorOf = (l: Leg | undefined) => !l ? null : l.kind === "ride" ? modeColor(routeTypeOf(r, l.lineId)) : l.kind === "walk" ? WALK : "var(--accent)";
+  const out: React.ReactNode[] = [];
+  out.push(<Stop key="from" time={trip.dep} above={null} below={colorOf(legs[0])} title={from} big />);
+  legs.forEach((l, i) => {
+    const next = legs[i + 1];
+    const wait = (() => { const k = trip.legs.indexOf(l); return trip.legs[k - 1]?.kind === "wait" ? trip.legs[k - 1] : undefined; })();
+    if (l.kind === "ride") {
+      out.push(<RideSteps key={i} leg={l} wait={wait} r={r} live={live} now={now} onPay={onPay} stopAt={stopAt} below={colorOf(next)} prev={colorOf(legs[i - 1])} />);
+      return;
+    }
+    const mins = Math.max(1, Math.round((l.arr - l.dep) / 60));
+    out.push(<Step key={i} color={colorOf(l)!} walk={l.kind === "walk"}>
+      <div className="tl-what">
+        {l.kind === "walk" ? <WalkGlyph size={16} /> : l.kind === "taxi" ? <TaxiGlyph size={16} /> : l.kind === "bike" ? <BikeGlyph size={16} /> : <DotGlyph size={12} />}
+        <span>{l.kind === "walk" ? T("Walk", "הליכה") : l.kind === "taxi" ? T("Taxi", "מונית") : l.kind === "bike" ? T("Bike", "אופניים") : ""} {minutesText(mins)}{l.meters > 0 ? ` · ${distanceText(l.meters)}` : ""}</span>
+      </div>
+    </Step>);
+    // A walk that ends at a stop is followed by that stop's own node, drawn by the ride.
+    if (next?.kind !== "ride" && next) out.push(<Stop key={i + "e"} time={l.arr} above={colorOf(l)} below={colorOf(next)} title={l.toStop > 0 ? r.stops[l.toStop]?.name ?? "" : ""} />);
+  });
+  out.push(<Stop key="to" time={trip.arr} above={colorOf(legs[legs.length - 1])} below={null} title={to} big />);
+  return <div className="timeline">{out}</div>;
+}
+
+// A ride: the stop you get on at (with the next departures, live), the ride, and the stop you get off at.
+function RideSteps({ leg, wait, r, live, now, onPay, stopAt, prev, below }: {
+  leg: Leg; wait?: Leg; r: Resolved; live?: Arrival[]; now: number; onPay: (at?: LatLon, routeType?: number) => void;
+  stopAt: (id: number) => LatLon | null; prev: string | null; below: string | null;
 }) {
   const [open, setOpen] = useState(false);
   const [pick, setPick] = useState(0);
+  const opts = options(leg);
+  const ride = opts[pick] ?? leg;
+  const type = routeTypeOf(r, ride.lineId);
+  const color = modeColor(type);
+  const line = r.lines[ride.lineId];
+  const deps = departuresFor(ride, wait, live, now);
+  const mine = deps.find(d => String(d.tripId) === String(ride.tripId)) ?? deps[0];
+  const between = ride.stops.slice(1, -1);
+  const payMode = PAYABLE[type];
   const stopName = (id: number) => r.stops[id]?.name ?? "";
-  if (leg.kind === "walk") {
-    const mins = Math.max(1, Math.round((leg.arr - leg.dep) / 60));
-    const target = leg.toStop > 0 ? stopName(leg.toStop) : last ? dest : "";
-    return (
-      <li className="leg walk-leg">
-        <span className="leg-icon"><WalkGlyph size={18} /></span>
-        <div>
-          <div>{T("Walk", "הליכה")} {minutesText(mins)}{leg.meters > 0 ? ` · ${distanceText(leg.meters)}` : ""}</div>
-          {target && <div className="dim" dir="auto">{T("to", "אל")} {target}</div>}
-        </div>
-      </li>
-    );
-  }
-  if (leg.kind === "ride") {
-    const opts = options(leg);
-    const ride = opts[pick] ?? leg;
-    const type = routeTypeOf(r, ride.lineId);
-    const line = r.lines[ride.lineId];
-    const deps = departuresFor(ride, wait, live, now);
-    const mine = deps.find(d => String(d.tripId) === String(ride.tripId)) ?? deps[0];
-    const between = ride.stops.slice(1, -1);
-    const payMode = PAYABLE[type];
-    return (
-      <li className="leg ride-leg" style={{ borderColor: modeColor(type) }}>
-        <div className="leg-head">
-          {opts.map((o, k) => (
-            <button key={k} className={"badge-btn" + (k === pick ? " on" : "")} onClick={() => setPick(k)}>
-              <LineBadge number={r.lines[o.lineId]?.number || o.shortName} type={routeTypeOf(r, o.lineId)} />
-            </button>
-          ))}
-          <span className="dim small">{modeName(type)}{line?.destination ? <> · {T("to", "ל")}<span dir="auto">{line.destination}</span></> : ""}</span>
-        </div>
-        <div className="leg-stop"><b dir="auto">{stopName(ride.fromStop)}</b> <span className="dim">{clock(ride.dep)}</span></div>
-        <div className="deps">{deps.slice(0, 4).map((d, k) => <DepTime key={k} d={d} now={now} />)}{!deps.length && mine == null && <span className="dim">{clock(ride.dep)}</span>}</div>
-        {wait?.alertText && <Note tone="warn">{wait.alertText}</Note>}
-        {between.length > 0 && <button className="link" onClick={() => setOpen(!open)}><ChevronGlyph size={12} open={open} />{T(`${between.length + 1} stops`, `${between.length + 1} תחנות`)} · {minutesText(Math.round((ride.arr - ride.dep) / 60))}</button>}
-        {open && <ul className="stops-mini">{between.map(s => <li key={s} dir="auto">{stopName(s) || `#${s}`}</li>)}</ul>}
-        <div className="leg-stop"><b dir="auto">{stopName(ride.toStop)}</b> <span className="dim">{clock(ride.arr)}</span></div>
-        {payMode != null && <button className="btn small" onClick={() => onPay(stopAt(ride.fromStop) ?? undefined, payMode)}>{T("Pay for this ride", "תשלום על הנסיעה")}</button>}
-      </li>
-    );
-  }
-  if (leg.kind === "taxi") return <li className="leg"><span className="leg-icon"><TaxiGlyph size={18} /></span><div>{T("Taxi", "מונית")} · {minutesText(Math.round((leg.arr - leg.dep) / 60))}</div></li>;
-  if (leg.kind === "bike") return <li className="leg"><span className="leg-icon"><BikeGlyph size={18} /></span><div>{T("Bike", "אופניים")} · {minutesText(Math.round((leg.arr - leg.dep) / 60))}</div></li>;
-  return <li className="leg"><span className="leg-icon"><DotGlyph size={14} /></span><div className="dim">{minutesText(Math.round((leg.arr - leg.dep) / 60))}</div></li>;
+  return <>
+    <Stop time={mine ? timeOf(mine) : ride.dep} above={prev} below={color} title={stopName(ride.fromStop)}>
+      {mine && <div className="tl-leaves">{T("Leaves in", "יוצא בעוד")} <Eta d={mine} now={now} inline />{deps.length > 1 && <span className="dim"> · {T("then ", "אחר כך ")}<NextTimes ds={deps.slice(1, 3)} now={now} /></span>}</div>}
+    </Stop>
+    <Step color={color}>
+      <div className="tl-line">
+        {opts.map((o, k) => (
+          <button key={k} className={"badge-btn" + (k === pick ? " on" : "")} onClick={() => setPick(k)} disabled={opts.length < 2}>
+            <LineBadge number={r.lines[o.lineId]?.number || o.shortName} type={routeTypeOf(r, o.lineId)} />
+          </button>
+        ))}
+      </div>
+      {line?.destination && <div className="tl-dest" dir="auto">{T("towards ", "לכיוון ")}{line.destination}</div>}
+      {opts.length > 1 && <div className="dim small">{T("Any of these lines will do: tap one to see its times.", "כל אחד מהקווים האלה מתאים: הקישו על אחד כדי לראות את הזמנים שלו.")}</div>}
+      {wait?.alertText && <Note tone="warn">{wait.alertText}</Note>}
+      <button className="link tl-stops" onClick={() => setOpen(!open)} disabled={!between.length}>
+        {between.length > 0 && <ChevronGlyph size={12} open={open} />}
+        {T(`Ride ${minutesText(Math.round((ride.arr - ride.dep) / 60))}`, `נסיעה ${minutesText(Math.round((ride.arr - ride.dep) / 60))}`)} · {T(`${between.length + 1} stops`, `${between.length + 1} תחנות`)}
+      </button>
+      {open && <ol className="tl-mini">{between.map(id => <li key={id} dir="auto">{stopName(id) || `#${id}`}</li>)}</ol>}
+      {payMode != null && <button className="btn small" onClick={() => onPay(stopAt(ride.fromStop) ?? undefined, payMode)}><PayGlyph size={16} />{T("Pay for this ride", "תשלום על הנסיעה")}</button>}
+    </Step>
+    <Stop time={ride.arr} above={color} below={below} title={stopName(ride.toStop)}>
+      <div className="dim small">{T("Get off here", "יורדים כאן")}</div>
+    </Stop>
+  </>;
 }
 
 // ---- on the way ------------------------------------------------------------------------------
 
-function Navigate({ trip, r, live, here, lines, ends, vehicles, onExit }: {
-  trip: Itinerary; r: Resolved; live?: Arrival[]; here: LatLon | null; lines: MapLine[]; ends: MapPoint[]; vehicles: MapPoint[]; onExit: () => void;
+// One card of the live directions, as Moovit splits a way: setting off, each walk, waiting for the
+// vehicle, riding it, arriving.
+type Card =
+  | { kind: "start" }
+  | { kind: "walk"; leg: Leg; next?: Leg; wait?: Leg; last: boolean }
+  | { kind: "wait"; ride: Leg; wait?: Leg }
+  | { kind: "ride"; ride: Leg }
+  | { kind: "arrive" };
+
+function cardsOf(trip: Itinerary): Card[] {
+  const legs = trip.legs;
+  const out: Card[] = [{ kind: "start" }];
+  legs.forEach((l, i) => {
+    const wait = legs[i - 1]?.kind === "wait" ? legs[i - 1] : undefined;
+    if (l.kind === "walk" && l.arr - l.dep >= 30) {
+      const after = legs.slice(i + 1).find(x => x.kind !== "wait");
+      const nextWait = legs[i + 1]?.kind === "wait" ? legs[i + 1] : undefined;
+      out.push({ kind: "walk", leg: l, next: after?.kind === "ride" ? after : undefined, wait: nextWait, last: !after });
+    } else if (l.kind === "ride") {
+      out.push({ kind: "wait", ride: l, wait }, { kind: "ride", ride: l });
+    } else if (l.kind === "taxi" || l.kind === "bike") {
+      out.push({ kind: "walk", leg: l, last: !legs.slice(i + 1).some(x => x.kind !== "wait") });
+    }
+  });
+  if (out[out.length - 1].kind !== "walk") out.push({ kind: "arrive" });
+  return out;
+}
+
+function Navigate({ trip, r, live, here, lines, ends, vehicles, from, to, onPay, onShare, onExit }: {
+  trip: Itinerary; r: Resolved; live?: Arrival[]; here: LatLon | null; lines: MapLine[]; ends: MapPoint[]; vehicles: MapPoint[];
+  from: string; to: string; onPay: (at?: LatLon, routeType?: number) => void; onShare: () => void; onExit: () => void;
 }) {
-  const steps = trip.legs.map((l, i) => ({ l, i })).filter(s => s.l.kind !== "wait");
+  const cards = useMemo(() => cardsOf(trip), [trip]);
   const [step, setStep] = useState(0);
   const [follow, setFollow] = useState(true);
+  const [alerts, setAlerts] = useState(true);
   const now = useNow(5000);
-  const cur = steps[step]?.l;
+  const card = cards[step];
   const stopAt = (id: number): LatLon | null => { const s = r.stops[id]; return s && s.lat != null && s.lon != null ? [s.lat, s.lon] : null; };
   const endOf = (l: Leg): LatLon | null => (l.toStop > 0 ? stopAt(l.toStop) : null) ?? (l.shape.length ? l.shape[l.shape.length - 1] : null);
+  const go = (to: number) => { setStep(Math.max(0, Math.min(cards.length - 1, to))); setFollow(false); };
 
   // Keep the screen on while walking through the trip.
   useEffect(() => {
@@ -389,49 +486,169 @@ function Navigate({ trip, r, live, here, lines, ends, vehicles, onExit }: {
     return () => { keepAwake(false); lock?.release().catch(() => {}); };
   }, []);
 
-  // The step moves on by itself near the end of a walk or a ride.
+  // The card moves on by itself: off once you've left, on the vehicle once it pulls away, off it near your stop.
   useEffect(() => {
-    if (!here || !cur || step >= steps.length - 1) return;
-    const end = endOf(cur);
-    if (end && metres(here, end) < (cur.kind === "ride" ? 120 : 35)) setStep(s => s + 1);
+    if (!here || step >= cards.length - 1) return;
+    const c = cards[step];
+    const start = lines[0]?.coords[0];
+    const near = (p: LatLon | null, m: number) => !!p && metres(here, p) < m;
+    if (c.kind === "start" && start && !near(start, 40)) setStep(step + 1);
+    else if (c.kind === "walk" && near(endOf(c.leg), 35)) setStep(step + 1);
+    else if (c.kind === "wait" && !near(stopAt(c.ride.fromStop), 150)) setStep(step + 1);
+    else if (c.kind === "ride" && near(endOf(c.ride), 120)) setStep(step + 1);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [here?.[0], here?.[1], step]);
 
-  const prevWait = cur && trip.legs[steps[step].i - 1]?.kind === "wait" ? trip.legs[steps[step].i - 1] : undefined;
-  let title = "", detail = "";
-  if (cur?.kind === "walk") {
-    const end = endOf(cur);
-    title = cur.toStop > 0 ? T(`Walk to ${r.stops[cur.toStop]?.name ?? "the stop"}`, `ללכת אל ${r.stops[cur.toStop]?.name ?? "התחנה"}`) : T("Walk to your destination", "ללכת אל היעד");
-    detail = here && end ? distanceText(metres(here, end)) : minutesText(Math.round((cur.arr - cur.dep) / 60));
-  } else if (cur?.kind === "ride") {
-    const line = r.lines[cur.lineId];
-    title = T(`Take ${line?.number ?? "the line"} to ${r.stops[cur.toStop]?.name ?? ""}`, `לעלות על ${line?.number ?? "הקו"} עד ${r.stops[cur.toStop]?.name ?? ""}`);
-    const end = endOf(cur);
-    const deps = departuresFor(cur, prevWait, live, now);
-    const d = deps.find(x => String(x.tripId) === String(cur.tripId)) ?? deps[0];
-    detail = here && end && step > 0 && metres(here, stopAt(cur.fromStop) ?? here) > 150
-      ? T(`${distanceText(metres(here, end))} to get off`, `${distanceText(metres(here, end))} עד הירידה`)
-      : d ? T(`leaves ${minutesText(Math.round((timeOf(d) - now) / 60))}`, `יוצא ${minutesText(Math.round((timeOf(d) - now) / 60))}`) + (isLate(d) ? T(" · delayed", " · באיחור") : "") + (isLive(d) ? " ●" : "") : "";
-  } else if (cur) { title = T("Continue", "המשיכו"); }
+  // Nearly there on a ride: the phone says so, once.
+  const told = useRef(-1);
+  useEffect(() => {
+    if (!alerts || !here || card?.kind !== "ride" || told.current === step) return;
+    const end = endOf(card.ride);
+    if (end && metres(here, end) < 400) { told.current = step; navigator.vibrate?.([200, 100, 200]); }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [here?.[0], here?.[1], step, alerts]);
+
+  // The map frames the card's own part of the way, until you ask it to follow you again.
+  const stepLeg = card.kind === "walk" ? card.leg : card.kind === "wait" || card.kind === "ride" ? card.ride : null;
+  const stepCoords: LatLon[] = card.kind === "start" ? (lines[0]?.coords.slice(0, 2) ?? []) : card.kind === "arrive" ? (lines[lines.length - 1]?.coords.slice(-2) ?? [])
+    : card.kind === "wait" ? [stopAt(card.ride.fromStop)].filter(Boolean) as LatLon[]
+    : stepLeg ? (stepLeg.shape.length ? stepLeg.shape : stepLeg.stops.map(stopAt).filter(Boolean) as LatLon[]) : [];
+  const left = Math.max(0, Math.round((trip.arr - now) / 60));
+
+  // A swipe on the card turns it, as Moovit's do.
+  const touch = useRef<number | null>(null);
+  const rtl = document.documentElement.dir === "rtl";
+  const swipe = {
+    onTouchStart: (e: React.TouchEvent) => { touch.current = e.touches[0].clientX; },
+    onTouchEnd: (e: React.TouchEvent) => {
+      if (touch.current == null) return;
+      const dx = e.changedTouches[0].clientX - touch.current; touch.current = null;
+      if (Math.abs(dx) > 50) go(step + ((dx < 0) !== rtl ? 1 : -1));
+    },
+  };
+
+  const payHere = card.kind === "wait" || card.kind === "ride" ? card.ride : trip.legs.find(l => l.kind === "ride");
+  const payMode = payHere ? PAYABLE[routeTypeOf(r, payHere.lineId)] : undefined;
 
   return (
-    <div className="screen nav">
-      <MapView className="map-full" lines={lines} points={[...ends, ...vehicles]} user={here} follow={follow ? here : null}
-        fit={lines.flatMap(l => l.coords)} fitKey={"nav" + trip.guid} onMove={() => {}} />
-      <div className="nav-card card">
-        <div className="nav-step dim small">{T(`Step ${step + 1} of ${steps.length}`, `שלב ${step + 1} מתוך ${steps.length}`)}</div>
-        <div className="nav-title" dir="auto">{title}</div>
-        <div className="nav-detail">{detail}</div>
-        {!here && <div className="dim small">{T("Waiting for your location…", "ממתינים למיקום…")}</div>}
-        <div className="row-btns">
-          <button className="btn" onClick={() => setStep(s => Math.max(0, s - 1))} disabled={step === 0}>{T("Back", "הקודם")}</button>
-          <button className="btn" onClick={() => setFollow(f => !f)}>{follow ? T("Free map", "מפה חופשית") : T("Follow me", "מעקב")}</button>
-          {step < steps.length - 1
-            ? <button className="btn primary" onClick={() => setStep(s => s + 1)}>{T("Next", "הבא")}</button>
-            : <button className="btn primary" onClick={onExit}>{T("Arrived", "הגעתי")}</button>}
+    <div className="screen live-dir">
+      <header className="ld-head">
+        <button className="ld-icon" onClick={goBack(onExit)} aria-label={T("Back", "חזרה")}><BackGlyph /></button>
+        <div className="ld-title">
+          <div>{T("Live Directions", "ניווט חי")}</div>
+          <b>{clock(trip.arr)} • {minutesText(left)}</b>
         </div>
-        <button className="link center" onClick={onExit}>{T("End trip", "סיום הנסיעה")}</button>
+        <button className={"ld-icon" + (alerts ? "" : " off")} onClick={() => setAlerts(a => !a)}
+          aria-label={alerts ? T("Turn off the get-off alert", "כיבוי ההתראה לירידה") : T("Turn on the get-off alert", "הפעלת ההתראה לירידה")}><BellGlyph off={!alerts} /></button>
+      </header>
+      <div className="ld-steps">
+        <button className="ld-arrow" onClick={() => go(step - 1)} disabled={step === 0} aria-label={T("Previous step", "השלב הקודם")}><BackGlyph size={16} /></button>
+        <div className="ld-dots">
+          <div className="dots">{cards.map((_, i) => <span key={i} className={i === step ? "on" : ""} onClick={() => go(i)} />)}</div>
+          {!follow && <button className="link ld-recenter" onClick={() => setFollow(true)}>{T("Recenter", "מרכוז")}</button>}
+        </div>
+        <button className="ld-arrow" onClick={() => go(step + 1)} disabled={step === cards.length - 1} aria-label={T("Next step", "השלב הבא")}><BackGlyph size={16} style={{ rotate: "180deg" }} /></button>
+      </div>
+      <div className="ld-map">
+        <MapView className="map-full" lines={lines} points={[...ends, ...vehicles]} user={here} follow={follow ? here : null}
+          fit={stepCoords.length ? stepCoords : lines.flatMap(l => l.coords)} fitKey={`nav${trip.guid}:${step}`} onMove={() => setFollow(false)} />
+        <button className="plate-btn ld-locate" onClick={() => setFollow(true)} aria-label={T("Recenter", "מרכוז")}><LocateGlyph /></button>
+        <div className="ld-card card" key={step} {...swipe}>
+          <StepCard card={card} trip={trip} r={r} live={live} now={now} here={here} from={from} to={to} endOf={endOf} />
+        </div>
+      </div>
+      <div className="ld-actions">
+        <button className="ld-act stop" onClick={onExit}><span className="ld-square" />{T("Stop", "עצירה")}</button>
+        {payMode != null && <button className="ld-act" onClick={() => onPay(payHere ? stopAt(payHere.fromStop) ?? undefined : undefined, payMode)}><PayGlyph size={18} />{T("Pay", "תשלום")}</button>}
+        <button className="ld-act" onClick={onShare}><ShareGlyph size={18} />{T("Share", "שיתוף")}</button>
       </div>
     </div>
   );
+}
+
+function StepCard({ card, trip, r, live, now, here, from, to, endOf }: {
+  card: Card; trip: Itinerary; r: Resolved; live?: Arrival[]; now: number; here: LatLon | null; from: string; to: string;
+  endOf: (l: Leg) => LatLon | null;
+}) {
+  const [pick, setPick] = useState(0);
+  const stop = (id: number) => r.stops[id];
+  const far = (l: Leg) => { const e = endOf(l); return here && e ? distanceText(metres(here, e)) : l.meters > 0 ? distanceText(l.meters) : ""; };
+  const head = (text: string, end?: React.ReactNode) => <div className="ld-band"><b>{text}</b>{end}</div>;
+
+  if (card.kind === "start") return <>
+    {head(T("Start from", "יוצאים מ"))}
+    <div className="ld-body">
+      <div className="ld-place"><PinGlyph size={22} /><b><bdi>{from}</bdi></b></div>
+      <div className="ld-sub">{T(`Leave at ${clock(trip.dep)}`, `יציאה ב-${clock(trip.dep)}`)}</div>
+    </div>
+  </>;
+
+  if (card.kind === "arrive") return <>
+    {head(T("You've arrived", "הגעתם"), <FlagGlyph size={22} />)}
+    <div className="ld-body"><div className="ld-place"><PinGlyph size={22} /><b><bdi>{to}</bdi></b></div>
+      <div className="ld-sub">{T(`Arrival at ${clock(trip.arr)}`, `הגעה ב-${clock(trip.arr)}`)}</div></div>
+  </>;
+
+  if (card.kind === "walk") {
+    const l = card.leg;
+    const mins = Math.max(1, Math.round((l.arr - l.dep) / 60));
+    const target = l.toStop > 0 ? stop(l.toStop) : null;
+    const verb = l.kind === "taxi" ? T(`Taxi ${mins} min to`, `מונית ${mins} דק׳ אל`) : l.kind === "bike" ? T(`Ride a bike ${mins} min to`, `אופניים ${mins} דק׳ אל`) : T(`Walk ${mins} min to`, `הליכה ${mins} דק׳ אל`);
+    const deps = card.next ? departuresFor(card.next, card.wait, live, now) : [];
+    return <>
+      {head(verb, card.last ? <FlagGlyph size={22} /> : undefined)}
+      <div className="ld-body">
+        <div className="ld-place">{target ? <StationMark type={card.next ? routeTypeOf(r, card.next.lineId) : 3} size={24} /> : <PinGlyph size={22} />}
+          <div><b><bdi>{target?.name ?? (card.last ? to : "")}</bdi></b>{target?.code && <div className="ld-sub">{T("ID", "מזהה")} {target.code}</div>}</div></div>
+        <div className="ld-dist">{far(l)}</div>
+        {deps.length > 0 && <div className="ld-pill">{T("Your line arrives in", "הקו שלכם מגיע בעוד")} <Eta d={deps[0]} now={now} inline />
+          {deps.length > 1 && <span className="dim">· {T("then ", "אחר כך ")}<NextTimes ds={deps.slice(1, 3)} now={now} /></span>}</div>}
+      </div>
+    </>;
+  }
+
+  if (card.kind === "wait") {
+    const opts = options(card.ride);
+    return <>
+      {head(opts.length > 1 ? T("Wait for one of these options", "המתינו לאחת מהאפשרויות") : T("Wait for", "המתינו ל"))}
+      <div className="ld-body ld-options">
+        {opts.map((o, k) => {
+          const deps = departuresFor(o, card.wait, live, now);
+          const line = r.lines[o.lineId];
+          return (
+            <div key={k} className="ld-option">
+              <LineBadge number={line?.number || o.shortName} type={routeTypeOf(r, o.lineId)} />
+              <div className="grow"><bdi>{line?.destination ?? ""}</bdi>{deps[0] && isLive(deps[0]) && <div className="ld-live">{T("Arrival time is live", "זמן ההגעה בזמן אמת")}</div>}</div>
+              <div className="ld-when">{deps[0] ? <Eta d={deps[0]} now={now} /> : <b>{clock(o.dep)}</b>}{deps.length > 1 && <small>{deps.slice(1, 3).map(d => clock(timeOf(d))).join(", ")}</small>}</div>
+            </div>
+          );
+        })}
+        <div className="ld-sub"><bdi>{stop(card.ride.fromStop)?.name ?? ""}</bdi></div>
+      </div>
+    </>;
+  }
+
+  // Riding: where to get off, and the stops of the line you're on, the one you're at lit.
+  const opts = options(card.ride);
+  const ride = opts[pick] ?? card.ride;
+  const n = Math.max(1, ride.stops.length - 1);
+  const mins = Math.max(1, Math.round((ride.arr - ride.dep) / 60));
+  const at = here ? ride.stops.map((id, i) => ({ i, m: (() => { const s = stop(id); return s?.lat != null && s?.lon != null ? metres(here, [s.lat, s.lon]) : Infinity; })() }))
+    .sort((a, b) => a.m - b.m)[0] : null;
+  const color = modeColor(routeTypeOf(r, ride.lineId));
+  return <>
+    {head(T(`Ride ${n} stops to`, `נסיעה ${n} תחנות אל`), <span>{minutesText(mins)}</span>)}
+    <div className="ld-body">
+      <div className="ld-place"><StationMark type={routeTypeOf(r, ride.lineId)} size={24} /><div><b><bdi>{stop(ride.toStop)?.name ?? ""}</bdi></b>
+        {stop(ride.toStop)?.code && <div className="ld-sub">{T("ID", "מזהה")} {stop(ride.toStop)!.code}</div>}</div></div>
+      {opts.length > 1 && <div className="ld-sub">{T("Choose the line you're on, for the right stops:", "בחרו את הקו שאתם בו, בשביל התחנות הנכונות:")}</div>}
+      <div className="ld-line">{opts.length > 1
+        ? opts.map((o, k) => <button key={k} className={"badge-btn" + (k === pick ? " on" : "")} onClick={() => setPick(k)}><LineBadge number={r.lines[o.lineId]?.number || o.shortName} type={routeTypeOf(r, o.lineId)} /></button>)
+        : <LineBadge number={r.lines[ride.lineId]?.number || ride.shortName} type={routeTypeOf(r, ride.lineId)} />}
+        <bdi className="dim">{r.lines[ride.lineId]?.destination ?? ""}</bdi></div>
+      <ol className="ld-stops" style={{ "--c": color } as React.CSSProperties}>
+        {ride.stops.map((id, i) => <li key={id + ":" + i} className={(at && at.i === i && at.m < 300 ? "here " : "") + (i === 0 || i === ride.stops.length - 1 ? "end" : "")}><bdi>{stop(id)?.name ?? `#${id}`}</bdi></li>)}
+      </ol>
+    </div>
+  </>;
 }
