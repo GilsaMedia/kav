@@ -45,6 +45,15 @@ jobs:
         working-directory: web
         run: npm run build:ios
 
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "3.3"
+
+      - name: The lock screen and Dynamic Island extension
+        run: |
+          gem install xcodeproj --no-document
+          ruby web/scripts/live-activity.rb
+
       - name: Build the app
         run: |
           xcodebuild -project web/ios/App/App.xcodeproj -scheme App -configuration Release \

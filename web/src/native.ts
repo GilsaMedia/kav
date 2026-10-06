@@ -12,6 +12,9 @@ interface KavNativePlugin {
   download(o: { url: string; name: string; size: number }): Promise<{ size: number }>;
   remove(o: { name: string }): Promise<void>;
   keepAwake(o: { on: boolean }): Promise<void>;
+  liveStart(o: TripLive & { destination: string }): Promise<{ ok: boolean }>;
+  liveUpdate(o: TripLive): Promise<{ ok: boolean }>;
+  liveEnd(): Promise<void>;
   addListener(event: "downloadProgress", f: (e: { done: number; total: number }) => void): Promise<PluginListenerHandle>;
 }
 export const KavNative = registerPlugin<KavNativePlugin>("KavNative");
@@ -127,4 +130,24 @@ export const nativeMapSource = {
 
 export function keepAwake(on: boolean) {
   if (isNative) KavNative.keepAwake({ on }).catch(() => {});
+}
+
+// ---- the trip on the lock screen and in the Dynamic Island ------------------------------------
+
+export interface TripLive {
+  phase: "wait" | "ride" | "walk" | "arrive"; label: string; stop: string; line: string; mode: string;
+  color: string; accent: string; target: number; arrive: number; live: boolean; step: number; steps: number;
+}
+
+// Started once per trip, then updated; a phone without Live Activities just says no.
+let started = false;
+export function showTrip(destination: string, t: TripLive) {
+  if (!isNative) return;
+  if (!started) { started = true; KavNative.liveStart({ destination, ...t }).catch(() => { started = false; }); }
+  else KavNative.liveUpdate(t).catch(() => {});
+}
+export function endTrip() {
+  if (!isNative || !started) return;
+  started = false;
+  KavNative.liveEnd().catch(() => {});
 }

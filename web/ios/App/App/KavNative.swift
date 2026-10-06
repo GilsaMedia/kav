@@ -1,3 +1,4 @@
+import ActivityKit
 import Foundation
 import UIKit
 import Capacitor
@@ -16,6 +17,9 @@ public class KavNativePlugin: CAPPlugin, CAPBridgedPlugin, URLSessionDownloadDel
         CAPPluginMethod(name: "download", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "remove", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "keepAwake", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "liveStart", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "liveUpdate", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "liveEnd", returnType: CAPPluginReturnPromise),
     ]
 
     // No cookies, no cache: every request goes out as Kav builds it.
@@ -127,6 +131,53 @@ public class KavNativePlugin: CAPPlugin, CAPBridgedPlugin, URLSessionDownloadDel
     @objc func remove(_ call: CAPPluginCall) {
         do { try? FileManager.default.removeItem(at: try fileURL(call.getString("name") ?? "")); call.resolve() }
         catch { call.reject(error.localizedDescription) }
+    }
+
+    // ---- the trip on the lock screen and in the Dynamic Island (a Live Activity, drawn by KavLive) ----
+
+    @available(iOS 16.2, *)
+    private static func tripState(_ call: CAPPluginCall) -> KavTripAttributes.ContentState {
+        func date(_ key: String) -> Date { Date(timeIntervalSince1970: (call.getDouble(key) ?? 0) / 1000) }
+        return KavTripAttributes.ContentState(
+            phase: call.getString("phase") ?? "wait", label: call.getString("label") ?? "", stop: call.getString("stop") ?? "",
+            line: call.getString("line") ?? "", mode: call.getString("mode") ?? "bus", color: call.getString("color") ?? "#3E9B5C",
+            accent: call.getString("accent") ?? "#9ABEFF", target: date("target"), arrive: date("arrive"),
+            live: call.getBool("live") ?? false, step: call.getInt("step") ?? 0, steps: call.getInt("steps") ?? 1)
+    }
+
+    // liveStart({ destination, ...state }): one trip at a time, so any earlier one ends first.
+    @objc func liveStart(_ call: CAPPluginCall) {
+        guard #available(iOS 16.2, *) else { return call.resolve(["ok": false]) }
+        guard ActivityAuthorizationInfo().areActivitiesEnabled else { return call.resolve(["ok": false]) }
+        let state = Self.tripState(call)
+        let attributes = KavTripAttributes(destination: call.getString("destination") ?? "")
+        Task {
+            for a in Activity<KavTripAttributes>.activities { await a.end(nil, dismissalPolicy: .immediate) }
+            do {
+                _ = try Activity.request(attributes: attributes,
+                    content: ActivityContent(state: state, staleDate: state.arrive.addingTimeInterval(30 * 60)), pushType: nil)
+                call.resolve(["ok": true])
+            } catch { call.reject(error.localizedDescription) }
+        }
+    }
+
+    @objc func liveUpdate(_ call: CAPPluginCall) {
+        guard #available(iOS 16.2, *) else { return call.resolve(["ok": false]) }
+        let state = Self.tripState(call)
+        Task {
+            for a in Activity<KavTripAttributes>.activities {
+                await a.update(ActivityContent(state: state, staleDate: state.arrive.addingTimeInterval(30 * 60)))
+            }
+            call.resolve(["ok": true])
+        }
+    }
+
+    @objc func liveEnd(_ call: CAPPluginCall) {
+        guard #available(iOS 16.2, *) else { return call.resolve() }
+        Task {
+            for a in Activity<KavTripAttributes>.activities { await a.end(nil, dismissalPolicy: .immediate) }
+            call.resolve()
+        }
     }
 
     @objc func keepAwake(_ call: CAPPluginCall) {

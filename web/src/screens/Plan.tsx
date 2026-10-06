@@ -1,15 +1,15 @@
 // Planning a trip: where from and to, the ways there, one of them in detail, and walking through it.
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
-  T, api, usePrefs, setPrefs, rememberTrip, boardingOf, useHere, useLoad, useNow, clock, minutesText, distanceText, metres, shekels, failure,
+  T, api, usePrefs, getPrefs, setPrefs, rememberTrip, boardingOf, useHere, useLoad, useNow, clock, minutesText, distanceText, metres, shekels, failure,
   timeOf, isLive, isCancelled, routeTypeOf, options, modeColor, modeName, MODE_FILTERS, mergeResolved, emptyResolved,
   type Place, type Itinerary, type Leg, type Resolved, type Arrival, type LatLon, type Departure,
 } from "../core.ts";
 import { Header, LineBadge, Spinner, Note, LiveDot, PlacePicker, SaveFavourite, HERE_NAME, Sheet, Eta, NextTimes, isLate, goBack } from "../ui.tsx";
 import { MapView, type MapLine, type MapPoint } from "../MapView.tsx";
 import { Home, Arrives, type Opened } from "./Home.tsx";
-import { isNative, keepAwake } from "../native.ts";
-import { SwapGlyph, ClockGlyph, StarGlyph, CloseGlyph, RecentGlyph, WalkGlyph, BikeGlyph, TaxiGlyph, DotGlyph, ShareGlyph, PlayGlyph, ChevronGlyph, BackGlyph, PayGlyph, LocateGlyph, PinGlyph, StationMark, BellGlyph, FlagGlyph } from "../icons.tsx";
+import { isNative, keepAwake, showTrip, endTrip, type TripLive } from "../native.ts";
+import { SwapGlyph, ClockGlyph, StarGlyph, CloseGlyph, RecentGlyph, WalkGlyph, BikeGlyph, TaxiGlyph, DotGlyph, ShareGlyph, PlayGlyph, ChevronGlyph, BackGlyph, PayGlyph, LocateGlyph, PinGlyph, StationMark, BellGlyph, FlagGlyph, modeOf } from "../icons.tsx";
 
 type When = { kind: "now" } | { kind: "depart" | "arrive"; ms: number };
 
@@ -514,6 +514,31 @@ function Navigate({ trip, r, live, here, lines, ends, vehicles, from, to, onPay,
     : card.kind === "wait" ? [stopAt(card.ride.fromStop)].filter(Boolean) as LatLon[]
     : stepLeg ? (stepLeg.shape.length ? stepLeg.shape : stepLeg.stops.map(stopAt).filter(Boolean) as LatLon[]) : [];
   const left = Math.max(0, Math.round((trip.arr - now) / 60));
+
+  // The lock screen and the Dynamic Island: the next thing to wait for, counted down by the system so it
+  // runs on with Kav in the background. Before boarding, the vehicle at your stop; on it, getting off
+  // (moved by its delay); after the last ride, arriving.
+  const waitBefore = (l: Leg) => { const k = trip.legs.indexOf(l); return trip.legs[k - 1]?.kind === "wait" ? trip.legs[k - 1] : undefined; };
+  const firstRide = trip.legs.find(l => l.kind === "ride");
+  const nextRide = card.kind === "wait" || card.kind === "ride" ? card.ride : card.kind === "walk" ? card.next : card.kind === "start" ? firstRide : undefined;
+  const tripLive: TripLive = (() => {
+    const base = { accent: getPrefs().accent, arrive: trip.arr * 1000, step, steps: cards.length };
+    if (!nextRide) return { ...base, phase: card.kind === "arrive" ? "arrive" : "walk", label: T("Arrive in", "הגעה בעוד"), stop: to, line: "", mode: "walk", color: "#9C9CA5", target: trip.arr * 1000, live: false };
+    const type = routeTypeOf(r, nextRide.lineId);
+    const numbers = [...new Set(options(nextRide).map(o => r.lines[o.lineId]?.number || o.shortName).filter(Boolean))].slice(0, 2);
+    const deps = departuresFor(nextRide, waitBefore(nextRide), live, now);
+    const mine = deps.find(d => String(d.tripId) === String(nextRide.tripId)) ?? deps[0];
+    const common = { ...base, line: numbers.join(" / "), mode: modeOf(type), color: modeColor(type), live: !!mine && isLive(mine) };
+    if (card.kind === "ride") {
+      const late = mine && mine.rtUtc > 0 && mine.staticUtc > 0 ? mine.rtUtc - mine.staticUtc : 0;
+      return { ...common, phase: "ride", label: T("Get off in", "ירידה בעוד"), stop: r.stops[nextRide.toStop]?.name ?? "", target: (nextRide.arr + late) * 1000 };
+    }
+    return { ...common, phase: "wait", label: T(`${numbers[0] ?? ""} at your stop in`, `${numbers[0] ?? ""} בתחנה בעוד`),
+      stop: r.stops[nextRide.fromStop]?.name ?? "", target: (mine ? timeOf(mine) : nextRide.dep) * 1000 };
+  })();
+  const shown = JSON.stringify(tripLive);
+  useEffect(() => { showTrip(to, tripLive); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [shown]);
+  useEffect(() => () => endTrip(), []);
 
   // A swipe on the card turns it, as Moovit's do.
   const touch = useRef<number | null>(null);

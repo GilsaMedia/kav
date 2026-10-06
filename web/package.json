@@ -1,6 +1,6 @@
 {
   "name": "web",
-  "version": "1.5.0",
+  "version": "1.6.0",
   "description": "",
   "main": "index.js",
   "scripts": {
@@ -9,7 +9,7 @@
     "build": "vite build",
     "start": "node server/main.ts",
     "typecheck": "tsc",
-    "build:ios": "vite build && node scripts/ios-assets.mjs && cap sync ios"
+    "build:ios": "vite build && node scripts/ios-assets.mjs && cap sync ios && (ruby scripts/live-activity.rb || echo \"Install the xcodeproj gem for the lock screen widget: gem install xcodeproj\")"
   },
   "keywords": [],
   "author": "",

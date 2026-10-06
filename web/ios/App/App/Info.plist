@@ -24,6 +24,8 @@
 	<string>$(CURRENT_PROJECT_VERSION)</string>
 	<key>NSLocationWhenInUseUsageDescription</key>
 	<string>Kav uses your location to find the stops around you and to follow your trip. Private search keeps your exact location from Moovit.</string>
+	<key>NSSupportsLiveActivities</key>
+	<true/>
 	<key>NSCameraUsageDescription</key>
 	<string>Kav uses the camera to read the QR code on a bus when you pay for a ride.</string>
 	<key>ITSAppUsesNonExemptEncryption</key>
