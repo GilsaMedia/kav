@@ -25,6 +25,8 @@ const TABS: { tab: Tab; Icon: ComponentType<{ size?: number }>; label: () => str
 export function App() {
   const prefs = usePrefs();
   const [tab, setTab] = useState<Tab>(() => (sessionStorage.getItem("kav-tab") as Tab) || "plan");
+  const [liveSeen, setLiveSeen] = useState(false);
+  if (tab === "live" && !liveSeen) setLiveSeen(true);
   const [payStart, setPayStart] = useState<{ at?: LatLon; routeType?: number } | null>(null);
   // Tabs crossfade, as on Android: the screen inside doesn't slide.
   const go = (t: Tab) => { if (t !== tab) stayPut(); setTab(t); try { sessionStorage.setItem("kav-tab", t); } catch { /* ignore */ } };
@@ -39,7 +41,8 @@ export function App() {
         <div hidden={tab !== "plan"} className="tab-page"><PlanScreen onPay={(at, routeType) => { setPayStart({ at, routeType }); go("pay"); }} /></div>
         <div hidden={tab !== "stations"} className="tab-page"><StationsScreen /></div>
         <div hidden={tab !== "lines"} className="tab-page"><LinesScreen /></div>
-        {tab === "live" && <div className="tab-page"><LiveScreen /></div>}
+        {/* Live stays too once opened: its map and vehicles are there when you come back. */}
+        {(tab === "live" || liveSeen) && <div hidden={tab !== "live"} className="tab-page"><LiveScreen /></div>}
         {tab === "pay" && <div className="tab-page"><PayScreen start={payStart} onStarted={() => setPayStart(null)} /></div>}
         {tab === "settings" && <div className="tab-page"><Settings /></div>}
       </main>

@@ -79,58 +79,105 @@ export function MapView(props: Props) {
   );
 }
 
+// Building a map is slow on a phone (the style, the fonts, every tile read through the bridge), so maps
+// are kept and handed from screen to screen instead of being thrown away: going back to a screen or
+// switching tabs shows the map as it was, tiles and all.
+interface Owner { onPoint?: (id: string) => void; onMove?: (center: LatLon, zoom: number) => void }
+interface Pooled { m: maplibregl.Map; div: HTMLDivElement; light: boolean; loaded: Promise<void>; owner: Owner | null }
+const pool: Pooled[] = [];
+const POOL_MAX = 3;
+
+async function acquire(light: boolean, host: HTMLElement, owner: Owner, center: LatLon | null | undefined, zoom: number): Promise<Pooled> {
+  const free = pool.find(p => !p.owner && p.light === light);
+  if (free) {
+    free.owner = owner;
+    host.appendChild(free.div);
+    free.m.resize();
+    return free;
+  }
+  const style = await styleFor(light);
+  const div = document.createElement("div");
+  div.className = "map-canvas";
+  host.appendChild(div);
+  const m = new maplibregl.Map({
+    container: div, style, attributionControl: false,
+    center: center ? [center[1], center[0]] : [34.7818, 32.0853], zoom: center ? zoom : 11,
+    maxBounds: [[33.5, 29.0], [36.6, 33.7]], dragRotate: false, pitchWithRotate: false, fadeDuration: 0,
+  });
+  const p: Pooled = { m, div, light, owner, loaded: Promise.resolve() };
+  m.touchZoomRotate.disableRotation();
+  m.addControl(new maplibregl.AttributionControl({ compact: true, customAttribution: "© OpenStreetMap" }), "bottom-left");
+  p.loaded = new Promise(done => m.on("load", () => {
+    m.addSource("kav-lines", { type: "geojson", data: lineFeatures([]) });
+    m.addSource("kav-points", { type: "geojson", data: pointFeatures([]) });
+    m.addLayer({ id: "kav-line-casing", type: "line", source: "kav-lines", layout: { "line-cap": "round", "line-join": "round" },
+      paint: { "line-color": light ? "#ffffff" : "#000000", "line-width": ["+", ["get", "width"], 3], "line-opacity": ["*", 0.6, ["get", "opacity"]] } });
+    m.addLayer({ id: "kav-line", type: "line", source: "kav-lines", filter: ["!", ["get", "dashed"]], layout: { "line-cap": "round", "line-join": "round" },
+      paint: { "line-color": ["get", "color"], "line-width": ["get", "width"], "line-opacity": ["get", "opacity"] } });
+    m.addLayer({ id: "kav-line-dashed", type: "line", source: "kav-lines", filter: ["get", "dashed"], layout: { "line-cap": "round", "line-join": "round" },
+      paint: { "line-color": ["get", "color"], "line-width": ["get", "width"], "line-dasharray": [0.1, 2], "line-opacity": ["get", "opacity"] } });
+    m.addLayer({ id: "kav-point", type: "circle", source: "kav-points",
+      paint: { "circle-color": ["get", "color"], "circle-radius": ["get", "size"], "circle-stroke-color": ["get", "ring"], "circle-stroke-width": ["match", ["get", "kind"], "stop", 1.5, 2.5] } });
+    m.addLayer({ id: "kav-label", type: "symbol", source: "kav-points", filter: ["==", ["get", "kind"], "vehicle"],
+      layout: { "text-field": ["get", "label"], "text-font": ["NotoMedium"], "text-size": 11, "text-allow-overlap": true, "text-ignore-placement": true },
+      paint: { "text-color": "#ffffff" } });
+    m.addLayer({ id: "kav-stop-label", type: "symbol", source: "kav-points", filter: ["==", ["get", "kind"], "end"], minzoom: 12,
+      layout: { "text-field": ["get", "label"], "text-font": ["NotoMedium"], "text-size": 12, "text-offset": [0, 1.3], "text-anchor": "top", "text-max-width": 10 },
+      paint: { "text-color": light ? "#16161A" : "#F5F5F7", "text-halo-color": light ? "#ffffff" : "#000000", "text-halo-width": 1.5 } });
+    for (const layer of ["kav-point", "kav-label"]) {
+      m.on("click", layer, e => { const id = e.features?.[0]?.properties?.id; if (id) p.owner?.onPoint?.(String(id)); });
+      m.on("mouseenter", layer, () => { m.getCanvas().style.cursor = "pointer"; });
+      m.on("mouseleave", layer, () => { m.getCanvas().style.cursor = ""; });
+    }
+    // Only moves the person made: the map following them or fitting a route isn't a reason to search again.
+    m.on("moveend", e => { if (!(e as { originalEvent?: unknown }).originalEvent) return; const c = m.getCenter(); p.owner?.onMove?.([c.lat, c.lng], m.getZoom()); });
+    done();
+  }));
+  // A map on a hidden tab has no size until the tab shows again.
+  new ResizeObserver(() => { if (div.isConnected) m.resize(); }).observe(div);
+  pool.push(p);
+  return p;
+}
+
+function release(p: Pooled) {
+  p.owner = null;
+  p.m.stop();
+  p.loaded.then(() => {
+    if (p.owner) return;
+    (p.m.getSource("kav-lines") as maplibregl.GeoJSONSource | undefined)?.setData(lineFeatures([]));
+    (p.m.getSource("kav-points") as maplibregl.GeoJSONSource | undefined)?.setData(pointFeatures([]));
+  });
+  p.div.remove();
+  // Keep a few; more than that is memory a phone would rather have back.
+  const spare = pool.filter(x => !x.owner);
+  if (spare.length > POOL_MAX) {
+    const old = spare[0];
+    pool.splice(pool.indexOf(old), 1);
+    old.m.remove();
+  }
+}
+
 function LiveMap({ lines = [], points = [], fit, fitKey, center, zoom = 14, follow, user, onPoint, onMove, className }: Props) {
   const el = useRef<HTMLDivElement>(null);
   const map = useRef<maplibregl.Map | null>(null);
   const [ready, setReady] = useState(false);
   const { look } = usePrefs();
   const light = look === "light";
-  const onPointRef = useRef(onPoint); onPointRef.current = onPoint;
-  const onMoveRef = useRef(onMove); onMoveRef.current = onMove;
+  const owner = useRef<Owner>({});
+  owner.current.onPoint = onPoint;
+  owner.current.onMove = onMove;
 
   useEffect(() => {
-    let gone = false;
-    styleFor(light).then(style => {
-      if (gone || !el.current) return;
-      const m = new maplibregl.Map({
-        container: el.current, style, attributionControl: false,
-        center: center ? [center[1], center[0]] : [34.7818, 32.0853], zoom: center ? zoom : 11,
-        maxBounds: [[33.5, 29.0], [36.6, 33.7]], dragRotate: false, pitchWithRotate: false,
-      });
-      m.touchZoomRotate.disableRotation();
-      m.addControl(new maplibregl.AttributionControl({ compact: true, customAttribution: "© OpenStreetMap" }), "bottom-left");
-      m.on("load", () => {
-        m.addSource("kav-lines", { type: "geojson", data: lineFeatures([]) });
-        m.addSource("kav-points", { type: "geojson", data: pointFeatures([]) });
-        m.addLayer({ id: "kav-line-casing", type: "line", source: "kav-lines", layout: { "line-cap": "round", "line-join": "round" },
-          paint: { "line-color": light ? "#ffffff" : "#000000", "line-width": ["+", ["get", "width"], 3], "line-opacity": ["*", 0.6, ["get", "opacity"]] } });
-        m.addLayer({ id: "kav-line", type: "line", source: "kav-lines", filter: ["!", ["get", "dashed"]], layout: { "line-cap": "round", "line-join": "round" },
-          paint: { "line-color": ["get", "color"], "line-width": ["get", "width"], "line-opacity": ["get", "opacity"] } });
-        m.addLayer({ id: "kav-line-dashed", type: "line", source: "kav-lines", filter: ["get", "dashed"], layout: { "line-cap": "round", "line-join": "round" },
-          paint: { "line-color": ["get", "color"], "line-width": ["get", "width"], "line-dasharray": [0.1, 2], "line-opacity": ["get", "opacity"] } });
-        m.addLayer({ id: "kav-point", type: "circle", source: "kav-points",
-          paint: { "circle-color": ["get", "color"], "circle-radius": ["get", "size"], "circle-stroke-color": ["get", "ring"], "circle-stroke-width": ["match", ["get", "kind"], "stop", 1.5, 2.5] } });
-        m.addLayer({ id: "kav-label", type: "symbol", source: "kav-points", filter: ["==", ["get", "kind"], "vehicle"],
-          layout: { "text-field": ["get", "label"], "text-font": ["NotoMedium"], "text-size": 11, "text-allow-overlap": true, "text-ignore-placement": true },
-          paint: { "text-color": "#ffffff" } });
-        m.addLayer({ id: "kav-stop-label", type: "symbol", source: "kav-points", filter: ["==", ["get", "kind"], "end"], minzoom: 12,
-          layout: { "text-field": ["get", "label"], "text-font": ["NotoMedium"], "text-size": 12, "text-offset": [0, 1.3], "text-anchor": "top", "text-max-width": 10 },
-          paint: { "text-color": light ? "#16161A" : "#F5F5F7", "text-halo-color": light ? "#ffffff" : "#000000", "text-halo-width": 1.5 } });
-        for (const layer of ["kav-point", "kav-label"]) {
-          m.on("click", layer, e => { const id = e.features?.[0]?.properties?.id; if (id) onPointRef.current?.(String(id)); });
-          m.on("mouseenter", layer, () => { m.getCanvas().style.cursor = "pointer"; });
-          m.on("mouseleave", layer, () => { m.getCanvas().style.cursor = ""; });
-        }
-        m.on("moveend", () => { const c = m.getCenter(); onMoveRef.current?.([c.lat, c.lng], m.getZoom()); });
-        map.current = m;
-        setReady(true);
-      });
-      // A map on a hidden tab has no size until the tab shows again.
-      const ro = new ResizeObserver(() => m.resize());
-      ro.observe(el.current);
-      m.once("remove", () => ro.disconnect());
+    let gone = false, held: Pooled | null = null;
+    acquire(light, el.current!, owner.current, center, zoom).then(async p => {
+      held = p;
+      if (gone) { release(p); return; }
+      await p.loaded;
+      if (gone) return;
+      map.current = p.m;
+      setReady(true);
     });
-    return () => { gone = true; setReady(false); map.current?.remove(); map.current = null; };
+    return () => { gone = true; setReady(false); map.current = null; if (held) release(held); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [light]);
 
@@ -158,9 +205,12 @@ function LiveMap({ lines = [], points = [], fit, fitKey, center, zoom = 14, foll
     m.easeTo({ center: [follow[1], follow[0]], duration: 600 });
   }, [ready, follow?.[0], follow?.[1]]);
 
+  // The first centre sets the zoom too; later ones glide there and leave the zoom as the person left it.
+  const centred = useRef(false);
   useEffect(() => {
     const m = map.current; if (!m || !ready || !center) return;
-    m.jumpTo({ center: [center[1], center[0]], zoom });
+    if (!centred.current) { centred.current = true; m.jumpTo({ center: [center[1], center[0]], zoom }); return; }
+    m.easeTo({ center: [center[1], center[0]], duration: 500 });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ready, center?.[0], center?.[1]]);
 

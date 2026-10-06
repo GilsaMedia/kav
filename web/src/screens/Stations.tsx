@@ -1,7 +1,7 @@
 // Stops near you or found by name, and the departure board of one: live from Moovit, then the timetable.
 import { useRef, useState } from "react";
 import { T, api, useHere, useLoad, useNow, clock, minutesText, distanceText, timeOf, isLive, isCancelled, modeColor, type Arrival, type Resolved } from "../core.ts";
-import { Header, LineBadge, Spinner, Note, LiveDot } from "../ui.tsx";
+import { Header, LineBadge, Spinner, Note, Eta, NextTimes } from "../ui.tsx";
 import { MapView } from "../MapView.tsx";
 import { StationMark } from "../icons.tsx";
 
@@ -43,6 +43,13 @@ export function StationsScreen() {
   );
 }
 
+// Arrivals in time order, gathered per line: each group starts with its next one.
+function groupByLine(arrivals: Arrival[]): Arrival[][] {
+  const groups = new Map<number, Arrival[]>();
+  for (const a of arrivals) { const g = groups.get(a.lineId); if (g) g.push(a); else groups.set(a.lineId, [a]); }
+  return [...groups.values()];
+}
+
 interface BoardData { stop: Stop; timetable: { route: number; short: string; long: string; type: number; agency: string; to: string; inSecs: number }[] }
 interface LiveData { moovitId: number | null; arrivals: Arrival[]; poll: number; resolved?: Resolved }
 
@@ -75,18 +82,16 @@ function Board({ stop, onBack }: { stop: Stop; onBack: () => void }) {
             {live.error && <li className="pad"><Note tone="warn">{live.error}</Note></li>}
             {live.data && live.data.moovitId == null && <li className="pad"><Note>{T("Moovit doesn't know this stop. See the timetable.", "התחנה הזו לא מוכרת ל-Moovit. ראו את לוח הזמנים.")}</Note></li>}
             {live.data?.moovitId != null && !arrivals.length && <li className="pad dim">{T("Nothing in the next hour or so.", "אין יציאות בשעה הקרובה.")}</li>}
-            {arrivals.slice(0, 40).map(a => {
+            {/* As Moovit lists a stop: one row per line, its next one large and the two after it small. */}
+            {groupByLine(arrivals).slice(0, 30).map(([a, ...more]) => {
               const line = r?.lines[a.lineId];
               const type = line ? r?.routeTypes[line.agencyId] ?? 3 : 3;
-              const mins = Math.round((timeOf(a) - now) / 60);
               return (
-                <li key={`${a.tripId}`} className="row">
+                <li key={`${a.lineId}`} className="row dep-row">
                   <LineBadge number={line?.number ?? "…"} type={type} />
-                  <div className="row-main"><div dir="auto">{line?.destination || line?.caption || ""}</div>
-                    {a.platform && <div className="dim small">{T("Platform", "רציף")} {a.platform}</div>}</div>
-                  <span className={"dep" + (isLive(a) ? " live" : "") + (isCancelled(a) ? " cancelled" : "")}>
-                    {isLive(a) && <LiveDot />}{isCancelled(a) ? T("cancelled", "בוטל") : mins <= 30 ? minutesText(mins) : clock(timeOf(a))}
-                  </span>
+                  <div className="row-main"><div className="dest" dir="auto">{line?.destination || line?.caption || ""}</div>
+                    <div className="dim small">{a.platform ? `${T("Platform", "רציף")} ${a.platform}` : ""}{more.length > 0 && <>{a.platform ? " · " : ""}{T("then ", "אחר כך ")}<NextTimes ds={more.slice(0, 2)} now={now} /></>}</div></div>
+                  <Eta d={a} now={now} />
                 </li>
               );
             })}
@@ -103,7 +108,7 @@ function Board({ stop, onBack }: { stop: Stop; onBack: () => void }) {
                 <li key={k} className="row">
                   <LineBadge number={d.short} type={d.type} />
                   <div className="row-main"><div dir="auto">{d.to}</div><div className="dim small">{d.agency}</div></div>
-                  <span className="dep">{mins <= 30 ? minutesText(mins) : clock(t)}</span>
+                  <span className="eta scheduled">{mins <= 0 ? <b>{T("now", "עכשיו")}</b> : mins < 60 ? <><b>{mins}</b><small>{T("min", "דק׳")}</small></> : <b>{clock(t)}</b>}</span>
                 </li>
               );
             })}

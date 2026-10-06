@@ -1,7 +1,7 @@
 // Every stop around you and the vehicles reporting their position, refreshed as Moovit asks.
 import { useRef, useState } from "react";
-import { T, api, useHere, useLoad, useNow, minutesText, timeOf, isLive, modeColor, mergeResolved, emptyResolved, type Arrival, type Resolved, type LatLon } from "../core.ts";
-import { Header, LineBadge, Spinner, Note, LiveDot } from "../ui.tsx";
+import { T, api, useHere, useLoad, useNow, metres, timeOf, modeColor, mergeResolved, emptyResolved, type Arrival, type Resolved, type LatLon } from "../core.ts";
+import { Header, LineBadge, Spinner, Note, Eta } from "../ui.tsx";
 import { MapView, type MapPoint } from "../MapView.tsx";
 import { LocateGlyph, CloseGlyph } from "../icons.tsx";
 
@@ -24,7 +24,7 @@ export function LiveScreen() {
     poll.current = r.pending > 0 ? 6 : Math.min(Math.max(r.poll, 10), 60);
     resolvedAll.current = mergeResolved(resolvedAll.current, r.resolved);
     return r;
-  }), () => poll.current * 1000);
+  }), () => poll.current * 1000, true);
   const now = useNow(5000);
   const r = resolvedAll.current;
   const typeOf = (lineId: number) => { const l = r.lines[lineId]; return l ? r.routeTypes[l.agencyId] ?? 3 : 3; };
@@ -42,6 +42,11 @@ export function LiveScreen() {
 
   const focusVehicle = focus?.kind === "vehicle" ? byTrip.get(focus.trip) : undefined;
   const focusStop = focus?.kind === "stop" ? stopById.get(focus.id) : undefined;
+  // The tapped vehicle at the stop nearest you that it still has ahead of it.
+  const reach = focusVehicle ? arrivals
+    .filter(a => String(a.tripId) === String(focusVehicle.tripId) && timeOf(a) >= now - 60 && stopById.has(a.stopId))
+    .map(a => { const st = stopById.get(a.stopId)!; return { a, st, m: here ? metres(here, [st.lat, st.lon]) : 0 }; })
+    .sort((x, y) => x.m - y.m)[0] : undefined;
   const pattern = useLoad<{ stops: { id: number; name: string; lat: number | null; lon: number | null }[] }>(
     focusVehicle && focusVehicle.patternId > 0 ? `pat:${focusVehicle.patternId}` : null,
     s => api(`pattern?id=${focusVehicle!.patternId}`, undefined, s));
@@ -82,9 +87,16 @@ export function LiveScreen() {
             <button className="icon-btn" onClick={() => setFocus(null)} aria-label={T("Close", "סגירה")}><CloseGlyph size={16} /></button>
             {focusStop && <b dir="auto">{focusStop.name}</b>}
             {focusVehicle && <><LineBadge number={r.lines[focusVehicle.lineId]?.number ?? "…"} type={typeOf(focusVehicle.lineId)} />
-              <span dir="auto">{T("to", "ל")}{r.lines[focusVehicle.lineId]?.destination ?? ""}</span></>}
+              <span dir="auto" className="grow">{T("to", "ל")}{r.lines[focusVehicle.lineId]?.destination ?? ""}</span></>}
           </div>
         )}
+        {reach && <div className="card your-stop">
+          <div className="row-main">
+            <div className="your-label">{here ? T("Reaches the stop nearest you", "מגיע לתחנה הקרובה אליך") : T("Next stop", "התחנה הבאה")}</div>
+            <div className="dest" dir="auto">{reach.st.name}</div>
+          </div>
+          <Eta d={reach.a} now={now} />
+        </div>}
       </div>
       <div className="scroll">
         <ul className="list">
@@ -98,7 +110,7 @@ export function LiveScreen() {
                   <div dir="auto">{line?.destination ? `${T("to", "ל")}${line.destination}` : ""}</div>
                   <div className="dim small" dir="auto">{stopById.get(a.stopId)?.name ?? ""}{away > 0 ? T(` · ${away} stops away`, ` · עוד ${away} תחנות`) : away === 0 ? T(" · at the stop", " · בתחנה") : ""}</div>
                 </div>
-                <span className={"dep" + (isLive(a) ? " live" : "")}>{isLive(a) && <LiveDot />}{minutesText(Math.round((timeOf(a) - now) / 60))}</span>
+                <Eta d={a} now={now} />
               </li>
             );
           })}

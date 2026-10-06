@@ -4,8 +4,45 @@ import { BackGlyph, ModeGlyph, modeOf, StationMark, StarGlyph, RecentGlyph, PinG
 import qrcode from "qrcode-generator";
 import {
   T, api, usePrefs, getPrefs, setPrefs, remember, useHere, modeName, distanceText, metres, currentHere, locateOnce, failure,
-  type Place,
+  clock, timeOf, isLive, isCancelled, type Place, type Departure,
 } from "./core.ts";
+
+// ---- when it comes ---------------------------------------------------------------------------
+
+// Late by two minutes or more against the timetable.
+export const isLate = (d: Departure) => d.rtUtc > 0 && d.staticUtc > 0 && d.rtUtc - d.staticUtc >= 120;
+
+// Moovit's signal: two arcs over the time, breathing while the vehicle reports where it is.
+export const LiveWaves = () => (
+  <svg className="waves" viewBox="0 0 16 10" width={14} height={9} aria-hidden="true" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round">
+    <path className="w1" d="M5.5 7.5a3.5 3.5 0 0 1 5 0" /><path className="w2" d="M2.5 4.8a7.5 7.5 0 0 1 11 0" />
+  </svg>
+);
+
+// The time a departure really comes: one number, as Moovit shows it. A late one says so instead of adding
+// its delay on top ("3 min, delayed", never "1 min +2").
+export function Eta({ d, now, inline }: { d: Departure; now: number; inline?: boolean }) {
+  const t = timeOf(d);
+  if (isCancelled(d)) return <span className={"eta cancelled" + (inline ? " inline" : "")}><b>{clock(d.staticUtc)}</b><small>{T("cancelled", "בוטל")}</small></span>;
+  const mins = Math.max(0, Math.round((t - now) / 60));
+  const live = isLive(d), late = isLate(d);
+  const label = mins <= 0 ? T("now", "עכשיו") : mins < 60 ? T(`in ${mins} minutes`, `בעוד ${mins} דקות`) : clock(t);
+  return (
+    <span className={"eta" + (live ? " live" : "") + (late ? " late" : "") + (inline ? " inline" : "")} aria-label={label + (late ? T(", delayed", ", באיחור") : "")}>
+      {live && <LiveWaves />}
+      {mins <= 0 ? <b>{T("now", "עכשיו")}</b> : mins < 60 ? <><b>{mins}</b><small>{T("min", "דק׳")}</small></> : <b>{clock(t)}</b>}
+      {late && <small className="eta-late">{T("delayed", "באיחור")}</small>}
+    </span>
+  );
+}
+
+// The ones after the first, small: "12, 25 min".
+export function NextTimes({ ds, now }: { ds: Departure[]; now: number }) {
+  if (!ds.length) return null;
+  const parts = ds.map(d => { const m = Math.max(0, Math.round((timeOf(d) - now) / 60)); return m < 60 ? String(m) : clock(timeOf(d)); });
+  const allMinutes = ds.every(d => timeOf(d) - now < 3600);
+  return <span className="next-times">{parts.join(", ")}{allMinutes ? " " + T("min", "דק׳") : ""}</span>;
+}
 
 // Going back, the screen underneath fades up where it is instead of sliding in. Tabs crossfade the same way.
 let stayTimer = 0;

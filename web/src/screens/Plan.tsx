@@ -5,7 +5,7 @@ import {
   timeOf, isLive, isCancelled, routeTypeOf, options, modeColor, modeName, MODE_FILTERS, mergeResolved, emptyResolved,
   type Place, type Itinerary, type Leg, type Resolved, type Arrival, type LatLon, type Departure,
 } from "../core.ts";
-import { Header, LineBadge, Spinner, Note, LiveDot, PlacePicker, SaveFavourite, HERE_NAME, Sheet } from "../ui.tsx";
+import { Header, LineBadge, Spinner, Note, LiveDot, PlacePicker, SaveFavourite, HERE_NAME, Sheet, Eta, isLate } from "../ui.tsx";
 import { MapView, type MapLine, type MapPoint } from "../MapView.tsx";
 import { isNative, keepAwake } from "../native.ts";
 import { SwapGlyph, ClockGlyph, StarGlyph, CloseGlyph, RecentGlyph, WalkGlyph, BikeGlyph, TaxiGlyph, DotGlyph, ShareGlyph, PlayGlyph, ChevronGlyph } from "../icons.tsx";
@@ -171,11 +171,9 @@ function ItineraryCard({ it, resolved, onClick }: { it: Itinerary; resolved: Res
   const firstRide = it.legs.find(l => l.kind === "ride");
   const mins = Math.max(0, Math.round((it.arr - it.dep) / 60));
   return (
+    // As Moovit lays a result out: the way there on the left, the whole trip in minutes large on the right.
     <button className="card it-card" onClick={onClick}>
-      <div className="it-top">
-        <span className="it-time">{clock(it.dep)} – {clock(it.arr)}</span>
-        <span className="it-dur">{minutesText(mins)}</span>
-      </div>
+      <div className="it-body">
       <div className="it-legs">
         {it.legs.filter(l => l.kind !== "wait").map((l, i) => (
           <span key={i} className="it-leg">
@@ -187,10 +185,12 @@ function ItineraryCard({ it, resolved, onClick }: { it: Itinerary; resolved: Res
           </span>
         ))}
       </div>
+      <div className="it-time">{clock(it.dep)} – {clock(it.arr)}{it.fare > 0 && <span className="dim"> · {shekels(it.fare)}</span>}</div>
       <div className="it-foot dim">
         {firstRide && <span>{T("from", "מ")}{" "}<span dir="auto">{resolved.stops[firstRide.fromStop]?.name ?? ""}</span> · {clock(firstRide.dep)}</span>}
-        {it.fare > 0 && <span> · {shekels(it.fare)}</span>}
       </div>
+      </div>
+      <span className="eta it-total">{mins < 60 ? <><b>{mins}</b><small>{T("min", "דק׳")}</small></> : <><b>{Math.floor(mins / 60)}:{String(mins % 60).padStart(2, "0")}</b><small>{T("hours", "שעות")}</small></>}</span>
     </button>
   );
 }
@@ -223,15 +223,11 @@ function departuresFor(ride: Leg, wait: Leg | undefined, live: Arrival[] | undef
 }
 
 function DepTime({ d, now }: { d: Departure; now: number }) {
-  const t = timeOf(d);
-  if (isCancelled(d)) return <span className="dep cancelled">{clock(d.staticUtc)} {T("cancelled", "בוטל")}</span>;
-  const mins = Math.round((t - now) / 60);
-  const late = d.rtUtc > 0 && d.staticUtc > 0 ? Math.round((d.rtUtc - d.staticUtc) / 60) : 0;
+  // The real time only: a late one is marked late, its delay isn't added on top.
   return (
-    <span className={"dep" + (isLive(d) ? " live" : "")}>
-      {isLive(d) && <LiveDot />}{mins <= 30 ? minutesText(mins) : clock(t)}
-      {late >= 2 && <span className="late"> +{late}</span>}
-      {d.platform && <span className="dim"> · {T("platform", "רציף")} {d.platform}</span>}
+    <span className="dep-time">
+      <Eta d={d} now={now} inline />
+      {d.platform && <span className="dim small"> · {T("platform", "רציף")} {d.platform}</span>}
     </span>
   );
 }
@@ -392,7 +388,7 @@ function Navigate({ trip, r, live, here, lines, ends, vehicles, onExit }: {
     const d = deps.find(x => String(x.tripId) === String(cur.tripId)) ?? deps[0];
     detail = here && end && step > 0 && metres(here, stopAt(cur.fromStop) ?? here) > 150
       ? T(`${distanceText(metres(here, end))} to get off`, `${distanceText(metres(here, end))} עד הירידה`)
-      : d ? T(`leaves ${minutesText(Math.round((timeOf(d) - now) / 60))}`, `יוצא ${minutesText(Math.round((timeOf(d) - now) / 60))}`) + (isLive(d) ? " ●" : "") : "";
+      : d ? T(`leaves ${minutesText(Math.round((timeOf(d) - now) / 60))}`, `יוצא ${minutesText(Math.round((timeOf(d) - now) / 60))}`) + (isLate(d) ? T(" · delayed", " · באיחור") : "") + (isLive(d) ? " ●" : "") : "";
   } else if (cur) { title = T("Continue", "המשיכו"); }
 
   return (

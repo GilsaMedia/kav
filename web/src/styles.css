@@ -325,7 +325,8 @@ h2 { font-size: 19px; }
 .deps { display: flex; gap: 14px; flex-wrap: wrap; }
 .stops-mini { margin: 0; padding-inline-start: 18px; color: var(--muted); font-size: 14px; animation: fade-in .24s backwards; }
 
-.map { width: 100%; background: var(--s1); }
+.map { width: 100%; background: var(--s1); position: relative; overflow: hidden; }
+.map-canvas { position: absolute; inset: 0; }
 .map-half { height: 40vh; min-height: 220px; flex-shrink: 0; }
 .map-small { height: 26vh; min-height: 160px; flex-shrink: 0; }
 .map-full { position: absolute; inset: 0; height: 100%; }
@@ -420,3 +421,44 @@ h2 { font-size: 19px; }
 .preview-row { display: flex; align-items: center; gap: 8px; padding: 0 4px; }
 .preview-card .preview-row { padding: 8px 12px; }
 .preview-btn { border-radius: var(--r-pill); background: var(--accent); color: var(--on-accent); padding: 5px 12px; font-size: 11px; }
+
+/* ---- arrivals, Moovit's way: one big number, the unit under it, the signal above ------------- */
+
+.eta {
+  display: inline-grid; justify-items: center; align-content: center; min-width: 46px; flex-shrink: 0;
+  line-height: 1; font-variant-numeric: tabular-nums; color: var(--text); gap: 2px;
+}
+.eta b { font-size: 22px; font-weight: 700; letter-spacing: -.02em; }
+.eta small { font-size: 11px; color: var(--dim); font-weight: 500; }
+.eta.live, .eta.live small { color: var(--live); }
+.eta.late b { color: var(--problem); }
+.eta small.eta-late { color: var(--problem); font-weight: 600; }
+.eta.cancelled b { color: var(--critical); text-decoration: line-through; font-size: 16px; }
+.eta.cancelled small { color: var(--critical); }
+.eta.scheduled b { color: var(--muted); }
+/* In a line of text: "3 min" on one line, the signal before it. */
+.eta.inline { display: inline-flex; align-items: baseline; gap: 3px; min-width: 0; }
+.eta.inline b { font-size: 16px; }
+.eta.inline .waves { align-self: center; }
+.waves { color: var(--live); overflow: visible; }
+.waves .w1 { animation: wave 1.6s var(--ease) infinite; }
+.waves .w2 { animation: wave 1.6s var(--ease) .25s infinite; }
+@keyframes wave { 0%, 100% { opacity: .35; } 40% { opacity: 1; } }
+.next-times { font-variant-numeric: tabular-nums; }
+.dep-time { display: inline-flex; align-items: baseline; gap: 4px; }
+
+.dep-row { padding-block: 13px; }
+.dep-row .badge { min-width: 46px; height: 30px; font-size: 15px; }
+.dest { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.your-stop { display: flex; align-items: center; gap: 12px; padding: 14px 16px; border-color: color-mix(in srgb, var(--accent) 45%, transparent); }
+.your-stop .dest { font-size: 17px; text-align: start; color: var(--text); padding: 2px 0; }
+.your-label { font-size: 12px; font-weight: 600; color: var(--accent-fg); }
+.focus-head + .your-stop { margin-top: 2px; }
+.line-stops li.your { background: color-mix(in srgb, var(--accent) 12%, transparent); border-radius: 12px; margin-inline-end: 8px; }
+.line-stops li.your .stop-dot { background: var(--accent); }
+.here-pill { display: inline-block; font-size: 11px; font-weight: 600; color: var(--on-accent); background: var(--accent); border-radius: 999px; padding: 1px 8px; margin-inline-end: 6px; }
+.line-stops li { padding-inline-end: 8px; }
+.it-card { flex-direction: row; align-items: center; gap: 12px; }
+.it-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 7px; }
+.it-card .it-time { font-size: 14px; font-weight: 500; color: var(--muted); }
+.it-total b { font-size: 26px; }

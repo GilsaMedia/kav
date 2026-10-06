@@ -95,11 +95,12 @@ export function failure(e: unknown): string {
 }
 
 // Loads once per key, keeps the last answer while reloading, and drops answers to stale keys.
-export function useLoad<T>(key: string | null, load: (signal: AbortSignal) => Promise<T>, everyMs?: number | (() => number)) {
+// With keep, a new key shows the old answer until the new one comes, rather than an empty screen.
+export function useLoad<T>(key: string | null, load: (signal: AbortSignal) => Promise<T>, everyMs?: number | (() => number), keep = false) {
   const [state, setState] = useState<{ data: T | null; error: string | null; loading: boolean }>({ data: null, error: null, loading: !!key });
   const [tick, setTick] = useState(0);
   const loadRef = useRef(load); loadRef.current = load;
-  useEffect(() => { setState({ data: null, error: null, loading: !!key }); }, [key]);
+  useEffect(() => { setState(s => ({ data: keep ? s.data : null, error: null, loading: !!key })); }, [key]);
   useEffect(() => {
     if (!key) return;
     const ac = new AbortController();
