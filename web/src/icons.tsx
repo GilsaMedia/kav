@@ -215,3 +215,33 @@ export const FlagGlyph = (p: Props) => <Glyph {...p} w={7}>
   <g fill="currentColor" stroke="none"><rect x={20} y={14} width={15} height={10} /><rect x={50} y={14} width={15} height={10} /><rect x={35} y={24} width={15} height={10} />
     <rect x={65} y={24} width={15} height={10} /><rect x={20} y={34} width={15} height={10} /><rect x={50} y={34} width={15} height={10} /><rect x={35} y={44} width={15} height={10} /><rect x={65} y={44} width={15} height={10} /></g>
 </Glyph>;
+
+// ---- the tab bar, drawn as Moovit draws it: outlined, filled when it is the tab you're on --------
+
+export const DirectionsGlyph = ({ on, ...p }: Props & { on?: boolean }) => <Glyph {...p} w={8}>
+  <circle cx={18} cy={50} r={11} fill={on ? "currentColor" : "none"} /><circle cx={82} cy={50} r={11} fill={on ? "currentColor" : "none"} />
+  {L(32, 50, 66, 50)}{L(56, 40, 66, 50)}{L(56, 60, 66, 50)}
+</Glyph>;
+
+export const StationTabGlyph = ({ on, ...p }: Props & { on?: boolean }) => <Glyph {...p} w={8}>
+  <path d="M50 92C50 92 18 62 18 38a32 32 0 0 1 64 0c0 24-32 54-32 54z" fill={on ? "currentColor" : "none"} />
+  {!on && <circle cx={50} cy={38} r={11} />}
+</Glyph>;
+
+export const LinesTabGlyph = ({ on, ...p }: Props & { on?: boolean }) => <Glyph {...p} w={8}>
+  {[14, 50, 86].map(x => <circle key={x} cx={x} cy={50} r={10} fill={on ? "currentColor" : "none"} />)}
+  {L(24, 50, 40, 50)}{L(60, 50, 76, 50)}
+</Glyph>;
+
+export const TicketGlyph = ({ on, ...p }: Props & { on?: boolean }) => <Glyph {...p} w={8}>
+  <g transform="rotate(-40 50 50)">
+    <path d="M10 30h80v12a8 8 0 0 0 0 16v12H10V58a8 8 0 0 0 0-16z" fill={on ? "currentColor" : "none"} />
+    {!on && <g strokeDasharray="4 6">{L(38, 34, 38, 66)}</g>}
+  </g>
+</Glyph>;
+
+export const LiveTabGlyph = ({ on, ...p }: Props & { on?: boolean }) => <Glyph {...p} w={8}>
+  <circle cx={50} cy={50} r={12} fill="currentColor" stroke="none" />
+  <path d="M30 30a28 28 0 0 0 0 40M70 30a28 28 0 0 1 0 40" />
+  {on && <path d="M16 16a48 48 0 0 0 0 68M84 16a48 48 0 0 1 0 68" />}
+</Glyph>;

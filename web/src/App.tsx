@@ -3,7 +3,7 @@ import { T, usePrefs, setPrefs, type LatLon, type Look } from "./core.ts";
 import { AccentPicker } from "./Accent.tsx";
 import { Onboarding, SupportPrompt } from "./Onboarding.tsx";
 import { Header, stayPut } from "./ui.tsx";
-import { TripGlyph, StationsGlyph, LinesGlyph, LiveGlyph, PayGlyph, GearGlyph } from "./icons.tsx";
+import { DirectionsGlyph, StationTabGlyph, LinesTabGlyph, LiveTabGlyph, TicketGlyph, GearGlyph } from "./icons.tsx";
 import { isNative, removeMap, getMapState } from "./native.ts";
 import { PlanScreen } from "./screens/Plan.tsx";
 import { StationsScreen } from "./screens/Stations.tsx";
@@ -13,12 +13,13 @@ import { PayScreen } from "./screens/Pay.tsx";
 
 type Tab = "plan" | "stations" | "lines" | "live" | "pay" | "settings";
 
-const TABS: { tab: Tab; Icon: ComponentType<{ size?: number }>; label: () => string }[] = [
-  { tab: "plan", Icon: TripGlyph, label: () => T("Trip", "מסלול") },
-  { tab: "stations", Icon: StationsGlyph, label: () => T("Stations", "תחנות") },
-  { tab: "lines", Icon: LinesGlyph, label: () => T("Lines", "קווים") },
-  { tab: "live", Icon: LiveGlyph, label: () => T("Live", "חי") },
-  { tab: "pay", Icon: PayGlyph, label: () => T("Pay", "תשלום") },
+// As Moovit names and draws them: the tab you are on is filled and lit.
+const TABS: { tab: Tab; Icon: ComponentType<{ size?: number; on?: boolean }>; label: () => string }[] = [
+  { tab: "plan", Icon: DirectionsGlyph, label: () => T("Directions", "מסלולים") },
+  { tab: "stations", Icon: StationTabGlyph, label: () => T("Stations", "תחנות") },
+  { tab: "lines", Icon: LinesTabGlyph, label: () => T("Lines", "קווים") },
+  { tab: "live", Icon: LiveTabGlyph, label: () => T("Live", "חי") },
+  { tab: "pay", Icon: TicketGlyph, label: () => T("Tickets", "כרטיסים") },
   { tab: "settings", Icon: GearGlyph, label: () => T("Settings", "הגדרות") },
 ];
 
@@ -46,11 +47,10 @@ export function App() {
         {tab === "pay" && <div className="tab-page"><PayScreen start={payStart} onStarted={() => setPayStart(null)} /></div>}
         {tab === "settings" && <div className="tab-page"><Settings /></div>}
       </main>
-      <nav className="tabbar" style={{ "--n": TABS.length, "--i": TABS.findIndex(t => t.tab === tab) } as React.CSSProperties}>
-        <span className="tab-ind" aria-hidden="true" />
+      <nav className="tabbar">
         {TABS.map(({ tab: t, Icon, label }) => (
           <button key={t} className={tab === t ? "on" : ""} onClick={() => go(t)} aria-current={tab === t ? "page" : undefined}>
-            <Icon size={20} /><span className="tab-label">{label()}</span>
+            <Icon size={26} on={tab === t} /><span className="tab-label">{label()}</span>
           </button>
         ))}
       </nav>

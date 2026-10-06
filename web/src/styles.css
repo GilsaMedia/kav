@@ -625,3 +625,19 @@ h2 { font-size: 19px; }
 .ld-act:active { transform: scale(.96); }
 .ld-act.stop { background: color-mix(in srgb, var(--critical) 85%, var(--bg)); color: #fff; }
 .ld-square { width: 14px; height: 14px; border-radius: 3px; background: currentColor; }
+
+/* ---- the tab bar, as Moovit's: a full-width bar on the bottom edge, the tab you're on lit ------- */
+
+:root { --bar-h: 64px; --bar-space: calc(var(--bar-h) + env(safe-area-inset-bottom)); }
+.tabbar, :root[data-glass="liquid"] .tabbar, :root[data-glass="solid"] .tabbar {
+  inset-inline: 0; bottom: 0; height: auto; border-radius: 0; padding: 6px 2px calc(env(safe-area-inset-bottom) + 4px);
+  border: 0; border-top: .5px solid var(--hairline); box-shadow: none; background: var(--sunken);
+}
+:root[data-glass="liquid"] .tabbar { background: color-mix(in srgb, var(--sunken) 86%, transparent); }
+.tab-ind { display: none; }
+.tabbar button { gap: 4px; padding: 4px 0; color: var(--muted); }
+.tabbar button.on { color: var(--accent-fg); }
+:root:not([data-look="light"]) .tabbar button.on { color: var(--accent); }
+.tab-label { font-size: 12px; font-weight: 700; letter-spacing: -.01em; white-space: nowrap; }
+.tabbar button .glyph { transition: transform .3s var(--spring-pop); }
+.tabbar button:active .glyph { transform: scale(.88); }
