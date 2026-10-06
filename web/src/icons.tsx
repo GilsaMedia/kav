@@ -188,3 +188,17 @@ export function StationMark({ type, size = 18 }: { type: number; size?: number }
     </span>
   );
 }
+
+export const BriefcaseGlyph = (p: Props) => <Glyph {...p} w={8}>
+  <rect x={10} y={30} width={80} height={54} rx={9} /><path d="M36 30v-8a6 6 0 0 1 6-6h16a6 6 0 0 1 6 6v8" />{L(10, 52, 90, 52)}
+</Glyph>;
+
+export const MoreGlyph = (p: Props) => <Glyph {...p}>
+  <g fill="currentColor" stroke="none"><circle cx={20} cy={50} r={9} /><circle cx={50} cy={50} r={9} /><circle cx={80} cy={50} r={9} /></g>
+</Glyph>;
+
+// From one place to another: two rings and the dots between them, as a recent trip's mark.
+export const FromToGlyph = (p: Props) => <svg viewBox="0 0 20 60" width={(p.size ?? 30) / 3} height={p.size ?? 30} className="glyph" fill="none" stroke="currentColor" strokeWidth={2.5} aria-hidden="true">
+  <circle cx={10} cy={7} r={4.5} /><circle cx={10} cy={53} r={4.5} fill="currentColor" />
+  <g fill="currentColor" stroke="none">{[19, 27, 35, 43].map(y => <circle key={y} cx={10} cy={y} r={1.6} />)}</g>
+</svg>;

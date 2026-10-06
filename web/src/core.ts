@@ -13,12 +13,31 @@ export interface Prefs {
   accent: string; liquid: boolean;
   // First-launch setup done, and the one "Enjoying Kav?" note after it.
   onboarded: boolean; supportShown: boolean;
+  // Trips planned, newest first, for the home screen.
+  trips: RecentTrip[];
+}
+export interface RecentTrip { from: Place | null; to: Place; at: number }
+
+export function rememberTrip(from: Place | null, to: Place) {
+  const same = (a: Place | null, b: Place | null) => (!a && !b) || (!!a && !!b && Math.abs(a.lat - b.lat) < 1e-4 && Math.abs(a.lon - b.lon) < 1e-4);
+  const trips = [{ from, to, at: Date.now() }, ...prefs.trips.filter(t => !(same(t.from, from) && same(t.to, to)))].slice(0, 10);
+  setPrefs({ trips });
+}
+
+export function agoText(ms: number) {
+  const m = Math.round((Date.now() - ms) / 60000);
+  if (m < 1) return T("just now", "עכשיו");
+  if (m < 60) return T(`${m} min ago`, `לפני ${m} דק׳`);
+  const h = Math.round(m / 60);
+  if (h < 24) return T(`${h} h ago`, `לפני ${h} ש׳`);
+  const d = Math.round(h / 24);
+  return T(`${d} d ago`, `לפני ${d} ימים`);
 }
 
 export const DEFAULT_ACCENT = "#9ABEFF";
 const DEFAULTS: Prefs = {
   lang: "he", look: "dark", privateSearch: true, recents: [], favourites: [], modes: [], accent: DEFAULT_ACCENT, liquid: true,
-  onboarded: false, supportShown: false,
+  onboarded: false, supportShown: false, trips: [],
 };
 const KEY = "kav-prefs";
 

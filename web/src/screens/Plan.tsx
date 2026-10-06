@@ -1,12 +1,13 @@
 // Planning a trip: where from and to, the ways there, one of them in detail, and walking through it.
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
-  T, api, usePrefs, setPrefs, useHere, useLoad, useNow, clock, minutesText, distanceText, metres, shekels, failure,
+  T, api, usePrefs, setPrefs, rememberTrip, useHere, useLoad, useNow, clock, minutesText, distanceText, metres, shekels, failure,
   timeOf, isLive, isCancelled, routeTypeOf, options, modeColor, modeName, MODE_FILTERS, mergeResolved, emptyResolved,
   type Place, type Itinerary, type Leg, type Resolved, type Arrival, type LatLon, type Departure,
 } from "../core.ts";
 import { Header, LineBadge, Spinner, Note, LiveDot, PlacePicker, SaveFavourite, HERE_NAME, Sheet, Eta, isLate } from "../ui.tsx";
 import { MapView, type MapLine, type MapPoint } from "../MapView.tsx";
+import { Home } from "./Home.tsx";
 import { isNative, keepAwake } from "../native.ts";
 import { SwapGlyph, ClockGlyph, StarGlyph, CloseGlyph, RecentGlyph, WalkGlyph, BikeGlyph, TaxiGlyph, DotGlyph, ShareGlyph, PlayGlyph, ChevronGlyph } from "../icons.tsx";
 
@@ -19,7 +20,7 @@ export function PlanScreen({ onPay }: { onPay: (at?: LatLon, routeType?: number)
   const here = useHere();
   const [from, setFrom] = useState<Place | null>(null);
   const [to, setTo] = useState<Place | null>(null);
-  const [picking, setPicking] = useState<"from" | "to" | null>(null);
+  const [picking, setPicking] = useState<"from" | "to" | "fav" | null>(null);
   const [when, setWhen] = useState<When>({ kind: "now" });
   const [timeSheet, setTimeSheet] = useState(false);
   const [searchKey, setSearchKey] = useState<string | null>(null);
@@ -41,6 +42,7 @@ export function PlanScreen({ onPay }: { onPay: (at?: LatLon, routeType?: number)
   useEffect(() => {
     if (!to || (!from && !here)) return;
     setChosen(null);
+    rememberTrip(from, to);
     setSearchKey(JSON.stringify([from?.lat, from?.lon, !from ? "here" : "", to.lat, to.lon, when, prefs.modes, Date.now()]));
     // `here` is read once when the search starts, not on every fix.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -58,10 +60,23 @@ export function PlanScreen({ onPay }: { onPay: (at?: LatLon, routeType?: number)
   const swap = () => { const f = from; setFrom(to); setTo(f ?? { name: HERE_NAME(), detail: "", lat: here?.[0] ?? 0, lon: here?.[1] ?? 0, type: -1 }); };
 
   if (picking) {
-    return <PlacePicker title={picking === "from" ? T("From", "מאיפה") : T("To", "לאן")} allowHere
+    return <PlacePicker title={picking === "from" ? T("From", "מאיפה") : picking === "fav" ? T("Add a favorite", "הוספת מועדף") : T("To", "לאן")} allowHere={picking !== "fav"}
       onClose={() => setPicking(null)}
-      onPick={p => { (picking === "from" ? setFrom : setTo)(p.type === -1 && picking === "from" ? null : p); setPicking(null); }} />;
+      onPick={p => {
+        if (picking === "fav") setSaving(p);
+        else (picking === "from" ? setFrom : setTo)(p.type === -1 && picking === "from" ? null : p);
+        setPicking(null);
+      }} />;
   }
+
+  // No destination yet: the home screen, as Moovit opens.
+  if (!to) return (
+    <div className="screen">
+      <Home onSearch={() => setPicking("to")} onGo={p => { setFrom(null); setTo(p); }} onTrip={t => { setFrom(t.from); setTo(t.to); }}
+        onPay={() => onPay()} onAdd={() => setPicking("fav")} />
+      {saving && <SaveFavourite place={saving} onDone={() => setSaving(null)} />}
+    </div>
+  );
 
   if (chosen != null && its[chosen] && plan.data) {
     return <TripDetail trip={its[chosen]} resolved={plan.data.resolved} from={from?.name ?? HERE_NAME()} to={to?.name ?? ""}
@@ -73,7 +88,7 @@ export function PlanScreen({ onPay }: { onPay: (at?: LatLon, routeType?: number)
 
   return (
     <div className="screen">
-      <Header title={T("Where to?", "לאן נוסעים?")} />
+      <Header title={T("Where to?", "לאן נוסעים?")} back={() => { setTo(null); setFrom(null); setSearchKey(null); }} />
       <div className="pad stack">
         <div className="ends card">
           <button className="end" onClick={() => setPicking("from")}>

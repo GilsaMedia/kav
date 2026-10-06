@@ -462,3 +462,49 @@ h2 { font-size: 19px; }
 .it-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 7px; }
 .it-card .it-time { font-size: 14px; font-weight: 500; color: var(--muted); }
 .it-total b { font-size: 26px; }
+
+/* ---- the home screen, laid out as Moovit's ---------------------------------------------------- */
+
+.home { padding-top: calc(env(safe-area-inset-top) + 8px); }
+.home-search {
+  width: 100%; min-height: 58px; border-radius: 29px; display: flex; align-items: center; gap: 10px;
+  padding: 0 8px 0 22px; font-size: 17px; color: var(--muted); text-align: start;
+  transition: transform .16s var(--ease);
+}
+[dir="rtl"] .home-search { padding: 0 22px 0 8px; }
+.home-search > span:first-child { flex: 1; }
+.home-search:active { transform: scale(.98); }
+.home-search-icon { width: 44px; height: 44px; border-radius: 22px; display: grid; place-items: center; background: color-mix(in srgb, var(--accent) 22%, transparent); color: var(--accent-fg); }
+
+.frequent { padding: 4px 0 8px; }
+.frequent-strip { display: flex; overflow-x: auto; scroll-snap-type: x mandatory; scrollbar-width: none; gap: 0; }
+.frequent-strip::-webkit-scrollbar { display: none; }
+.frequent-card {
+  flex: 0 0 calc(100% - 32px); margin: 0 16px; scroll-snap-align: center; text-align: start; padding: 0; overflow: hidden;
+  display: flex; flex-direction: column;
+}
+.frequent-head { padding: 12px 16px; font-size: 14px; font-weight: 600; color: var(--dim); border-bottom: .5px solid var(--hairline); }
+.frequent-to { padding: 14px 16px 2px; font-size: 21px; font-weight: 700; }
+.frequent-wait { padding: 4px 16px 18px; min-height: 120px; }
+.quick { padding: 4px 16px 18px; display: flex; flex-direction: column; gap: 12px; font-size: 16px; }
+.quick-lines .badge { height: 36px; font-size: 17px; padding: 0 12px; gap: 7px; border-width: 1.5px; box-shadow: inset 0 -3px 0 var(--accent); }
+.quick-leaves { color: var(--muted); }
+.live-text { color: var(--live); display: inline-flex; align-items: baseline; gap: 4px; }
+.live-text b { font-size: 18px; }
+.quick.brief { padding: 6px 0; flex-direction: row; align-items: center; gap: 10px; font-size: 15px; }
+.quick.brief .badge { height: 30px; font-size: 15px; }
+.dots { display: flex; justify-content: center; gap: 7px; padding-top: 12px; }
+.dots span { width: 7px; height: 7px; border-radius: 4px; background: var(--s4); transition: width .3s var(--spring), background-color .3s; }
+.dots span.on { width: 18px; background: var(--accent); }
+
+.home-row { display: flex; align-items: center; gap: 14px; width: 100%; padding: 16px; text-align: start; font-size: 17px; border-top: .5px solid var(--hairline); border-bottom: .5px solid var(--hairline); margin-top: 8px; }
+.home-row:active { background: var(--plate); }
+.home-row-icon { width: 30px; display: grid; place-items: center; color: var(--muted); flex-shrink: 0; }
+.home-row-icon.lit { color: var(--accent-fg); }
+.home-pill { background: var(--accent); color: var(--on-accent); border-radius: 999px; padding: 6px 16px; font-size: 15px; font-weight: 700; }
+.home-head { display: flex; justify-content: space-between; align-items: center; padding: 18px 16px 10px; background: var(--sunken); color: var(--muted); font-size: 16px; font-weight: 500; }
+.home-head .link { font-weight: 700; padding: 0; }
+.home-list > li { display: flex; align-items: center; gap: 14px; padding: 14px 16px; border-bottom: .5px solid var(--hairline); cursor: pointer; }
+.home-list > li:active { background: var(--plate); }
+.home-fav .dest { font-size: 18px; }
+.home-trip .dest { font-size: 17px; }
