@@ -114,7 +114,16 @@ export async function verify(user: MoovitSession, code: string, takeOver: boolea
 // The CVV goes to Moovit once and is kept nowhere.
 export async function confirmCard(user: MoovitSession, cvv: string) {
   // Digits only: the iPhone keyboard or autofill can bring a space along.
-  await call(user, "PTB/Accounts/SetBillingAccount", new TWriter().strField(1, CONTEXT).strField(2, cvv.replace(/\D/g, "")));
+  const digits = cvv.replace(/\D/g, "");
+  try {
+    await call(user, "PTB/Accounts/SetBillingAccount", new TWriter().strField(1, CONTEXT).strField(2, digits));
+  } catch (e) {
+    // Moovit's server answers 500 {"error":"null"} when it finds nothing where it looks for the CVV. Once
+    // more with the CVV in a struct of its own, as Moovit's newer requests carry their card details.
+    if (!(e instanceof Error) || !/HTTP 500/.test(e.message)) throw e;
+    await call(user, "PTB/Accounts/SetBillingAccount",
+      new TWriter().strField(1, CONTEXT).structField(2, new TWriter().strField(1, digits)));
+  }
 }
 
 export async function account(user: MoovitSession) {
