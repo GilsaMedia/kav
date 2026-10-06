@@ -514,3 +514,9 @@ h2 { font-size: 19px; }
 .soon-text b, .live-text b { font-size: 17px; }
 .it-foot { display: flex; flex-direction: column; gap: 2px; font-size: 13px; }
 .it-foot .dim { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* A plate with several lines is never cut short, and reads "72 / 27 / 282" in the text face. */
+.quick .badge { max-width: none; font-family: inherit; font-weight: 700; letter-spacing: 0; overflow: visible; }
+.quick-lines .badge { box-shadow: none; border-bottom: 3px solid var(--accent); }
+.quick.brief { flex-wrap: wrap; row-gap: 6px; }
+.quick.brief .arrives.short { font-size: 14px; }
+.arrives bdi { unicode-bidi: isolate; }

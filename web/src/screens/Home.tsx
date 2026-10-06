@@ -18,8 +18,10 @@ function placeGlyph(label: string) {
   return <PinGlyph size={22} />;
 }
 
-export function Home({ onSearch, onGo, onTrip, onPay, onAdd }: {
-  onSearch: () => void; onGo: (to: Place) => void; onTrip: (t: RecentTrip) => void; onPay: () => void; onAdd: () => void;
+export type Opened = { to: Place; it: Itinerary; resolved: Resolved };
+
+export function Home({ onSearch, onGo, onOpen, onTrip, onPay, onAdd }: {
+  onSearch: () => void; onGo: (to: Place) => void; onOpen: (o: Opened) => void; onTrip: (t: RecentTrip) => void; onPay: () => void; onAdd: () => void;
 }) {
   const prefs = usePrefs();
   const here = useHere();
@@ -36,7 +38,7 @@ export function Home({ onSearch, onGo, onTrip, onPay, onAdd }: {
         </button>
       </div>
 
-      {frequent.length > 0 && <Frequent places={frequent} here={here} onGo={onGo} />}
+      {frequent.length > 0 && <Frequent places={frequent} here={here} onGo={onGo} onOpen={onOpen} />}
 
       <button className="home-row home-pay" onClick={onPay}>
         <span className="home-row-icon lit"><PayGlyph size={24} /></span>
@@ -80,8 +82,10 @@ export function Home({ onSearch, onGo, onTrip, onPay, onAdd }: {
 }
 
 // One card per frequent destination, swiped sideways, with dots under them.
-function Frequent({ places, here, onGo }: { places: Favourite[]; here: LatLon | null; onGo: (p: Place) => void }) {
+function Frequent({ places, here, onGo, onOpen }: { places: Favourite[]; here: LatLon | null; onGo: (p: Place) => void; onOpen: (o: Opened) => void }) {
   const [at, setAt] = useState(0);
+  // The way each card shows, so a tap opens that very ride rather than every way there.
+  const shown = useRef(new Map<number, { it: Itinerary; resolved: Resolved }>());
   const strip = useRef<HTMLDivElement>(null);
   const onScroll = () => {
     const el = strip.current; if (!el) return;
@@ -91,11 +95,11 @@ function Frequent({ places, here, onGo }: { places: Favourite[]; here: LatLon | 
     <div className="frequent">
       <div className="frequent-strip" ref={strip} onScroll={onScroll}>
         {places.map((p, i) => (
-          <button key={p.label + p.lat} className="card frequent-card" onClick={() => onGo(p)}>
+          <button key={p.label + p.lat} className="card frequent-card" onClick={() => { const w = shown.current.get(i); if (w) onOpen({ to: p, ...w }); else onGo(p); }}>
             <div className="frequent-head">{T("My Frequent Destination", "היעד הקבוע שלי")}</div>
             <div className="frequent-to" dir="auto">{T("To: ", "אל: ")}{p.label}</div>
             {/* Only the card in view asks Moovit, and its neighbours once swiped to. */}
-            {Math.abs(i - at) <= 1 ? <QuickWay to={p} here={here} /> : <div className="frequent-wait" />}
+            {Math.abs(i - at) <= 1 ? <QuickWay to={p} here={here} onWay={w => { if (w) shown.current.set(i, w); else shown.current.delete(i); }} /> : <div className="frequent-wait" />}
           </button>
         ))}
       </div>
@@ -105,7 +109,9 @@ function Frequent({ places, here, onGo }: { places: Favourite[]; here: LatLon | 
 }
 
 // The best way there right now: how long, when it arrives, which lines, when the first one leaves.
-function QuickWay({ to, here, brief }: { to: Place; here: LatLon | null; brief?: boolean }) {
+function QuickWay({ to, here, brief, onWay }: {
+  to: Place; here: LatLon | null; brief?: boolean; onWay?: (w: { it: Itinerary; resolved: Resolved } | null) => void;
+}) {
   const prefs = usePrefs();
   const now = useNow(15000);
   // A fresh plan every two minutes, from roughly where you are.
@@ -117,6 +123,7 @@ function QuickWay({ to, here, brief }: { to: Place; here: LatLon | null; brief?:
   const pick = plan.data ? soonest(plan.data.itineraries, plan.data.resolved, now) : null;
   if (!pick) return brief ? null : <div className="dim small frequent-wait">{plan.loading ? T("Finding the way…", "מחפשים דרך…") : plan.error ? T("No way found right now.", "לא נמצאה דרך כרגע.") : ""}</div>;
   const { it: best, b } = pick;
+  onWay?.({ it: best, resolved: plan.data!.resolved });
   const r = plan.data!.resolved;
   const mins = Math.max(1, Math.round((best.arr - now) / 60));
   const badge = b && <LineBadge number={b.numbers.join(" / ")} type={routeTypeOf(r, b.ride.lineId)} />;
@@ -138,7 +145,7 @@ export function Arrives({ b, now, short }: { b: Boarding; now: number; short?: b
   return (
     <div className="arrives">
       <div>{T("At your stop in", "בתחנה שלך בעוד")} {when}</div>
-      <div className="dim small" dir="auto">{b.stop}{b.walkMin > 0 ? T(` · ${b.walkMin} min walk`, ` · ${b.walkMin} דק׳ הליכה`) : ""}</div>
+      <div className="dim small"><bdi>{b.stop}</bdi>{b.walkMin > 0 ? T(` · ${b.walkMin} min walk`, ` · ${b.walkMin} דק׳ הליכה`) : ""}</div>
       <div className="dim small">{T(`Ride: ${b.rideMin} min`, `זמן נסיעה: ${b.rideMin} דק׳`)}</div>
     </div>
   );

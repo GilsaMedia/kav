@@ -7,7 +7,7 @@ import {
 } from "../core.ts";
 import { Header, LineBadge, Spinner, Note, LiveDot, PlacePicker, SaveFavourite, HERE_NAME, Sheet, Eta, isLate } from "../ui.tsx";
 import { MapView, type MapLine, type MapPoint } from "../MapView.tsx";
-import { Home, Arrives } from "./Home.tsx";
+import { Home, Arrives, type Opened } from "./Home.tsx";
 import { isNative, keepAwake } from "../native.ts";
 import { SwapGlyph, ClockGlyph, StarGlyph, CloseGlyph, RecentGlyph, WalkGlyph, BikeGlyph, TaxiGlyph, DotGlyph, ShareGlyph, PlayGlyph, ChevronGlyph } from "../icons.tsx";
 
@@ -26,6 +26,8 @@ export function PlanScreen({ onPay }: { onPay: (at?: LatLon, routeType?: number)
   const [searchKey, setSearchKey] = useState<string | null>(null);
   const [chosen, setChosen] = useState<number | null>(null);
   const [saving, setSaving] = useState<Place | null>(null);
+  // A way opened straight from a card on the home screen.
+  const [opened, setOpened] = useState<Opened | null>(null);
 
   const fromAt = (): LatLon | null => from ? [from.lat, from.lon] : here;
   const plan = useLoad<PlanResult>(searchKey, signal => {
@@ -69,10 +71,13 @@ export function PlanScreen({ onPay }: { onPay: (at?: LatLon, routeType?: number)
       }} />;
   }
 
+  if (opened) return <TripDetail trip={opened.it} resolved={opened.resolved} from={HERE_NAME()} to={opened.to.name}
+    onBack={() => setOpened(null)} onPay={onPay} />;
+
   // No destination yet: the home screen, as Moovit opens.
   if (!to) return (
     <div className="screen">
-      <Home onSearch={() => setPicking("to")} onGo={p => { setFrom(null); setTo(p); }} onTrip={t => { setFrom(t.from); setTo(t.to); }}
+      <Home onSearch={() => setPicking("to")} onGo={p => { setFrom(null); setTo(p); }} onOpen={o => { rememberTrip(null, o.to); setOpened(o); }} onTrip={t => { setFrom(t.from); setTo(t.to); }}
         onPay={() => onPay()} onAdd={() => setPicking("fav")} />
       {saving && <SaveFavourite place={saving} onDone={() => setSaving(null)} />}
     </div>
