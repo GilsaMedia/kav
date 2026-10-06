@@ -87,7 +87,9 @@ export async function api<T = any>(path: string, body?: unknown, signal?: AbortS
 
 export function failure(e: unknown): string {
   if (e instanceof ApiError) {
-    if (e.status === 502 || e.status === 500) return T("Couldn't reach Moovit. Try again in a moment.", "אין חיבור ל-Moovit. נסו שוב בעוד רגע.");
+    // The reason goes along, small, so a failure can be told apart from a bad connection.
+    if (e.status === 502 || e.status === 500) return T("Couldn't reach Moovit. Try again in a moment.", "אין חיבור ל-Moovit. נסו שוב בעוד רגע.")
+      + (e.message && !/^HTTP \d+$/.test(e.message) ? ` (${e.message})` : "");
     return e.message;
   }
   if (e instanceof TypeError) return isNative ? T("No internet connection.", "אין חיבור לאינטרנט.") : T("No connection to the Kav server.", "אין חיבור לשרת של Kav.");

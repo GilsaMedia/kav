@@ -32,7 +32,12 @@ const STATE_KEY = "kav-backend";
 
 const phone: Platform = {
   async request(method, url, headers, body, timeoutMs = 25000) {
-    const r = await KavNative.request({ method, url, headers, body: body ? toBase64(body) : undefined, timeout: timeoutMs });
+    const o = { method, url, headers, body: body ? toBase64(body) : undefined, timeout: timeoutMs };
+    let r;
+    // iOS often drops a kept-alive connection under a request ("The network connection was lost"),
+    // most of all on mobile data. Once more on a fresh one fixes it.
+    try { r = await KavNative.request(o); }
+    catch { await new Promise(done => setTimeout(done, 400)); r = await KavNative.request(o); }
     return { code: r.status, headers: r.headers, body: fromBase64(r.body) };
   },
   load: () => { try { return localStorage.getItem(STATE_KEY); } catch { return null; } },

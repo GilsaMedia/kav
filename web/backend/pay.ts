@@ -51,7 +51,24 @@ async function call(user: MoovitSession, path: string, body: TWriter): Promise<S
   if (code === 401) throw new Unauthorized();
   const title = sStr(s ?? undefined, 1);
   if (title) throw new Refused(title, sStr(s!, 2) ?? title);
-  throw new Error(`${path} HTTP ${code}`);
+  // Moovit's other refusals keep their words deeper in the struct, or send plain text: say what they say.
+  const said = (s ? texts(s) : []).join(" · ") || plain(raw);
+  if (said && code >= 400 && code < 500) throw new Refused(said, said);
+  throw new Error(`${path.split("/").pop()} HTTP ${code}${said ? ": " + said : ""}`);
+}
+
+function texts(m: S, depth = 0): string[] {
+  const out: string[] = [];
+  for (const v of m.values()) {
+    if (typeof v === "string" && v.trim() && v.length < 300) out.push(v.trim());
+    else if (v instanceof Map && depth < 2) out.push(...texts(v as S, depth + 1));
+  }
+  return out.slice(0, 2);
+}
+
+function plain(raw: Uint8Array): string {
+  const t = new TextDecoder().decode(raw.subarray(0, 400)).trim();
+  return /^[\p{L}\p{N}\p{P}\s]+$/u.test(t) ? t.slice(0, 200) : "";
 }
 
 function cardOf(steps?: S) {
@@ -96,7 +113,8 @@ export async function verify(user: MoovitSession, code: string, takeOver: boolea
 
 // The CVV goes to Moovit once and is kept nowhere.
 export async function confirmCard(user: MoovitSession, cvv: string) {
-  await call(user, "PTB/Accounts/SetBillingAccount", new TWriter().strField(1, CONTEXT).strField(2, cvv));
+  // Digits only: the iPhone keyboard or autofill can bring a space along.
+  await call(user, "PTB/Accounts/SetBillingAccount", new TWriter().strField(1, CONTEXT).strField(2, cvv.replace(/\D/g, "")));
 }
 
 export async function account(user: MoovitSession) {
