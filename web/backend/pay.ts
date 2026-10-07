@@ -5,12 +5,16 @@ import { APP4, post, authHeaders, type MoovitSession, type LatLon } from "./moov
 
 const CONTEXT = "IsraelMot";
 export const BUS = 3;
-export const STEP_PHONE = 1, STEP_PAYMENT_METHOD = 8, STEP_TERMS = 10;
+// Moovit's MVPaymentRegistrationStep.
+export const STEP_PHONE = 1, STEP_NAME = 2, STEP_EMAIL = 3, STEP_CREDIT_CARD = 4, STEP_BIRTH_DATE = 5, STEP_ID = 6,
+  STEP_ID_VERIFICATION = 7, STEP_PAYMENT_METHOD = 8, STEP_PROFILE = 9, STEP_TERMS = 10, STEP_EXTERNAL = 11, STEP_RECONNECT = 14,
+  STEP_ADDRESS = 16, STEP_EMAIL_VERIFICATION = 17, STEP_WEB = 18, STEP_QUESTION = 19, STEP_INPUT = 20, STEP_CVV = 21;
 export const TRAM = 0, RAIL = 2, CABLE = 5;
 
+// code: Moovit's own error number (202000 and the like), shown so a refusal can be told apart.
 export class Refused extends Error {
-  title: string;
-  constructor(title: string, message: string) { super(message); this.title = title; }
+  title: string; code: number;
+  constructor(title: string, message: string, code = 0) { super(message); this.title = title; this.code = code; }
 }
 export class Unauthorized extends Error { constructor() { super("not signed in"); } }
 
@@ -57,7 +61,11 @@ async function call(user: MoovitSession, path: string, body: TWriter): Promise<S
   if (code === 200) return s;
   if (code === 401) throw new Unauthorized();
   const title = sStr(s ?? undefined, 1);
-  if (title) throw new Refused(title, sStr(s!, 2) ?? title);
+  if (title) {
+    // A bare "Something went wrong" says no more than its number does; that goes along to be reported.
+    const said = sStr(s!, 2) ?? title, n = sNum(s ?? undefined, 3) ?? 0;
+    throw new Refused(title, said === title && n ? `${said} (${n})` : said, n);
+  }
   // Moovit's other refusals keep their words deeper in the struct, or send plain text: say what they say.
   const said = (s ? texts(s) : []).join(" · ") || plain(raw);
   if (said && code >= 400 && code < 500) throw new Refused(said, said);
@@ -78,24 +86,57 @@ function plain(raw: Uint8Array): string {
   return /^[\p{L}\p{N}\p{P}\s]+$/u.test(t) ? t.slice(0, 200) : "";
 }
 
+// MVMissingPaymentRegistrationSteps field 5 (MVMotPaymentMethodInstructions): when it carries
+// pangoInstructions (2), the account already has a card with Pango, confirmed with its CVV through
+// SetBillingAccount, as Moovit's app does on its "use your Pango card" screen.
 function cardOf(steps?: S) {
-  const pm = sRec(steps, 5);
-  if (!pm || pm.get(4) !== true) return null;
-  const c = sRec(sRec(pm, 2), 1);
+  const c = sRec(sRec(sRec(steps, 5), 2), 1);
   const last4 = sStr(c, 2);
   return last4 ? { type: sStr(c, 1) ?? "", last4 } : null;
 }
 
-export async function steps(user: MoovitSession) {
-  const root = sRec(await call(user, "PaymentContext/GetMissingSteps", new TWriter().strField(1, CONTEXT)) ?? undefined, 1);
-  if (!root) return { missing: [] as number[], terms: null, card: null };
+// An input step (MVInputFieldsInstructions): the CVV step (field 13) or a general one (field 12).
+export interface InputField { id: string; type: number; hint: string; placeholder: string; max: number }
+export interface InputStep { id: string; title: string; subtitle: string; button: string; fields: InputField[] }
+function inputOf(m?: S): InputStep | null {
+  const ins = sRec(m, 1);
+  const id = sStr(ins, 1);
+  if (!ins || !id) return null;
+  return {
+    id, title: sStr(ins, 3) ?? "", subtitle: sStr(ins, 4) ?? "", button: sStr(ins, 8) ?? "",
+    fields: sRecs(ins, 5).map(f => ({ id: sStr(f, 1) ?? "", type: sNum(f, 2) ?? 0, hint: sStr(f, 3) ?? "", placeholder: sStr(f, 5) ?? "", max: sNum(f, 7) ?? 0 }))
+      .filter(f => f.id),
+  };
+}
+
+function stepsOf(root?: S) {
   const t = sRec(root, 4);
   const cta = sRec(t, 6) ?? sRec(t, 3);
   const terms = t ? {
     title: sStr(t, 1) ?? "", text: sStr(t, 2) ?? "", agree: sStr(cta, 1) ?? "",
     links: sRecs(cta, 2).map(l => [sStr(l, 1) ?? "", sStr(l, 2) ?? ""]), button: sStr(t, 7) ?? "", version: sNum(t, 8) ?? 1,
   } : null;
-  return { missing: sInts(root, 2), terms, card: cardOf(root) };
+  const rc = sRec(root, 8);
+  return {
+    missing: sInts(root, 2), terms, card: cardOf(root),
+    cvv: inputOf(sRec(root, 13)), input: inputOf(sRec(root, 12)),
+    reconnect: rc ? { title: sStr(rc, 2) ?? "", text: sStr(rc, 3) ?? "" } : null,
+  };
+}
+export type Steps = ReturnType<typeof stepsOf>;
+
+export async function steps(user: MoovitSession): Promise<Steps> {
+  return stepsOf(sRec(await call(user, "PaymentContext/GetMissingSteps", new TWriter().strField(1, CONTEXT)) ?? undefined, 1));
+}
+
+// An input step answered: the CVV step goes to PaymentRegistration/InputStepCompleted, any other to
+// PaymentContext/InputStepCompleted, both as MVPaymentRegistrationInputRequest.
+export async function completeInput(user: MoovitSession, cvv: boolean, stepId: string, values: { id: string; value: string }[]) {
+  const body = new TWriter().strField(1, CONTEXT).strField(2, stepId)
+    .listField(3, TType.STRUCT, values, (w, v) => w.raw(new TWriter().strField(1, v.id).strField(2, v.value).bytes()).stop())
+    // actionId: the step's own id, as Moovit's app sends it for its Continue button.
+    .strField(4, stepId);
+  await call(user, cvv ? "PaymentRegistration/InputStepCompleted" : "PaymentContext/InputStepCompleted", body);
 }
 
 export async function acceptTerms(user: MoovitSession, version: number) {
@@ -113,24 +154,18 @@ export async function sendCode(user: MoovitSession, phone: string) {
 export async function verify(user: MoovitSession, code: string, takeOver: boolean) {
   const root = await call(user, "PaymentContext/RegistrationVerification",
     new TWriter().strField(1, CONTEXT).strField(2, code).boolField(3, !takeOver));
-  if (!root) return { exists: true, elsewhere: false, missing: [] as number[], card: null };
+  if (!root) return { exists: true, elsewhere: false, steps: null as Steps | null };
+  // isAccountExist (3) and not isMigratedUser (1): the account is on another device, as Moovit's app reads it.
   const st = sRec(root, 2);
-  return { exists: root.get(3) === true, elsewhere: root.get(3) === true && root.get(1) !== true, missing: sInts(st, 2), card: cardOf(st) };
+  return { exists: root.get(3) === true, elsewhere: root.get(3) === true && root.get(1) !== true, steps: st ? stepsOf(st) : null };
 }
 
 // The CVV goes to Moovit once and is kept nowhere.
+// MVPaymentRegistrationSetPangoRequest: the payment context and the CVV, both strings. Only for the
+// Pango card step; the CVV step is an input step (completeInput).
 export async function confirmCard(user: MoovitSession, cvv: string) {
   // Digits only: the iPhone keyboard or autofill can bring a space along.
-  const digits = cvv.replace(/\D/g, "");
-  try {
-    await call(user, "PTB/Accounts/SetBillingAccount", new TWriter().strField(1, CONTEXT).strField(2, digits));
-  } catch (e) {
-    // Moovit's server answers 500 {"error":"null"} when it finds nothing where it looks for the CVV. Once
-    // more with the CVV in a struct of its own, as Moovit's newer requests carry their card details.
-    if (!(e instanceof Error) || !/HTTP 500/.test(e.message)) throw e;
-    await call(user, "PTB/Accounts/SetBillingAccount",
-      new TWriter().strField(1, CONTEXT).structField(2, new TWriter().strField(1, digits)));
-  }
+  await call(user, "PTB/Accounts/SetBillingAccount", new TWriter().strField(1, CONTEXT).strField(2, cvv.replace(/\D/g, "")));
 }
 
 export async function account(user: MoovitSession) {

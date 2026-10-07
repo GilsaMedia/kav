@@ -20,6 +20,13 @@ interface Wallet { tickets: Ticket[]; window: { fromUtc: number; untilUtc: numbe
 interface StopInfo { id: number; name: string; lat: number | null; lon: number | null }
 interface Station { stopId: number; name: string; price: Price | null; full: Price | null; fareCode: number; radius: number; context: string; destinationStopId: number; reasons: string[]; cases: string[] }
 
+// Moovit's refusals said in its words; a step left to finish (409) goes back to signing in.
+const UNFINISHED = "kav-pay-unfinished";
+function payError(e: unknown): string {
+  if (e instanceof ApiError && e.status === 409) window.dispatchEvent(new Event(UNFINISHED));
+  return e instanceof ApiError && e.title && e.title !== e.message ? `${e.title}: ${e.message}` : failure(e);
+}
+
 const money = (p?: Price | null) => p ? (p.code === "ILS" ? shekels(p.agorot) : `${(p.agorot / 100).toFixed(2)} ${p.code}`) : "";
 // Moovit's times are epoch milliseconds or seconds, depending on the call.
 const secs = (t: number) => t > 1e12 ? Math.floor(t / 1000) : t;
@@ -33,7 +40,14 @@ const MODES = [
 async function payAt(): Promise<LatLon | null> { try { return await locateOnce(); } catch { return null; } }
 
 export function PayScreen({ start, onStarted }: { start: { at?: LatLon; routeType?: number } | null; onStarted: () => void }) {
-  const state = useLoad<{ signedIn: boolean; account?: { name: string; phone: string; connected: boolean } | null }>("pay", s => api("pay/state", undefined, s));
+  const state = useLoad<{ signedIn: boolean; unfinished?: boolean; account?: { name: string; phone: string; connected: boolean } | null }>("pay", s => api("pay/state", undefined, s));
+  // Moovit wants a step finished before it takes payments: back to signing in, at that step.
+  useEffect(() => {
+    const unfinished = () => { setFlow(null); state.reload(); };
+    window.addEventListener(UNFINISHED, unfinished);
+    return () => window.removeEventListener(UNFINISHED, unfinished);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   const [flow, setFlow] = useState<null | { kind: "bus" } | { kind: "station"; routeType: number; at?: LatLon } | { kind: "exit"; ticket: Ticket } | { kind: "history" }>(null);
   const [bought, setBought] = useState<Ticket[] | null>(null);
   const [walletKey, setWalletKey] = useState(0);
@@ -47,7 +61,7 @@ export function PayScreen({ start, onStarted }: { start: { at?: LatLon; routeTyp
 
   if (state.loading && !state.data) return <div className="screen"><Header title={T("Pay", "תשלום")} /><div className="pad"><Spinner /></div></div>;
   if (state.error) return <div className="screen"><Header title={T("Pay", "תשלום")} /><div className="pad"><Note tone="error">{state.error}</Note><button className="btn" onClick={state.reload}>{T("Try again", "נסו שוב")}</button></div></div>;
-  if (!state.data?.signedIn) return <SignIn onDone={state.reload} />;
+  if (!state.data?.signedIn || state.data.unfinished) return <SignIn onDone={state.reload} />;
 
   const done = (t: Ticket[]) => { setFlow(null); setBought(t); setWalletKey(k => k + 1); };
   if (flow?.kind === "bus") return <BusPurchase onBack={() => setFlow(null)} onBought={done} />;
@@ -79,7 +93,36 @@ export function PayScreen({ start, onStarted }: { start: { at?: LatLon; routeTyp
 
 // ---- signing in ------------------------------------------------------------------------------
 
-type Step = { k: "loading" } | { k: "terms"; terms: any } | { k: "phone" } | { k: "code"; phone: string } | { k: "cvv"; last4: string } | { k: "noAccount" } | { k: "unfinished"; missing: number[] };
+interface InputField { id: string; type: number; hint: string; placeholder: string; max: number }
+interface InputStep { id: string; title: string; subtitle: string; button: string; fields: InputField[] }
+interface Steps {
+  missing: number[]; terms: any; card: { type: string; last4: string } | null;
+  cvv: InputStep | null; input: InputStep | null; reconnect: { title: string; text: string } | null;
+}
+
+// Moovit's registration steps (MVPaymentRegistrationStep) Kav can walk through, and names for the rest.
+const STEP = { PHONE: 1, PAYMENT_METHOD: 8, TERMS: 10, RECONNECT: 14, INPUT: 20, CVV: 21 };
+const stepName = (n: number) => ({
+  2: T("your name", "השם שלכם"), 3: T("your email", "האימייל שלכם"), 4: T("a credit card", "כרטיס אשראי"), 5: T("your date of birth", "תאריך הלידה"),
+  6: T("your ID number", "מספר תעודת הזהות"), 7: T("ID verification", "אימות תעודת זהות"), 8: T("a payment method", "אמצעי תשלום"),
+  9: T("a fare profile", "פרופיל נוסע"), 11: T("an external account", "חשבון חיצוני"), 16: T("your address", "הכתובת שלכם"),
+  17: T("email verification", "אימות אימייל"), 18: T("a web step", "שלב באתר"), 19: T("a question", "שאלה"),
+} as Record<number, string>)[n] ?? `#${n}`;
+
+type Step = { k: "loading" } | { k: "terms"; terms: any } | { k: "phone"; reconnect: Steps["reconnect"] } | { k: "code"; phone: string }
+  | { k: "pango"; last4: string } | { k: "input"; cvv: boolean; step: InputStep } | { k: "noAccount" } | { k: "unfinished"; missing: number[] };
+
+// The next thing Moovit wants, as its own app picks it: terms, the phone (or reconnecting it), the card on the
+// account, the CVV, other input. Anything else is finished in Moovit's app.
+function nextStep(s: Steps): Step | null {
+  const m = s.missing;
+  if (m.includes(STEP.TERMS) && s.terms) return { k: "terms", terms: s.terms };
+  if (m.includes(STEP.PHONE) || m.includes(STEP.RECONNECT)) return { k: "phone", reconnect: m.includes(STEP.RECONNECT) ? s.reconnect : null };
+  if (m.includes(STEP.PAYMENT_METHOD) && s.card) return { k: "pango", last4: s.card.last4 };
+  if (m.includes(STEP.CVV) && s.cvv) return { k: "input", cvv: true, step: s.cvv };
+  if (m.includes(STEP.INPUT) && s.input) return { k: "input", cvv: false, step: s.input };
+  return m.length ? { k: "unfinished", missing: m } : null;
+}
 
 function SignIn({ onDone }: { onDone: () => void }) {
   const [step, setStep] = useState<Step>({ k: "loading" });
@@ -87,48 +130,57 @@ function SignIn({ onDone }: { onDone: () => void }) {
   const [error, setError] = useState<string | null>(null);
   const [phone, setPhone] = useState("");
   const [code, setCode] = useState("");
-  const [cvv, setCvv] = useState("");
+  const [values, setValues] = useState<Record<string, string>>({});
   const [elsewhere, setElsewhere] = useState(false);
-  const [cvvFailed, setCvvFailed] = useState(false);
   const [attempt, setAttempt] = useState(0);
 
   const run = async (work: () => Promise<void>) => {
     if (busy) return;
     setBusy(true); setError(null);
-    try { await work(); } catch (e) { setError(e instanceof ApiError && e.title ? `${e.title}: ${e.message}` : failure(e)); }
+    try { await work(); } catch (e) { setError(e instanceof ApiError && e.title && e.title !== e.message ? `${e.title}: ${e.message}` : failure(e)); }
     setBusy(false);
   };
 
-  // Once this phone holds the account: confirm the card if Moovit asks, else ready when Moovit lists it as connected.
-  const finish = async (missing: number[], card: { last4: string } | null) => {
-    if (card && missing.includes(8)) { setStep({ k: "cvv", last4: card.last4 }); return; }
-    const f = await api<{ connected: boolean }>("pay/finish", {});
-    if (f.connected) onDone(); else setStep({ k: "unfinished", missing });
+  // Each answer brings Moovit's list again; the next step follows from it, or Kav is ready.
+  const advance = async (s?: Steps | null) => {
+    const steps = s ?? await api<Steps>("pay/steps", {});
+    const next = nextStep(steps);
+    setValues({});
+    if (next) { setStep(next); return; }
+    const f = await api<{ connected: boolean; steps: Steps }>("pay/finish", {});
+    if (f.connected) onDone();
+    else setStep(nextStep(f.steps) ?? { k: "unfinished", missing: f.steps.missing });
   };
 
   useEffect(() => {
-    api("pay/steps", {}).then(async (s: any) => {
-      if (!s.missing.includes(1)) await finish(s.missing, s.card);
-      else setStep(s.terms && s.missing.includes(10) ? { k: "terms", terms: s.terms } : { k: "phone" });
-    }).catch(e => { setError(failure(e)); setStep({ k: "phone" }); });
+    api<Steps>("pay/steps", {}).then(advance).catch(e => { setError(failure(e)); setStep({ k: "phone", reconnect: null }); });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [attempt]);
 
+  const verified = async (v: { exists: boolean; elsewhere: boolean; steps: Steps | null }) => {
+    if (!v.exists) setStep({ k: "noAccount" });
+    else if (v.elsewhere) setElsewhere(true);
+    else await advance(v.steps?.missing.length ? v.steps : null);
+  };
+
+  const fieldsOk = step.k === "input" && step.step.fields.every(f => (values[f.id] ?? "").trim().length > 0);
   return (
     <div className="screen">
       <Header title={T("Pay with Moovit", "תשלום עם Moovit")} />
       <div className="scroll">
         <div className="pad stack">
           {step.k === "loading" && <Spinner text={T("Asking Moovit…", "שואלים את Moovit…")} />}
-          {step.k === "phone" && <Note>{T(
-            "Kav pays for rides with your own Moovit payment account (the Ministry of Transport's, run by Pango). Only payments use it; everything else stays anonymous.",
-            "Kav משלמת על נסיעות עם חשבון התשלום שלכם ב-Moovit (של משרד התחבורה, בהפעלת פנגו). רק התשלומים משתמשים בו; כל השאר נשאר אנונימי.")}</Note>}
+          {step.k === "phone" && (step.reconnect
+            ? <Note>{step.reconnect.title && <b>{step.reconnect.title}<br /></b>}{step.reconnect.text || T("Moovit asks to confirm your phone number again.", "Moovit מבקשת לאשר שוב את מספר הטלפון.")}</Note>
+            : <Note>{T(
+              "Kav pays for rides with your own Moovit payment account (the Ministry of Transport's, run by Pango). Only payments use it; everything else stays anonymous.",
+              "Kav משלמת על נסיעות עם חשבון התשלום שלכם ב-Moovit (של משרד התחבורה, בהפעלת פנגו). רק התשלומים משתמשים בו; כל השאר נשאר אנונימי.")}</Note>)}
           {step.k === "terms" && (
             <div className="card pad stack">
               <h2>{step.terms.title}</h2>
               <p className="dim pre">{step.terms.text}</p>
               {step.terms.links.map(([label, url]: [string, string]) => <a key={url} href={url} target="_blank" rel="noreferrer">{label}</a>)}
-              <button className="btn primary" disabled={busy} onClick={() => run(async () => { await api("pay/terms", { version: step.terms.version }); setStep({ k: "phone" }); })}>
+              <button className="btn primary" disabled={busy} onClick={() => run(async () => { await api("pay/terms", { version: step.terms.version }); await advance(); })}>
                 {step.terms.button || T("Let's begin", "בואו נתחיל")}</button>
             </div>
           )}
@@ -141,42 +193,47 @@ function SignIn({ onDone }: { onDone: () => void }) {
           {step.k === "code" && <>
             <label className="dim">{T(`The code Moovit sent to ${step.phone}`, `הקוד ש-Moovit שלחה ל-${step.phone}`)}</label>
             <input className="field ltr" inputMode="numeric" autoComplete="one-time-code" value={code} onChange={e => setCode(e.target.value.replace(/\D/g, "").slice(0, 6))} placeholder="123456" autoFocus />
-            <button className="btn primary" disabled={busy || code.length !== 6} onClick={() => run(async () => {
-              const v: any = await api("pay/verify", { code, takeOver: false });
-              if (!v.exists) setStep({ k: "noAccount" });
-              else if (v.elsewhere) setElsewhere(true);
-              else await finish(v.missing, v.card);
-            })}>{T("Confirm", "אישור")}</button>
+            <button className="btn primary" disabled={busy || code.length !== 6} onClick={() => run(async () => verified(await api("pay/verify", { code, takeOver: false })))}>{T("Confirm", "אישור")}</button>
             <button className="link" disabled={busy} onClick={() => run(() => api("pay/send", { phone: step.phone }))}>{T("Send it again", "שליחה מחדש")}</button>
           </>}
-          {step.k === "cvv" && <>
+          {step.k === "pango" && <>
             <h2>{T("Confirm your card", "אישור הכרטיס")}</h2>
-            <Note>{T(`Moovit asks a newly connected phone to confirm the card on the account. Enter the CVV of the card ending in ${step.last4}. It goes to Moovit once and is kept nowhere.`,
-              `Moovit מבקשת מטלפון שהתחבר עכשיו לאשר את הכרטיס שבחשבון. הקלידו את ה-CVV של הכרטיס שמסתיים ב-${step.last4}. הוא נשלח ל-Moovit פעם אחת ולא נשמר.`)}</Note>
-            <input className="field ltr" type="password" inputMode="numeric" autoComplete="off" value={cvv} onChange={e => setCvv(e.target.value.replace(/\D/g, "").slice(0, 4))} placeholder="CVV" />
-            <button className="btn primary" disabled={busy || cvv.length < 3} onClick={() => run(async () => {
-              const d = cvv; setCvv("");
-              try { await api("pay/cvv", { cvv: d }); }
-              catch (e) { setCvvFailed(true); throw e; }
-              await finish([], null);
+            <Note>{T(`Your payment account pays with the card ending in ${step.last4}. Enter its CVV to use it on this phone. It goes to Moovit once and is kept nowhere.`,
+              `חשבון התשלום שלכם משלם בכרטיס שמסתיים ב-${step.last4}. הקלידו את ה-CVV שלו כדי להשתמש בו בטלפון הזה. הוא נשלח ל-Moovit פעם אחת ולא נשמר.`)}</Note>
+            <input className="field ltr" type="password" inputMode="numeric" autoComplete="off" value={values.cvv ?? ""} onChange={e => setValues({ cvv: e.target.value.replace(/\D/g, "").slice(0, 4) })} placeholder="CVV" />
+            <button className="btn primary" disabled={busy || (values.cvv ?? "").length < 3} onClick={() => run(async () => {
+              const d = values.cvv ?? ""; setValues({});
+              await api("pay/cvv", { cvv: d });
+              await advance();
             })}>{T("Confirm card", "אישור הכרטיס")}</button>
-            {cvvFailed && <>
-              <div className="dim small">{T("If Moovit keeps refusing the CVV, the account may already be ready to pay: Kav can check.",
-                "אם Moovit ממשיכה לסרב ל-CVV, ייתכן שהחשבון כבר מוכן לתשלום: Kav יכולה לבדוק.")}</div>
-              <button className="btn" disabled={busy} onClick={() => run(async () => {
-                const f = await api<{ connected: boolean }>("pay/finish", {});
-                if (f.connected) onDone();
-                else throw new Error(T("Moovit hasn't connected the account to Kav yet. Try the CVV again in a minute.", "Moovit עוד לא חיברה את החשבון ל-Kav. נסו את ה-CVV שוב בעוד דקה."));
-              })}>{T("Continue without confirming", "המשך בלי אישור")}</button>
-            </>}
+          </>}
+          {step.k === "input" && <>
+            <h2 dir="auto">{step.step.title || (step.cvv ? T("Confirm your card", "אישור הכרטיס") : T("A few more details", "עוד כמה פרטים"))}</h2>
+            {step.step.subtitle && <Note><span dir="auto">{step.step.subtitle}</span></Note>}
+            {step.step.fields.map(f => {
+              const secret = step.cvv || /cvv/i.test(f.id);
+              return <div key={f.id} className="stack">
+                {f.hint && <label className="dim" dir="auto">{f.hint}</label>}
+                <input className="field ltr" type={secret ? "password" : "text"} inputMode={secret ? "numeric" : undefined} autoComplete="off"
+                  maxLength={f.max > 0 ? f.max : undefined} placeholder={f.placeholder || (secret ? "CVV" : "")}
+                  value={values[f.id] ?? ""} onChange={e => setValues(v => ({ ...v, [f.id]: secret ? e.target.value.replace(/\D/g, "") : e.target.value }))} />
+              </div>;
+            })}
+            <button className="btn primary" disabled={busy || !fieldsOk} onClick={() => run(async () => {
+              const sent = step.step.fields.map(f => ({ id: f.id, value: (values[f.id] ?? "").trim() }));
+              setValues({});
+              await advance(await api<Steps>("pay/input", { cvv: step.cvv, step: step.step.id, values: sent }));
+            })}>{step.step.button || T("Continue", "המשך")}</button>
           </>}
           {step.k === "noAccount" && <>
             <Note>{T("No payment account on this number. Register a payment account in Moovit's app, then try again.", "אין חשבון תשלום על המספר הזה. רשמו חשבון תשלום באפליקציה של Moovit ונסו שוב.")}</Note>
             <button className="btn" onClick={() => { setPhone(""); setCode(""); setStep({ k: "loading" }); setAttempt(a => a + 1); }}>{T("Try again", "ניסיון נוסף")}</button>
           </>}
-          {step.k === "unfinished" && <Note>{step.missing.includes(8)
-            ? T("Moovit needs a card on this account. Add one in Moovit's app, then sign in here again.", "Moovit צריכה כרטיס אשראי בחשבון. הוסיפו אחד באפליקציה של Moovit, ואז התחברו כאן שוב.")
-            : T("Finish setting up payments in Moovit's app, then sign in here again.", "סיימו להגדיר תשלומים באפליקציה של Moovit, ואז התחברו כאן שוב.")}</Note>}
+          {step.k === "unfinished" && <>
+            <Note>{T(`Moovit still needs ${step.missing.map(stepName).join(", ")} on this account, which Kav can't fill in. Finish it in Moovit's app, then sign in here again.`,
+              `Moovit עדיין צריכה ${step.missing.map(stepName).join(", ")} בחשבון, ו-Kav לא יכולה למלא את זה. השלימו באפליקציה של Moovit ואז התחברו כאן שוב.`)}</Note>
+            <button className="btn" disabled={busy} onClick={() => run(() => advance())}>{T("Check again", "בדיקה חוזרת")}</button>
+          </>}
           {error && <Note tone="error">{error}</Note>}
         </div>
       </div>
@@ -185,7 +242,7 @@ function SignIn({ onDone }: { onDone: () => void }) {
           <div className="stack">
             <p className="dim">{T("A payment account can only be connected to one device. If you continue, it moves to Kav and is disconnected from the other one, such as Moovit's app.",
               "חשבון תשלום יכול להיות מחובר למכשיר אחד בלבד. אם תמשיכו, הוא יעבור ל-Kav וינותק מהמכשיר האחר, למשל מהאפליקציה של Moovit.")}</p>
-            <button className="btn primary" disabled={busy} onClick={() => run(async () => { const v: any = await api("pay/verify", { code, takeOver: true }); setElsewhere(false); await finish(v.missing, v.card); })}>{T("Connect to Kav", "חיבור ל-Kav")}</button>
+            <button className="btn primary" disabled={busy} onClick={() => run(async () => { const v: any = await api("pay/verify", { code, takeOver: true }); setElsewhere(false); await verified({ ...v, elsewhere: false }); })}>{T("Connect to Kav", "חיבור ל-Kav")}</button>
             <button className="link center" onClick={() => setElsewhere(false)}>{T("Cancel", "ביטול")}</button>
           </div>
         </Sheet>
@@ -267,7 +324,7 @@ function usePurchase(onBought: (t: Ticket[]) => void) {
       const r = await call();
       if (r.unconfirmed) setError(T("Moovit didn't confirm the payment. Check Today's tickets before trying again.", "Moovit לא אישרה את התשלום. בדקו את הכרטיסים של היום לפני שמנסים שוב."));
       else onBought(r.tickets);
-    } catch (e) { setError(e instanceof ApiError && e.title ? `${e.title}: ${e.message}` : failure(e)); }
+    } catch (e) { setError(payError(e)); }
     setBusy(false);
   };
   return { busy, error, setError, buy };
@@ -296,7 +353,7 @@ function BusPurchase({ onBack, onBought }: { onBack: () => void; onBought: (t: T
       const o = await api<Offer>("pay/price", { qr, at: at.current });
       setOffer(o);
       if (o.fares.length === 1) setFare(o.fares[0]);
-    })().catch(e => p.setError(e instanceof ApiError && e.title ? `${e.title}: ${e.message}` : failure(e))).finally(() => setLoading(false));
+    })().catch(e => p.setError(payError(e))).finally(() => setLoading(false));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [qr]);
 
@@ -430,7 +487,7 @@ function StationPurchase({ routeType, at: given, onBack, onBought }: { routeType
   const ask = async (body: object) => {
     setLoading(true); p.setError(null);
     try { setStep(await api<StationStep>("pay/station", { routeType, ...body })); }
-    catch (e) { p.setError(e instanceof ApiError && e.title ? `${e.title}: ${e.message}` : failure(e)); }
+    catch (e) { p.setError(payError(e)); }
     setLoading(false);
   };
   useEffect(() => {
@@ -491,7 +548,7 @@ function TrainExit({ ticket, onBack, onDone }: { ticket: Ticket; onBack: () => v
   const p = usePurchase(onDone);
   const ask = async (body: object) => {
     setLoading(true); p.setError(null);
-    try { setExit(await api<Exit>("pay/exitPrice", body)); } catch (e) { p.setError(failure(e)); }
+    try { setExit(await api<Exit>("pay/exitPrice", body)); } catch (e) { p.setError(payError(e)); }
     setLoading(false);
   };
   useEffect(() => { payAt().then(at => at ? ask({ at }) : (setLoading(false), p.setError(T("Kav needs your location to find the station.", "Kav צריכה את המיקום שלכם כדי למצוא את התחנה.")))); /* eslint-disable-next-line */ }, []);

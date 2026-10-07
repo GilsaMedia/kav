@@ -291,10 +291,11 @@ function payAt(b: any): M.LatLon {
   return standIn(at, b?.private !== false) ?? M.NEUTRAL;
 }
 
+// Signed in, and whether Moovit still wants a step before it takes payments (a new card check, a reconnect).
 route("pay/state", async () => {
   if (!St.paySignedIn()) return { signedIn: false };
-  const account = await St.asPayer(Pay.account).catch(() => null);
-  return { signedIn: true, account };
+  const [account, steps] = await Promise.all([St.asPayer(Pay.account).catch(() => null), St.asPayer(Pay.steps).catch(() => null)]);
+  return { signedIn: true, account, unfinished: !!steps?.missing.length };
 });
 route("pay/steps", async () => St.asPayer(Pay.steps));
 route("pay/terms", async (_q, b) => { await St.asPayer(u => Pay.acceptTerms(u, Number(b.version) || 1)); return {}; });
@@ -305,25 +306,46 @@ route("pay/verify", async (_q, b) => {
   return v;
 });
 route("pay/cvv", async (_q, b) => { await St.asPayer(u => Pay.confirmCard(u, String(b.cvv ?? ""))); return {}; });
+// An input step (the CVV step, or another Moovit asks for), answered with its fields' values.
+route("pay/input", async (_q, b) => {
+  const values = (Array.isArray(b.values) ? b.values : []).map((v: any) => ({ id: String(v?.id ?? ""), value: String(v?.value ?? "") }));
+  await St.asPayer(u => Pay.completeInput(u, !!b.cvv, String(b.step ?? ""), values));
+  return St.asPayer(Pay.steps);
+});
 // Ready once Moovit lists the account as connected for paying.
+// Ready once Moovit asks for nothing more and lists the account as connected for paying.
 route("pay/finish", async () => {
-  const account = await St.asPayer(Pay.account);
-  if (account?.connected) St.markSignedIn();
-  return { connected: !!account?.connected, account };
+  const [account, steps] = await Promise.all([St.asPayer(Pay.account), St.asPayer(Pay.steps)]);
+  const ready = !!account?.connected && !steps.missing.length;
+  if (ready) St.markSignedIn();
+  return { connected: ready, account, steps };
 });
 route("pay/signout", async () => { St.signOut(); return {}; });
 
 function signedIn() { if (!St.paySignedIn()) throw new HttpError(401, "Not signed in to payments"); }
 
+// Moovit answers a fare or a purchase with a bare "Something went wrong" when the account still has a step
+// to finish on this device. Then the app is told so (409) and walks the rider through it.
+async function payCall<T>(f: (u: M.MoovitSession) => Promise<T>): Promise<T> {
+  try { return await St.asPayer(f); }
+  catch (e) {
+    if (e instanceof Pay.Refused) {
+      const steps = await St.asPayer(Pay.steps).catch(() => null);
+      if (steps?.missing.length) throw new HttpError(409, "Moovit needs one more step to finish connecting your payment account.");
+    }
+    throw e;
+  }
+}
+
 route("pay/tickets", async () => { signedIn(); return St.asPayer(Pay.tickets); });
 route("pay/history", async q => { signedIn(); return { charges: await St.asPayer(u => Pay.history(u, qNum(q, "month") ?? 1, qNum(q, "year") ?? 2026)) }; });
 route("pay/billing", async () => { signedIn(); return St.asPayer(Pay.billing); });
 
-route("pay/price", async (_q, b) => { signedIn(); return St.asPayer(u => Pay.price(u, String(b.qr ?? ""), payAt(b))); });
+route("pay/price", async (_q, b) => { signedIn(); return payCall(u => Pay.price(u, String(b.qr ?? ""), payAt(b))); });
 route("pay/quote", async (_q, b) => {
   signedIn();
-  if (b.station) return St.asPayer(u => Pay.quoteStation(u, b.station, Number(b.routeType)));
-  return St.asPayer(u => Pay.quoteFare(u, b.offer, b.fare, payAt(b)));
+  if (b.station) return payCall(u => Pay.quoteStation(u, b.station, Number(b.routeType)));
+  return payCall(u => Pay.quoteFare(u, b.offer, b.fare, payAt(b)));
 });
 route("pay/station", async (_q, b) => {
   signedIn();
@@ -337,7 +359,7 @@ route("pay/station", async (_q, b) => {
     at = [net.lat[g], net.lon[g]];
   }
   if (!at) throw new HttpError(400, "A position is needed");
-  const step = await St.asPayer(u => Pay.station(u, at!, routeType, Number(b.origin) || 0, Number(b.destination) || 0));
+  const step = await payCall(u => Pay.station(u, at!, routeType, Number(b.origin) || 0, Number(b.destination) || 0));
   const pick = step.pickOrigin.length ? step.pickOrigin : step.pickDestination;
   const picks = pick.length ? Object.values((await M.resolveIds(await St.browse(), [], pick)).stops) : [];
   return { ...step, at, picks };
@@ -347,7 +369,7 @@ route("pay/exitPrice", async (_q, b) => {
   let at = bAt(b.at);
   if (at && !b.exact) { const g = net.nearestOfType(at[0], at[1], 2); if (g != null) at = [net.lat[g], net.lon[g]]; }
   if (!at) throw new HttpError(400, "A position is needed");
-  const e = await St.asPayer(u => Pay.exitPrice(u, at!));
+  const e = await payCall(u => Pay.exitPrice(u, at!));
   const picks = e.pick.length ? Object.values((await M.resolveIds(await St.browse(), [], e.pick)).stops) : [];
   return { ...e, at, picks };
 });
@@ -365,7 +387,7 @@ async function purchase(buy: () => Promise<Pay.Ticket[]>, allowOpenTrain = false
     const seen = new Set(before.tickets.map(t => `${t.id}:${t.ref}`));
     try { return { tickets: await buy() }; }
     catch (e) {
-      if (e instanceof Pay.Refused) throw e;
+      if (e instanceof Pay.Refused || e instanceof HttpError) throw e;
       try {
         const after = (await St.asPayer(Pay.tickets)).tickets.filter(t => !seen.has(`${t.id}:${t.ref}`));
         if (after.length) return { tickets: after };
@@ -378,13 +400,13 @@ async function purchase(buy: () => Promise<Pay.Ticket[]>, allowOpenTrain = false
 route("pay/buy", async (_q, b) => {
   signedIn();
   const count = Math.min(Math.max(Number(b.count) || 1, 1), 10);
-  return purchase(() => St.asPayer(u => Pay.buy(u, b.offer, b.fare, payAt(b), count)));
+  return purchase(() => payCall(u => Pay.buy(u, b.offer, b.fare, payAt(b), count)));
 });
 route("pay/enter", async (_q, b) => {
   signedIn();
   const at = bAt(b.at); if (!at) throw new HttpError(400, "A position is needed");
   const count = Math.min(Math.max(Number(b.count) || 1, 1), 10);
-  return purchase(() => St.asPayer(u => Pay.enter(u, b.station, at, Number(b.routeType), count, !!b.picked)));
+  return purchase(() => payCall(u => Pay.enter(u, b.station, at, Number(b.routeType), count, !!b.picked)));
 });
 route("pay/exit", async (_q, b) => {
   signedIn();
