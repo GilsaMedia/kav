@@ -1,15 +1,18 @@
 import ActivityKit
 import AVFoundation
+import BackgroundTasks
 import CoreLocation
 import Foundation
+import JavaScriptCore
 import UIKit
+import UserNotifications
 import Capacitor
 
 // What Kav's web code can't do from inside the web view: talk to Moovit with the headers Moovit's app
 // sends (a web page can't set them, and Moovit doesn't allow other sites), keep the 185 MB map on the
 // phone and read pieces of it, and keep the screen on while navigating.
 @objc(KavNativePlugin)
-public class KavNativePlugin: CAPPlugin, CAPBridgedPlugin, URLSessionDownloadDelegate {
+public class KavNativePlugin: CAPPlugin, CAPBridgedPlugin, URLSessionDownloadDelegate, NotificationHandlerProtocol {
     public let identifier = "KavNativePlugin"
     public let jsName = "KavNative"
     public let pluginMethods: [CAPPluginMethod] = [
@@ -26,6 +29,9 @@ public class KavNativePlugin: CAPPlugin, CAPBridgedPlugin, URLSessionDownloadDel
         CAPPluginMethod(name: "stateRead", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "stateWrite", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "haptic", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "notifyAllow", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "notifyAllowed", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "notifySet", returnType: CAPPluginReturnPromise),
     ]
 
     // No cookies, no cache: every request goes out as Kav builds it.
@@ -38,16 +44,7 @@ public class KavNativePlugin: CAPPlugin, CAPBridgedPlugin, URLSessionDownloadDel
         return URLSession(configuration: c)
     }()
 
-    // Files live in Application Support, out of iCloud backups.
-    private func fileURL(_ name: String) throws -> URL {
-        guard !name.isEmpty, !name.contains(".."), !name.hasPrefix("/") else { throw NSError(domain: "Kav", code: 1, userInfo: [NSLocalizedDescriptionKey: "Bad file name"]) }
-        var dir = try FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
-            .appendingPathComponent("kav", isDirectory: true)
-        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        var values = URLResourceValues(); values.isExcludedFromBackup = true
-        try? dir.setResourceValues(values)
-        return dir.appendingPathComponent(name)
-    }
+    private func fileURL(_ name: String) throws -> URL { try KavFiles.url(name) }
 
     // request({ method, url, headers, body (base64), timeout (ms) }) -> { status, headers, body (base64) }
     @objc func request(_ call: CAPPluginCall) {
@@ -156,7 +153,7 @@ public class KavNativePlugin: CAPPlugin, CAPBridgedPlugin, URLSessionDownloadDel
 
     // Kav run by another app rather than installed: its bundle lies in the host's data (LiveContainer keeps
     // its apps in Documents/Applications) instead of where iOS installs apps, or the host says so.
-    private static var hosted: Bool {
+    static var hosted: Bool {
         let path = Bundle.main.bundlePath.lowercased()
         return path.contains("livecontainer") || path.contains("/documents/applications/")
             || ProcessInfo.processInfo.environment["LC_HOME_PATH"] != nil
@@ -285,12 +282,218 @@ public class KavNativePlugin: CAPPlugin, CAPBridgedPlugin, URLSessionDownloadDel
         let on = call.getBool("on") ?? false
         DispatchQueue.main.async { UIApplication.shared.isIdleTimerDisabled = on; call.resolve() }
     }
+
+    // ---- notifications: reminders to leave, and alerts on the lines you follow ----
+
+    // notifyAllow() -> { granted }: asks the first time, then says what was chosen.
+    @objc func notifyAllow(_ call: CAPPluginCall) {
+        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { granted, _ in
+            call.resolve(["granted": granted])
+        }
+    }
+
+    // notifyAllowed() -> { granted }, without asking.
+    @objc func notifyAllowed(_ call: CAPPluginCall) {
+        UNUserNotificationCenter.current().getNotificationSettings { s in
+            call.resolve(["granted": s.authorizationStatus == .authorized || s.authorizationStatus == .provisional])
+        }
+    }
+
+    // notifySet({ json }): { notices: [{ id, title, body, at }], cancel: [id] }, as the check (jobs.ts) gives them.
+    @objc func notifySet(_ call: CAPPluginCall) {
+        KavNotices.apply(json: call.getString("json") ?? "{}")
+        call.resolve()
+    }
+
+    // Shown while Kav is open too, as a banner.
+    public func willPresent(notification: UNNotification) -> UNNotificationPresentationOptions { [.banner, .list, .sound] }
+
+    public func didReceive(response: UNNotificationResponse) {
+        notifyListeners("notificationTap", data: ["id": response.notification.request.identifier])
+    }
 }
 
-// Capacitor's view controller, with Kav's plugin registered on it.
+// Capacitor's view controller, with Kav's plugin registered on it, and given Kav's notifications.
 class KavViewController: CAPBridgeViewController {
     override open func capacitorDidLoad() {
-        bridge?.registerPluginInstance(KavNativePlugin())
+        let plugin = KavNativePlugin()
+        bridge?.registerPluginInstance(plugin)
+        bridge?.notificationRouter.localNotificationHandler = plugin
+    }
+}
+
+// Files live in Application Support, out of iCloud backups.
+enum KavFiles {
+    static func url(_ name: String) throws -> URL {
+        guard !name.isEmpty, !name.contains(".."), !name.hasPrefix("/") else { throw NSError(domain: "Kav", code: 1, userInfo: [NSLocalizedDescriptionKey: "Bad file name"]) }
+        var dir = try FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
+            .appendingPathComponent("kav", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        var values = URLResourceValues(); values.isExcludedFromBackup = true
+        try? dir.setResourceValues(values)
+        return dir.appendingPathComponent(name)
+    }
+
+    static func read(_ name: String) -> String? {
+        guard let u = try? url(name), let data = try? Data(contentsOf: u) else { return nil }
+        return String(data: data, encoding: .utf8)
+    }
+
+    static func write(_ name: String, _ value: String) {
+        guard let u = try? url(name) else { return }
+        try? Data(value.utf8).write(to: u, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
+    }
+}
+
+// Notifications set, moved or taken back: a notice's id replaces any earlier one with the same id.
+enum KavNotices {
+    static func apply(json: String) {
+        guard let data = json.data(using: .utf8), let o = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return }
+        apply(o)
+    }
+
+    static func apply(_ o: [String: Any]) {
+        let center = UNUserNotificationCenter.current()
+        let cancel = o["cancel"] as? [String] ?? []
+        if !cancel.isEmpty { center.removePendingNotificationRequests(withIdentifiers: cancel) }
+        for n in o["notices"] as? [[String: Any]] ?? [] {
+            guard let id = n["id"] as? String else { continue }
+            let content = UNMutableNotificationContent()
+            content.title = n["title"] as? String ?? ""
+            content.body = n["body"] as? String ?? ""
+            content.sound = .default
+            let wait = ((n["at"] as? NSNumber)?.doubleValue ?? 0) / 1000 - Date().timeIntervalSince1970
+            // No trigger: at once.
+            let trigger = wait > 1 ? UNTimeIntervalNotificationTrigger(timeInterval: wait, repeats: false) : nil
+            center.add(UNNotificationRequest(identifier: id, content: content, trigger: trigger))
+        }
+    }
+}
+
+// While Kav is closed: iOS wakes it now and then (Background App Refresh), and the check the app runs when
+// it opens (jobs.ts) runs here too, from kav-bg.js in JavaScriptCore, since the web view stays asleep. It
+// moves a reminder to leave by the bus's live time, and tells of new alerts on the lines you follow.
+enum KavBackground {
+    static let taskId = "com.gilsamedia.kav.refresh"
+    private static var running: JobRunner?
+
+    // At launch, before it ends, as iOS requires. Not when Kav is run by another app (LiveContainer): iOS
+    // checks the id against that app's list, not Kav's, and stops an app that registers one it doesn't know.
+    static func register() {
+        guard !KavNativePlugin.hosted else { return }
+        BGTaskScheduler.shared.register(forTaskWithIdentifier: taskId, using: nil) { task in
+            guard let task = task as? BGAppRefreshTask else { return task.setTaskCompleted(success: false) }
+            run(task)
+        }
+    }
+
+    // Asked for each time Kav goes to the background, if there's anything to keep an eye on. iOS decides when.
+    static func schedule() {
+        guard !KavNativePlugin.hosted else { return }
+        guard hasJobs() else { BGTaskScheduler.shared.cancel(taskRequestWithIdentifier: taskId); return }
+        let request = BGAppRefreshTaskRequest(identifier: taskId)
+        request.earliestBeginDate = Date(timeIntervalSinceNow: 15 * 60)
+        try? BGTaskScheduler.shared.submit(request)
+    }
+
+    private static func hasJobs() -> Bool {
+        guard let text = KavFiles.read("state-jobs.json"), let data = text.data(using: .utf8),
+              let o = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return false }
+        return !((o["reminders"] as? [Any])?.isEmpty ?? true) || !((o["lines"] as? [Any])?.isEmpty ?? true)
+    }
+
+    private static func run(_ task: BGAppRefreshTask) {
+        schedule()
+        let runner = JobRunner()
+        DispatchQueue.main.async { running = runner }
+        task.expirationHandler = { runner.finish(nil) }
+        runner.start { ok in
+            task.setTaskCompleted(success: ok)
+            DispatchQueue.main.async { if running === runner { running = nil } }
+        }
+    }
+}
+
+// One run of kav-bg.js: everything it does goes through one queue, and its requests through URLSession.
+final class JobRunner {
+    private let queue = DispatchQueue(label: "kav.background")
+    private var context: JSContext?
+    private var completion: ((Bool) -> Void)?
+    private lazy var session: URLSession = {
+        let c = URLSessionConfiguration.ephemeral
+        c.httpCookieStorage = nil
+        c.httpShouldSetCookies = false
+        c.urlCache = nil
+        c.requestCachePolicy = .reloadIgnoringLocalCacheData
+        return URLSession(configuration: c)
+    }()
+
+    func start(_ done: @escaping (Bool) -> Void) {
+        queue.async {
+            self.completion = done
+            guard let url = Bundle.main.url(forResource: "kav-bg", withExtension: "js", subdirectory: "public"),
+                  let source = try? String(contentsOf: url, encoding: .utf8), let ctx = JSContext() else { return self.finish(nil) }
+            self.context = ctx
+            ctx.exceptionHandler = { _, e in NSLog("Kav background: %@", e?.toString() ?? "?") }
+            let log: @convention(block) (String) -> Void = { NSLog("Kav background: %@", $0) }
+            let timeout: @convention(block) (Double, JavaScriptCore.JSValue) -> Void = { [weak self] ms, f in
+                self?.queue.asyncAfter(deadline: .now() + ms / 1000) { _ = f.call(withArguments: []) }
+            }
+            let request: @convention(block) (String, String, String, JavaScriptCore.JSValue, Double, JavaScriptCore.JSValue) -> Void = { [weak self] method, url, headers, body, ms, done in
+                self?.request(method: method, url: url, headers: headers, body: body.isString ? body.toString() : nil, timeoutMs: ms, done: done)
+            }
+            let finished: @convention(block) (String) -> Void = { [weak self] out in self?.finish(out) }
+            ctx.setObject(log, forKeyedSubscript: "__kavLog" as NSString)
+            ctx.setObject(timeout, forKeyedSubscript: "__kavTimeout" as NSString)
+            ctx.setObject(request, forKeyedSubscript: "__kavRequest" as NSString)
+            ctx.evaluateScript(source)
+            ctx.setObject(finished, forKeyedSubscript: "__kavDone" as NSString)
+            let saved = { (name: String) -> Any in KavFiles.read(name).map { $0 as Any } ?? NSNull() }
+            let input: [String: Any] = ["jobs": saved("state-jobs.json"), "state": saved("state-background.json")]
+            guard let data = try? JSONSerialization.data(withJSONObject: input), let text = String(data: data, encoding: .utf8),
+                  let main = ctx.objectForKeyedSubscript("kavBackground"), !main.isUndefined,
+                  let callback = ctx.objectForKeyedSubscript("__kavDone") else { return self.finish(nil) }
+            _ = main.call(withArguments: [text, callback])
+        }
+    }
+
+    private func request(method: String, url: String, headers: String, body: String?, timeoutMs: Double, done: JavaScriptCore.JSValue) {
+        let reply: (Int, String, String, String?) -> Void = { [weak self] status, h, b, error in
+            let e: Any = error.map { $0 as Any } ?? NSNull()
+            self?.queue.async { _ = done.call(withArguments: [status, h, b, e]) }
+        }
+        guard let u = URL(string: url), u.scheme == "https" else { return reply(0, "{}", "", "Bad URL") }
+        var req = URLRequest(url: u)
+        req.httpMethod = method
+        req.timeoutInterval = timeoutMs / 1000
+        if let data = headers.data(using: .utf8), let h = try? JSONSerialization.jsonObject(with: data) as? [String: String] {
+            for (k, v) in h { req.setValue(v, forHTTPHeaderField: k) }
+        }
+        if let b = body, let data = Data(base64Encoded: b) { req.httpBody = data }
+        session.dataTask(with: req) { data, response, error in
+            if let error = error { return reply(0, "{}", "", error.localizedDescription) }
+            guard let http = response as? HTTPURLResponse else { return reply(0, "{}", "", "No response") }
+            var h: [String: String] = [:]
+            for (k, v) in http.allHeaderFields { h[String(describing: k).lowercased()] = String(describing: v) }
+            let headerText = (try? JSONSerialization.data(withJSONObject: h)).flatMap { String(data: $0, encoding: .utf8) } ?? "{}"
+            reply(http.statusCode, headerText, (data ?? Data()).base64EncodedString(), nil)
+        }.resume()
+    }
+
+    // With kav-bg.js's answer, or nil when it couldn't run or iOS ran out of patience. Once only.
+    func finish(_ out: String?) {
+        queue.async {
+            guard let completion = self.completion else { return }
+            self.completion = nil
+            if let out = out, let data = out.data(using: .utf8), let o = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                if let jobs = o["jobs"] as? String { KavFiles.write("state-jobs.json", jobs) }
+                if let state = o["state"] as? String { KavFiles.write("state-background.json", state) }
+                KavNotices.apply(o)
+            }
+            self.context = nil
+            self.session.invalidateAndCancel()
+            completion(out != nil)
+        }
     }
 }
 
