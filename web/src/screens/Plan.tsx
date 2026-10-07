@@ -5,7 +5,7 @@ import {
   timeOf, isLive, isCancelled, distinctDeps, routeTypeOf, options, modeColor, modeName, MODE_FILTERS, mergeResolved, emptyResolved,
   type Place, type Itinerary, type Leg, type Resolved, type Arrival, type LatLon, type Departure,
 } from "../core.ts";
-import { Header, LineBadge, Spinner, Note, LiveDot, PlacePicker, SaveFavourite, HERE_NAME, Sheet, Eta, NextTimes, isLate, goBack, liveWhy } from "../ui.tsx";
+import { Header, LineBadge, Spinner, Note, LiveDot, PlacePicker, SaveFavourite, HERE_NAME, Sheet, Eta, NextTimes, isLate, goBack, stayPut, liveWhy } from "../ui.tsx";
 import { MapView, type MapLine, type MapPoint } from "../MapView.tsx";
 import { Home, Arrives, type Opened } from "./Home.tsx";
 import { DragSheet } from "../sheet.tsx";
@@ -17,7 +17,7 @@ import { SwapGlyph, StarGlyph, CloseGlyph, RecentGlyph, WalkGlyph, BikeGlyph, Ta
 
 interface PlanResult { itineraries: Itinerary[]; resolved: Resolved; refusal?: { code: number; title: string; detail: string } }
 
-export function PlanScreen({ onPay }: { onPay: (at?: LatLon, routeType?: number) => void }) {
+export function PlanScreen({ home, onPay }: { home: number; onPay: (at?: LatLon, routeType?: number) => void }) {
   const prefs = usePrefs();
   const here = useHere();
   const [from, setFrom] = useState<Place | null>(null);
@@ -30,6 +30,13 @@ export function PlanScreen({ onPay }: { onPay: (at?: LatLon, routeType?: number)
   const [saving, setSaving] = useState<Place | null>(null);
   // A way opened straight from a card on the home screen.
   const [opened, setOpened] = useState<Opened | null>(null);
+
+  // Back to the home screen, from wherever in Directions you are.
+  useEffect(() => {
+    if (!home) return;
+    stayPut();
+    setPicking(null); setTimeSheet(false); setOpened(null); setChosen(null); setTo(null); setFrom(null); setSearchKey(null);
+  }, [home]);
 
   const fromAt = (): LatLon | null => from ? [from.lat, from.lon] : here;
   const plan = useLoad<PlanResult>(searchKey, signal => {

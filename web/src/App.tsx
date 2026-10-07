@@ -32,7 +32,9 @@ export function App() {
   // Paying from a trip: a sheet over it with only the payment, the trip still underneath.
   const [paySheet, setPaySheet] = useState<{ at?: LatLon; routeType?: number } | null>(null);
   // Tabs crossfade, as on Android: the screen inside doesn't slide.
-  const go = (t: Tab) => { if (t !== tab) stayPut(); setTab(t); try { sessionStorage.setItem("kav-tab", t); } catch { /* ignore */ } };
+  // Directions tapped again while it's open goes back to its home screen, as an iPhone tab does.
+  const [planHome, setPlanHome] = useState(0);
+  const go = (t: Tab) => { if (t !== tab) stayPut(); else if (t === "plan") setPlanHome(n => n + 1); setTab(t); try { sessionStorage.setItem("kav-tab", t); } catch { /* ignore */ } };
 
   // The first launch sets Kav up before anything else, as on Android.
   if (!prefs.onboarded) return <div className="app" key={prefs.lang}><Onboarding onDone={() => setPrefs({ onboarded: true })} /></div>;
@@ -41,7 +43,7 @@ export function App() {
     <div className="app" key={prefs.lang}>
       <main className="main">
         {/* Screens stay mounted, so a trip or a board is still there after a look at another tab. */}
-        <div hidden={tab !== "plan"} className="tab-page"><PlanScreen onPay={(at, routeType) => setPaySheet({ at, routeType })} /></div>
+        <div hidden={tab !== "plan"} className="tab-page"><PlanScreen home={planHome} onPay={(at, routeType) => setPaySheet({ at, routeType })} /></div>
         <div hidden={tab !== "stations"} className="tab-page"><StationsScreen /></div>
         <div hidden={tab !== "lines"} className="tab-page"><LinesScreen /></div>
         {/* Live stays too once opened: its map and vehicles are there when you come back. */}
