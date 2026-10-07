@@ -98,7 +98,6 @@ export function PayScreen({ start, onStarted }: { start: { at?: LatLon; routeTyp
           </div>
           <WalletView key={walletKey} highlight={bought} onExit={t => setFlow({ kind: "exit", ticket: t })} />
           <button className="btn" onClick={() => setFlow({ kind: "history" })}>{T("History and bills", "היסטוריה וחיובים")}</button>
-          <button className="link center" onClick={async () => { if (confirm(T("Sign out of payments on Kav?", "להתנתק מהתשלומים ב-Kav?"))) { await api("pay/signout", {}); state.reload(); } }}>{T("Sign out", "התנתקות")}</button>
         </div>
       </div>
     </div>
