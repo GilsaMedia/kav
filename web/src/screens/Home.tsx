@@ -4,6 +4,7 @@ import { useRef, useState } from "react";
 import {
   T, api, usePrefs, getPrefs, setPrefs, useHere, useLoad, useNow, clock, agoText, routeTypeOf, soonest,
   type Place, type Favourite, type Itinerary, type Resolved, type RecentTrip, type LatLon, type Boarding,
+  minutesTo,
 } from "../core.ts";
 import { LineBadge, LiveWaves } from "../ui.tsx";
 import { SearchGlyph, TripGlyph, BriefcaseGlyph, PinGlyph, MoreGlyph, FromToGlyph, PayGlyph } from "../icons.tsx";
@@ -139,12 +140,12 @@ function QuickWay({ to, here, brief, onWay }: {
 
 // When the vehicle is at your stop, and how long you ride it.
 export function Arrives({ b, now, short }: { b: Boarding; now: number; short?: boolean }) {
-  const m = Math.max(0, Math.round((b.at - now) / 60));
-  const when = <span className={b.live ? "live-text" : "soon-text"}>{b.live && <LiveWaves />}<b>{m <= 0 ? T("now", "עכשיו") : m}</b>{m > 0 && " " + T("min", "דק׳")}</span>;
-  if (short) return <span className="arrives short">{T("Here in", "מגיע בעוד")} {when}<span className="dim"> · {T(`ride ${b.rideMin} min`, `נסיעה ${b.rideMin} דק׳`)}</span></span>;
+  const m = minutesTo(b.at, now);
+  const when = <span className={(b.live ? "live-text" : "soon-text") + (m <= 0 ? " arriving" : "")}>{b.live && <LiveWaves />}<b>{m <= 0 ? T("now", "עכשיו") : m}</b>{m > 0 && " " + T("min", "דק׳")}</span>;
+  if (short) return <span className="arrives short">{m <= 0 ? T("Here", "מגיע") : T("Here in", "מגיע בעוד")} {when}<span className="dim"> · {T(`ride ${b.rideMin} min`, `נסיעה ${b.rideMin} דק׳`)}</span></span>;
   return (
     <div className="arrives">
-      <div>{T("At your stop in", "בתחנה שלך בעוד")} {when}</div>
+      <div>{m <= 0 ? T("At your stop", "בתחנה שלך") : T("At your stop in", "בתחנה שלך בעוד")} {when}</div>
       <div className="dim small"><bdi>{b.stop}</bdi>{b.walkMin > 0 ? T(` · ${b.walkMin} min walk`, ` · ${b.walkMin} דק׳ הליכה`) : ""}</div>
       <div className="dim small">{T(`Ride: ${b.rideMin} min`, `זמן נסיעה: ${b.rideMin} דק׳`)}</div>
     </div>

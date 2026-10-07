@@ -4,6 +4,7 @@ import { T, api, useLoad, useNow, useHere, clock, metres, distanceText, timeOf, 
 import { Header, LineBadge, Spinner, Note, LiveDot, Eta, NextTimes } from "../ui.tsx";
 import { MapView } from "../MapView.tsx";
 import { ChevronGlyph } from "../icons.tsx";
+import { DelayNote, DelayStats } from "../delays.tsx";
 
 interface LineGroup { id: number; number: string; name: string; cities: string; agencyId: number; agency: string; routeType: number }
 
@@ -45,7 +46,7 @@ interface Alert { id: string; title: string; body: string; html: boolean; label:
 function LineDetail({ group, onBack }: { group: LineGroup; onBack: () => void }) {
   const detail = useLoad<Detail>(`line:${group.id}`, s => api(`lines/detail?id=${group.id}`, undefined, s));
   const [dir, setDir] = useState(0);
-  const [tab, setTab] = useState<"stops" | "times">("stops");
+  const [tab, setTab] = useState<"stops" | "times" | "delays">("stops");
   const now = useNow(15000);
   const d = detail.data?.directions[dir];
   const type = detail.data?.agencyRouteType ?? group.routeType;
@@ -112,6 +113,7 @@ function LineDetail({ group, onBack }: { group: LineGroup; onBack: () => void })
         {d && <div className="segmented">
           <button className={tab === "stops" ? "on" : ""} onClick={() => setTab("stops")}>{T("Stops", "תחנות")} ({d.stops.length})</button>
           <button className={tab === "times" ? "on" : ""} onClick={() => setTab("times")}>{T("Departures", "יציאות")}</button>
+          <button className={tab === "delays" ? "on" : ""} onClick={() => setTab("delays")}>{T("Delays", "איחורים")}</button>
         </div>}
         {d && vehicles.length > 0 && <div className="dim small"><LiveDot /> {T(`${vehicles.length} on the road`, `${vehicles.length} בדרך עכשיו`)}</div>}
       </div>
@@ -121,6 +123,7 @@ function LineDetail({ group, onBack }: { group: LineGroup; onBack: () => void })
             <div className="your-label">{T("Your stop", "התחנה שלך")} · {distanceText(yours.m)}</div>
             <button className="dest link" dir="auto" onClick={() => { setTab("stops"); yourRow.current?.scrollIntoView({ behavior: "smooth", block: "center" }); }}>{yours.stop.name}</button>
             {toYou.length > 1 && <div className="dim small">{T("then ", "אחר כך ")}<NextTimes ds={toYou.slice(1, 3)} now={now} /></div>}
+            <DelayNote lineId={d!.lineId} stopId={yours.stop.id} />
             {!toYou.length && <div className="dim small">{live.loading && !live.data ? T("Asking Moovit…", "שואלים את Moovit…") : T("No live vehicle on its way here yet.", "עדיין אין כלי רכב בדרך לכאן בזמן אמת.")}</div>}
           </div>
           {toYou[0] && <Eta d={toYou[0]} now={now} />}
@@ -142,6 +145,10 @@ function LineDetail({ group, onBack }: { group: LineGroup; onBack: () => void })
             })}
           </ol>
         )}
+        {d && tab === "delays" && <div className="pad stack">
+          {yours && <DelayStats lineId={d.lineId} stopId={yours.stop.id} stopName={yours.stop.name} />}
+          <DelayStats lineId={d.lineId} />
+        </div>}
         {d && tab === "times" && (
           <div className="pad times">
             {d.departures.length === 0 && <span className="dim">{T("No departures listed.", "אין יציאות.")}</span>}

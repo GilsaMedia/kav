@@ -3,6 +3,7 @@ import * as M from "./moovit.ts";
 import * as Pay from "./pay.ts";
 import { Net, metres } from "./net.ts";
 import * as St from "./state.ts";
+import * as Delays from "./delays.ts";
 import { setPlatform, type Platform } from "./platform.ts";
 
 let net!: Net;
@@ -157,10 +158,13 @@ route("arrivals", async q => {
   const ids = qIds(q, "stops").slice(0, 60);
   const s = await St.browse();
   const { arrivals, poll } = await M.stopArrivals(s, ids);
+  Delays.observe(arrivals);
   const lines = [...new Set(arrivals.map(a => a.lineId))].filter(l => l > 0);
   return { arrivals, poll, resolved: await M.resolveIds(s, lines, []) };
 });
 
+// What Kav has seen of a line's delays, at one stop or along the whole line.
+route("delays", async q => Delays.report(qNum(q, "line") ?? 0, qNum(q, "stop") ?? undefined));
 route("resolve", async q => M.resolveIds(await St.browse(), qIds(q, "lines"), qIds(q, "stops")));
 route("shape", async q => ({ shape: await M.tripShape(await St.browse(), qNum(q, "id") ?? 0) }));
 route("pattern", async q => {
@@ -210,6 +214,7 @@ route("stations/live", async q => {
   if (id == null && net.code[g] > 0) id = await learnThroughLines(s, g);
   if (id == null) return { moovitId: null, arrivals: [], poll: 30 };
   const { arrivals, poll } = await M.stopArrivals(s, [id]);
+  Delays.observe(arrivals);
   const lines = [...new Set(arrivals.map(a => a.lineId))].filter(l => l > 0);
   return { moovitId: id, arrivals, poll, resolved: await M.resolveIds(s, lines, []) };
 });
@@ -270,6 +275,7 @@ route("live", async q => {
   });
   const ids = [...new Set(known.map(k => k.id))].slice(0, 60);
   const { arrivals, poll } = ids.length ? await M.stopArrivals(s, ids) : { arrivals: [], poll: 20 };
+  Delays.observe(arrivals);
   // The lines through these stops list every stop on them with its code, which settles the rest.
   const left = inView.filter(g => !St.stopIds[stopKey(g)] && !misses.has(stopKey(g)));
   if (left.length) {

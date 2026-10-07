@@ -717,3 +717,20 @@ h2 { font-size: 19px; }
 .time-wheel-item.on { color: var(--text); font-size: 24px; font-weight: 600; }
 .time-wheel.grow .time-wheel-item { text-align: end; padding-inline-end: 12px; }
 .when-done { width: 100%; }
+
+/* How late a line runs, from what Kav has seen. */
+.delay-note { font-size: 13px; color: var(--warn, #F5B14C); margin-top: 2px; }
+.delay-stats .late { color: var(--warn, #F5B14C); }
+.delay-days { display: flex; flex-direction: column; gap: 8px; }
+.delay-day { display: grid; grid-template-columns: 44px 1fr 112px; align-items: center; gap: 10px; }
+.delay-day.none { opacity: .45; }
+.delay-day > :last-child { text-align: end; white-space: nowrap; }
+.delay-bar { height: 8px; border-radius: 4px; background: var(--plate); overflow: hidden; }
+.delay-bar i { display: block; height: 100%; border-radius: 4px; background: var(--accent); }
+.delay-bar i.late { background: var(--warn, #F5B14C); }
+.delay-bar i.early { background: #6FCF97; }
+
+/* A vehicle under a minute away: "now", pulsing gently. */
+.eta.arriving b, .arriving b { animation: arriving 1.2s ease-in-out infinite alternate; }
+@keyframes arriving { from { opacity: 1; } to { opacity: .45; } }
+@media (prefers-reduced-motion: reduce) { .eta.arriving b, .arriving b { animation: none; } }

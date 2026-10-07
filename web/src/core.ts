@@ -242,6 +242,12 @@ export function useNow(everyMs = 15000) {
   return now;
 }
 
+// Minutes until a time, as a countdown shows them: 0 ("now") once it's under a minute away, which is when
+// the vehicle is pulling in, rather than a "1 min" that lingers until it has gone.
+export function minutesTo(t: number, now: number) {
+  return t - now < 60 ? 0 : Math.max(1, Math.round((t - now) / 60));
+}
+
 export function minutesText(mins: number) {
   if (mins <= 0) return T("now", "עכשיו");
   if (mins < 60) return T(`${mins} min`, `${mins} דק׳`);

@@ -5,6 +5,7 @@ import qrcode from "qrcode-generator";
 import {
   T, api, usePrefs, getPrefs, setPrefs, remember, useHere, modeName, distanceText, metres, currentHere, locateOnce, failure,
   clock, timeOf, isLive, isCancelled, type Place, type Departure,
+  minutesTo,
 } from "./core.ts";
 
 // ---- when it comes ---------------------------------------------------------------------------
@@ -24,11 +25,11 @@ export const LiveWaves = () => (
 export function Eta({ d, now, inline }: { d: Departure; now: number; inline?: boolean }) {
   const t = timeOf(d);
   if (isCancelled(d)) return <span className={"eta cancelled" + (inline ? " inline" : "")}><b>{clock(d.staticUtc)}</b><small>{T("cancelled", "בוטל")}</small></span>;
-  const mins = Math.max(0, Math.round((t - now) / 60));
+  const mins = minutesTo(t, now);
   const live = isLive(d), late = isLate(d);
   const label = mins <= 0 ? T("now", "עכשיו") : mins < 60 ? T(`in ${mins} minutes`, `בעוד ${mins} דקות`) : clock(t);
   return (
-    <span className={"eta" + (live ? " live" : "") + (late ? " late" : "") + (inline ? " inline" : "")} aria-label={label + (late ? T(", delayed", ", באיחור") : "")}>
+    <span className={"eta" + (live ? " live" : "") + (late ? " late" : "") + (mins <= 0 ? " arriving" : "") + (inline ? " inline" : "")} aria-label={label + (late ? T(", delayed", ", באיחור") : "")}>
       {live && <LiveWaves />}
       {mins <= 0 ? <b>{T("now", "עכשיו")}</b> : mins < 60 ? <><b>{mins}</b><small>{T("min", "דק׳")}</small></> : <b>{clock(t)}</b>}
       {late && <small className="eta-late">{T("delayed", "באיחור")}</small>}
@@ -39,8 +40,8 @@ export function Eta({ d, now, inline }: { d: Departure; now: number; inline?: bo
 // The ones after the first, small: "12, 25 min".
 export function NextTimes({ ds, now }: { ds: Departure[]; now: number }) {
   if (!ds.length) return null;
-  const parts = ds.map(d => { const m = Math.max(0, Math.round((timeOf(d) - now) / 60)); return m < 60 ? String(m) : clock(timeOf(d)); });
-  const allMinutes = ds.every(d => timeOf(d) - now < 3600);
+  const parts = ds.map(d => { const m = minutesTo(timeOf(d), now); return m <= 0 ? T("now", "עכשיו") : m < 60 ? String(m) : clock(timeOf(d)); });
+  const allMinutes = ds.every(d => timeOf(d) - now < 3600) && ds.some(d => minutesTo(timeOf(d), now) > 0);
   return <span className="next-times">{parts.join(", ")}{allMinutes ? " " + T("min", "דק׳") : ""}</span>;
 }
 

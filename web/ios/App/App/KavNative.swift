@@ -315,7 +315,9 @@ final class TripKeeper: NSObject, CLLocationManagerDelegate {
     // the card falls back to the clock iOS runs by itself instead of showing old minutes.
     static func content(_ s: KavTripAttributes.ContentState) -> ActivityContent<KavTripAttributes.ContentState> {
         var s = s
-        s.minutes = max(0, Int((s.target.timeIntervalSinceNow / 60).rounded(.up)))
+        // Under a minute away is "Now": the vehicle is pulling in.
+        let left = s.target.timeIntervalSinceNow
+        s.minutes = left < 60 ? 0 : Int((left / 60).rounded(.up))
         return ActivityContent(state: s, staleDate: Date().addingTimeInterval(75))
     }
 

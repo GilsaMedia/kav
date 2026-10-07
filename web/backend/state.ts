@@ -12,6 +12,8 @@ interface Saved {
   pay?: M.MoovitSession; paySignedIn?: boolean;
   device?: typeof M.device;
   stopIds?: Record<string, number>;
+  // What the live times showed of each line's delays (delays.ts).
+  delays?: Record<string, [number, number, number, number, number, string]>;
 }
 
 // Each install tells Moovit about one phone of its own.
@@ -108,6 +110,8 @@ export function asPayer<T>(f: (s: M.MoovitSession) => Promise<T>): Promise<T> {
 export const paySignedIn = () => !!saved.paySignedIn;
 export function markSignedIn() { saved.paySignedIn = true; persist(true); }
 export function signOut() { saved.pay = undefined; saved.paySignedIn = false; persist(true); }
+
+export const delaySamples = () => (saved.delays ??= {});
 
 // ---- timetable stops to Moovit ids -----------------------------------------------------------
 

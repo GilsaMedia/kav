@@ -10,6 +10,7 @@ import { MapView, type MapLine, type MapPoint } from "../MapView.tsx";
 import { Home, Arrives, type Opened } from "./Home.tsx";
 import { DragSheet } from "../sheet.tsx";
 import { WhenButton, WhenSheet, type When } from "../when.tsx";
+import { DelayNote } from "../delays.tsx";
 import { isNative, keepAwake, showTrip, endTrip, buzz, type TripLive } from "../native.ts";
 import { SwapGlyph, StarGlyph, CloseGlyph, RecentGlyph, WalkGlyph, BikeGlyph, TaxiGlyph, DotGlyph, ShareGlyph, PlayGlyph, ChevronGlyph, BackGlyph, PayGlyph, LocateGlyph, PinGlyph, StationMark, BellGlyph, FlagGlyph, modeOf } from "../icons.tsx";
 
@@ -421,6 +422,7 @@ function RideSteps({ leg, wait, r, live, now, onPay, stopAt, prev, below, onPick
   const stopName = (id: number) => r.stops[id]?.name ?? "";
   return <>
     <Stop time={mine ? timeOf(mine) : ride.dep} above={prev} below={color} title={stopName(ride.fromStop)}>
+      <DelayNote lineId={ride.lineId} stopId={ride.fromStop} />
       {mine && <div className="tl-leaves">{T("Leaves in", "יוצא בעוד")} <Eta d={mine} now={now} inline />{deps.length > 1 && <span className="dim"> · {T("then ", "אחר כך ")}<NextTimes ds={deps.slice(1, 3)} now={now} /></span>}</div>}
     </Stop>
     <Step color={color}>
