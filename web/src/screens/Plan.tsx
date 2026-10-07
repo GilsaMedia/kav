@@ -2,7 +2,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   T, api, usePrefs, getPrefs, setPrefs, rememberTrip, boardingOf, useHere, useLoad, useNow, clock, minutesText, distanceText, metres, shekels, failure,
-  timeOf, isLive, isCancelled, routeTypeOf, options, modeColor, modeName, MODE_FILTERS, mergeResolved, emptyResolved,
+  timeOf, isLive, isCancelled, distinctDeps, routeTypeOf, options, modeColor, modeName, MODE_FILTERS, mergeResolved, emptyResolved,
   type Place, type Itinerary, type Leg, type Resolved, type Arrival, type LatLon, type Departure,
 } from "../core.ts";
 import { Header, LineBadge, Spinner, Note, LiveDot, PlacePicker, SaveFavourite, HERE_NAME, Sheet, Eta, NextTimes, isLate, goBack, liveWhy } from "../ui.tsx";
@@ -226,10 +226,8 @@ function departuresFor(ride: Leg, wait: Leg | undefined, live: Arrival[] | undef
   const planned = [...(boarding?.nextDeps ?? []), ...ride.nextDeps];
   const liveHere = (live ?? []).filter(a => a.stopId === ride.fromStop && a.lineId === ride.lineId && timeOf(a) >= now - 60)
     .sort((a, b) => timeOf(a) - timeOf(b));
-  if (liveHere.length) return liveHere;
-  const seen = new Set<string>();
-  return planned.filter(d => { const k = `${d.tripId}:${timeOf(d)}`; if (seen.has(k)) return false; seen.add(k); return timeOf(d) >= now - 60; })
-    .sort((a, b) => timeOf(a) - timeOf(b));
+  if (liveHere.length) return distinctDeps(liveHere);
+  return distinctDeps(planned.filter(d => timeOf(d) >= now - 60));
 }
 
 function DepTime({ d, now }: { d: Departure; now: number }) {

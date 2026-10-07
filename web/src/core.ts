@@ -335,6 +335,24 @@ export const options = (l: Leg) => (l.alternatives.length ? l.alternatives : [l]
 // next: the line's coming vehicles at that stop from now, soonest first, including ones too soon to walk to.
 export interface Boarding { ride: Leg; at: number; live: boolean; dep: Departure | null; stop: string; rideMin: number; walkMin: number; numbers: string[]; next: Departure[] }
 
+// One entry per vehicle, soonest first. Moovit lists a vehicle once from the stop's live times and again from
+// the plan, the times apart by a little: one trip is one vehicle (its live time kept), and two in the same
+// minute are one too.
+export function distinctDeps(deps: Departure[]): Departure[] {
+  const byTrip = new Map<string, Departure>();
+  for (const d of deps) {
+    const k = String(d.tripId), p = byTrip.get(k);
+    if (!p || (isLive(d) && !isLive(p))) byTrip.set(k, d);
+  }
+  const out: Departure[] = [];
+  for (const d of [...byTrip.values()].sort((a, b) => timeOf(a) - timeOf(b))) {
+    const prev = out[out.length - 1];
+    if (prev && Math.abs(timeOf(d) - timeOf(prev)) < 60) { if (isLive(d) && !isLive(prev)) out[out.length - 1] = d; continue; }
+    out.push(d);
+  }
+  return out;
+}
+
 export function boardingOf(it: Itinerary, r: Resolved, now: number): Boarding | null {
   const i = it.legs.findIndex(l => l.kind === "ride");
   if (i < 0) return null;
@@ -344,9 +362,7 @@ export function boardingOf(it: Itinerary, r: Resolved, now: number): Boarding | 
   // The very vehicle this way is planned on, else the next one of the line.
   const dep = deps.find(d => String(d.tripId) === String(ride.tripId)) ?? deps.sort((a, b) => timeOf(a) - timeOf(b))[0] ?? null;
   const walk = it.legs.slice(0, i).filter(l => l.kind === "walk").reduce((s, l) => s + Math.max(0, l.arr - l.dep), 0);
-  const seen = new Set<string>();
-  const next = [...deps].sort((a, b) => timeOf(a) - timeOf(b))
-    .filter(d => { const k = `${d.tripId}:${timeOf(d)}`; if (seen.has(k)) return false; seen.add(k); return true; });
+  const next = distinctDeps(deps);
   return {
     next,
     ride, dep, at: dep ? timeOf(dep) : ride.dep, live: !!dep && isLive(dep), stop: r.stops[ride.fromStop]?.name ?? "",
