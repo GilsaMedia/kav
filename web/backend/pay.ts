@@ -154,10 +154,12 @@ export async function sendCode(user: MoovitSession, phone: string) {
 export async function verify(user: MoovitSession, code: string, takeOver: boolean) {
   const root = await call(user, "PaymentContext/RegistrationVerification",
     new TWriter().strField(1, CONTEXT).strField(2, code).boolField(3, !takeOver));
-  if (!root) return { exists: true, elsewhere: false, steps: null as Steps | null };
-  // isAccountExist (3) and not isMigratedUser (1): the account is on another device, as Moovit's app reads it.
+  if (!root) return { elsewhere: false, steps: null as Steps | null };
+  // As Moovit's app reads the answer: isAccountExist (3) and not isMigratedUser (1) means the account is on
+  // another device, to be moved here. Anything else goes on to the missing steps (2). isAccountExist false
+  // is not "no account": after a move it is false, the account being on no other device any more.
   const st = sRec(root, 2);
-  return { exists: root.get(3) === true, elsewhere: root.get(3) === true && root.get(1) !== true, steps: st ? stepsOf(st) : null };
+  return { elsewhere: root.get(3) === true && root.get(1) !== true, steps: st ? stepsOf(st) : null };
 }
 
 // The CVV goes to Moovit once and is kept nowhere.

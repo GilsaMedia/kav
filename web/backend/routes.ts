@@ -301,9 +301,7 @@ route("pay/steps", async () => St.asPayer(Pay.steps));
 route("pay/terms", async (_q, b) => { await St.asPayer(u => Pay.acceptTerms(u, Number(b.version) || 1)); return {}; });
 route("pay/send", async (_q, b) => { await St.asPayer(u => Pay.sendCode(u, String(b.phone ?? ""))); return {}; });
 route("pay/verify", async (_q, b) => {
-  const v = await St.asPayer(u => Pay.verify(u, String(b.code ?? ""), !!b.takeOver));
-  if (!v.exists) St.signOut();
-  return v;
+  return St.asPayer(u => Pay.verify(u, String(b.code ?? ""), !!b.takeOver));
 });
 route("pay/cvv", async (_q, b) => { await St.asPayer(u => Pay.confirmCard(u, String(b.cvv ?? ""))); return {}; });
 // An input step (the CVV step, or another Moovit asks for), answered with its fields' values.

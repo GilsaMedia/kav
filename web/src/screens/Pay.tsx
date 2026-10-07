@@ -110,7 +110,7 @@ const stepName = (n: number) => ({
 } as Record<number, string>)[n] ?? `#${n}`;
 
 type Step = { k: "loading" } | { k: "terms"; terms: any } | { k: "phone"; reconnect: Steps["reconnect"] } | { k: "code"; phone: string }
-  | { k: "pango"; last4: string } | { k: "input"; cvv: boolean; step: InputStep } | { k: "noAccount" } | { k: "unfinished"; missing: number[] };
+  | { k: "pango"; last4: string } | { k: "input"; cvv: boolean; step: InputStep } | { k: "unfinished"; missing: number[] };
 
 // The next thing Moovit wants, as its own app picks it: terms, the phone (or reconnecting it), the card on the
 // account, the CVV, other input. Anything else is finished in Moovit's app.
@@ -157,9 +157,8 @@ function SignIn({ onDone }: { onDone: () => void }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [attempt]);
 
-  const verified = async (v: { exists: boolean; elsewhere: boolean; steps: Steps | null }) => {
-    if (!v.exists) setStep({ k: "noAccount" });
-    else if (v.elsewhere) setElsewhere(true);
+  const verified = async (v: { elsewhere: boolean; steps: Steps | null }) => {
+    if (v.elsewhere) setElsewhere(true);
     else await advance(v.steps?.missing.length ? v.steps : null);
   };
 
@@ -225,14 +224,11 @@ function SignIn({ onDone }: { onDone: () => void }) {
               await advance(await api<Steps>("pay/input", { cvv: step.cvv, step: step.step.id, values: sent }));
             })}>{step.step.button || T("Continue", "המשך")}</button>
           </>}
-          {step.k === "noAccount" && <>
-            <Note>{T("No payment account on this number. Register a payment account in Moovit's app, then try again.", "אין חשבון תשלום על המספר הזה. רשמו חשבון תשלום באפליקציה של Moovit ונסו שוב.")}</Note>
-            <button className="btn" onClick={() => { setPhone(""); setCode(""); setStep({ k: "loading" }); setAttempt(a => a + 1); }}>{T("Try again", "ניסיון נוסף")}</button>
-          </>}
           {step.k === "unfinished" && <>
             <Note>{T(`Moovit still needs ${step.missing.map(stepName).join(", ")} on this account, which Kav can't fill in. Finish it in Moovit's app, then sign in here again.`,
               `Moovit עדיין צריכה ${step.missing.map(stepName).join(", ")} בחשבון, ו-Kav לא יכולה למלא את זה. השלימו באפליקציה של Moovit ואז התחברו כאן שוב.`)}</Note>
             <button className="btn" disabled={busy} onClick={() => run(() => advance())}>{T("Check again", "בדיקה חוזרת")}</button>
+            <button className="link center" disabled={busy} onClick={() => run(async () => { await api("pay/signout", {}); setPhone(""); setCode(""); setStep({ k: "loading" }); setAttempt(n => n + 1); })}>{T("Start over", "התחלה מחדש")}</button>
           </>}
           {error && <Note tone="error">{error}</Note>}
         </div>
