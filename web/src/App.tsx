@@ -1,10 +1,12 @@
 import { useState, type ComponentType } from "react";
-import { T, usePrefs, getPrefs, setPrefs, type LatLon, type Look } from "./core.ts";
+import { T, usePrefs, getPrefs, setPrefs, clock, type LatLon, type Look } from "./core.ts";
 import { AccentPicker } from "./Accent.tsx";
 import { Onboarding, SupportPrompt } from "./Onboarding.tsx";
 import { Header, stayPut, useLeaving, liveWhy } from "./ui.tsx";
 import { DirectionsGlyph, StationTabGlyph, LinesTabGlyph, LiveTabGlyph, TicketGlyph, GearGlyph, CloseGlyph } from "./icons.tsx";
 import { isNative, removeMap, getMapState, tryTripLive, type LiveResult } from "./native.ts";
+import { canNotify, useJobs, removeReminder, unfollowLine } from "./remind.ts";
+import { isActiveLine } from "../backend/jobs.ts";
 import { PlanScreen } from "./screens/Plan.tsx";
 import { StationsScreen } from "./screens/Stations.tsx";
 import { LinesScreen } from "./screens/Lines.tsx";
@@ -91,6 +93,7 @@ function Settings() {
           <LockScreenTest />
           <div className="list-head">{T("Accent", "צבע הדגשה")}</div>
           <div className="card pad stack center-items"><AccentPicker /></div>
+          {canNotify && <Notifications />}
           <div className="list-head">{T("Privacy", "פרטיות")}</div>
           <label className="toggle card pad">
             <div>
@@ -141,6 +144,36 @@ function LockScreenTest() {
       {result && <div className={"small " + (result.ok ? "dim" : "")} style={result.ok ? undefined : { color: "var(--problem)" }}>{why(result)}</div>}
     </div>
   );
+}
+
+// What Kav will tell you about while it's closed: the reminders you set, and the lines you follow.
+function Notifications() {
+  const jobs = useJobs();
+  const now = Date.now();
+  const lines = jobs.lines.filter(l => isActiveLine(l, now));
+  return <>
+    <div className="list-head">{T("Notifications", "התראות")}</div>
+    <div className="card pad stack">
+      <div className="dim small">{T(
+        "A reminder to leave comes 5 minutes before it's time to go, moved by the bus's live time. Alerts come when a line you follow gets a new one: tap the bell on a line's page, and lines you ride with Start are followed for a month. iPhone checks for Kav every so often while it's closed, as it sees fit.",
+        "תזכורת לצאת מגיעה 5 דקות לפני שצריך לצאת, ומתעדכנת לפי זמן האמת של האוטובוס. התראה על קו מגיעה כשמתפרסמת עליו הודעה חדשה: הקישו על הפעמון בדף הקו, וקווים שנסעתם בהם עם \"יציאה לדרך\" נשמרים לחודש. האייפון בודק עבור Kav מדי פעם כשהיא סגורה, לפי שיקולו.")}</div>
+      {!jobs.reminders.length && !lines.length && <div className="dim">{T("No reminders or lines yet.", "אין עדיין תזכורות או קווים.")}</div>}
+      {jobs.reminders.map(r => (
+        <div key={r.id} className="row-card notif-row">
+          <div className="grow"><div>{T(`Leave for ${r.dest}`, `יציאה אל ${r.dest}`)}</div>
+            <div className="dim small">{clock(Math.floor((r.at ?? r.leaveMs - 5 * 60_000) / 1000))} · {r.line}</div></div>
+          <button className="icon-btn" onClick={() => removeReminder(r.id)} aria-label={T("Remove", "הסרה")}><CloseGlyph size={14} /></button>
+        </div>
+      ))}
+      {lines.map(l => (
+        <div key={l.groupId} className="row-card notif-row">
+          <div className="grow"><div>{l.label}</div>
+            <div className="dim small">{l.manual ? T("Following", "במעקב") : T("Ridden lately", "נסעתם בו לאחרונה")}</div></div>
+          <button className="icon-btn" onClick={() => unfollowLine(l.groupId)} aria-label={T("Remove", "הסרה")}><CloseGlyph size={14} /></button>
+        </div>
+      ))}
+    </div>
+  </>;
 }
 
 function PaySheet({ start, onClose }: { start: { at?: LatLon; routeType?: number }; onClose: () => void }) {

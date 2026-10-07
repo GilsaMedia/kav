@@ -19,6 +19,9 @@ interface KavNativePlugin {
   stateRead(o: { key: string }): Promise<{ value: string | null }>;
   haptic(o: { kind: "tap" | "alert" }): Promise<void>;
   stateWrite(o: { key: string; value: string | null }): Promise<void>;
+  notifyAllow(): Promise<{ granted: boolean }>;
+  notifyAllowed(): Promise<{ granted: boolean }>;
+  notifySet(o: { json: string }): Promise<void>;
   addListener(event: "downloadProgress", f: (e: { done: number; total: number }) => void): Promise<PluginListenerHandle>;
 }
 export const KavNative = registerPlugin<KavNativePlugin>("KavNative");

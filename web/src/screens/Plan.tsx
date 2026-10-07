@@ -11,6 +11,7 @@ import { Home, Arrives, type Opened } from "./Home.tsx";
 import { DragSheet } from "../sheet.tsx";
 import { WhenButton, WhenSheet, type When } from "../when.tsx";
 import { DelayNote } from "../delays.tsx";
+import { canNotify, useJobs, addReminder, removeReminder, rodeLines } from "../remind.ts";
 import { isNative, keepAwake, showTrip, endTrip, buzz, type TripLive } from "../native.ts";
 import { SwapGlyph, StarGlyph, CloseGlyph, RecentGlyph, WalkGlyph, BikeGlyph, TaxiGlyph, DotGlyph, ShareGlyph, PlayGlyph, ChevronGlyph, BackGlyph, PayGlyph, LocateGlyph, PinGlyph, StationMark, BellGlyph, FlagGlyph, modeOf } from "../icons.tsx";
 
@@ -313,6 +314,31 @@ export function TripDetail({ trip: planned, resolved: first, from, to, onBack, o
   }, [previewKey, navigating]);
   useEffect(() => () => endTrip(), []);
 
+  // A reminder to leave, for a way that starts a while from now: its first ride, followed by its live time.
+  const jobs = useJobs();
+  const [remindNote, setRemindNote] = useState<string | null>(null);
+  const ride = legs.find(l => l.kind === "ride");
+  const remindId = ride ? `${ride.tripId}@${ride.dep}` : "";
+  const reminder = jobs.reminders.find(x => x.id === remindId);
+  const canRemind = canNotify && !!ride && (trip.dep - now > 10 * 60 || !!reminder);
+  const remind = async () => {
+    if (!ride) return;
+    setRemindNote(null);
+    if (reminder) { await removeReminder(remindId); return; }
+    const ok = await addReminder({
+      id: remindId, dest: to, leaveMs: trip.dep * 1000, boardMs: ride.dep * 1000, stopId: ride.fromStop, tripId: String(ride.tripId),
+      lineIds: [...new Set([ride.lineId, ...options(ride).map(o => o.lineId)])].filter(id => id > 0),
+      line: `${modeName(routeTypeOf(r, ride.lineId))} ${r.lines[ride.lineId]?.number || ride.shortName}`.trim(), stop: r.stops[ride.fromStop]?.name ?? "",
+    }).catch(() => false);
+    if (!ok) setRemindNote(T("Notifications are off for Kav. Turn them on in Settings → Kav → Notifications.", "ההתראות כבויות עבור Kav. אפשר להפעיל אותן בהגדרות → Kav → עדכונים."));
+  };
+  const start = () => {
+    // The lines you ride are followed for their alerts.
+    rodeLines(legs.filter(l => l.kind === "ride" && r.lines[l.lineId]?.groupId)
+      .map(l => ({ groupId: r.lines[l.lineId].groupId, label: `${modeName(routeTypeOf(r, l.lineId))} ${r.lines[l.lineId].number}` })));
+    setNavigating(true);
+  };
+
   if (navigating) return <Navigate trip={trip} r={r} live={live.data?.arrivals} here={here} lines={lines} ends={ends} vehicles={vehicles}
     from={from} to={to} onPay={onPay} onShare={share} onExit={() => setNavigating(false)} onPick={pickLine} />;
 
@@ -339,11 +365,16 @@ export function TripDetail({ trip: planned, resolved: first, from, to, onBack, o
         </div>
         {shareNote && <div className="pad"><Note>{shareNote}</Note></div>}
         {lockNote && <div className="pad"><Note tone="warn">{lockNote}</Note></div>}
+        {remindNote && <div className="pad"><Note tone="warn">{remindNote}</Note></div>}
         {live.error && <div className="pad"><Note tone="warn">{T("Live times are unavailable right now.", "זמני אמת אינם זמינים כרגע.")}</Note></div>}
         <Timeline trip={trip} r={r} live={live.data?.arrivals} now={now} from={from} to={to} onPay={onPay} stopAt={stopAt} onPick={pickLine} />
       </DragSheet>
       <div className="trip-cta">
-        <button className="setup-btn lit" onClick={() => setNavigating(true)}><PlayGlyph size={16} />{T("Start", "יציאה לדרך")}</button>
+        <button className="setup-btn lit" onClick={start}><PlayGlyph size={16} />{T("Start", "יציאה לדרך")}</button>
+        {canRemind && <button className={"setup-btn remind-btn" + (reminder ? " on" : "")} onClick={remind}
+          aria-label={reminder ? T("Cancel the reminder", "ביטול התזכורת") : T("Remind me to leave", "תזכורת לצאת")}>
+          <BellGlyph size={18} />{reminder ? clock(Math.floor((reminder.at ?? reminder.leaveMs - 5 * 60_000) / 1000)) : T("Remind me", "תזכורת")}
+        </button>}
       </div>
     </div>
   );

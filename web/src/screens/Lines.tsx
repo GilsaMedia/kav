@@ -3,8 +3,9 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { T, api, useLoad, useNow, useHere, clock, metres, distanceText, timeOf, modeColor, modeName, type Arrival, type LatLon, type StopInfo, type LineInfo } from "../core.ts";
 import { Header, LineBadge, Spinner, Note, LiveDot, Eta, NextTimes } from "../ui.tsx";
 import { MapView } from "../MapView.tsx";
-import { ChevronGlyph } from "../icons.tsx";
+import { ChevronGlyph, BellGlyph } from "../icons.tsx";
 import { DelayNote, DelayStats } from "../delays.tsx";
+import { canNotify, useJobs, followsLine, followLine, unfollowLine } from "../remind.ts";
 
 interface LineGroup { id: number; number: string; name: string; cities: string; agencyId: number; agency: string; routeType: number }
 
@@ -57,6 +58,17 @@ function LineDetail({ group, onBack }: { group: LineGroup; onBack: () => void })
     s => api<{ arrivals: Arrival[]; poll: number }>(`arrivals?stops=${stopIds.join(",")}`, undefined, s).then(r => { poll.current = Math.min(Math.max(r.poll, 10), 60); return r; }),
     () => poll.current * 1000);
   const alerts = useLoad<{ alerts: Alert[] }>(`alerts:${group.id}`, s => api(`alerts?groups=${group.id}`, undefined, s));
+  // A bell: a notification when a new alert comes up on this line.
+  const jobs = useJobs();
+  const following = followsLine(jobs, group.id);
+  const [bellNote, setBellNote] = useState<string | null>(null);
+  const bell = async () => {
+    setBellNote(null);
+    if (following) { await unfollowLine(group.id); return; }
+    if (!await followLine(group.id, `${modeName(type)} ${group.number}`).catch(() => false))
+      setBellNote(T("Notifications are off for Kav. Turn them on in Settings → Kav → Notifications.", "ההתראות כבויות עבור Kav. אפשר להפעיל אותן בהגדרות → Kav → עדכונים."));
+    else setBellNote(T("You'll get a notification when a new alert comes up on this line.", "תקבלו התראה כשתפורסם הודעה חדשה על הקו הזה."));
+  };
 
   const mine = (live.data?.arrivals ?? []).filter(a => a.lineId === d?.lineId);
   // One mark per vehicle, at its latest report.
@@ -91,7 +103,10 @@ function LineDetail({ group, onBack }: { group: LineGroup; onBack: () => void })
 
   return (
     <div className="screen">
-      <Header title={`${modeName(type)} ${group.number}`} sub={group.agency} back={onBack} />
+      <Header title={`${modeName(type)} ${group.number}`} sub={group.agency} back={onBack}
+        right={canNotify ? <button className={"plate-btn line-bell" + (following ? " on" : "")} onClick={bell}
+          aria-label={following ? T("Stop alerts for this line", "הפסקת התראות על הקו") : T("Alerts for this line", "התראות על הקו")}><BellGlyph size={20} /></button> : undefined} />
+      {bellNote && <div className="pad"><Note>{bellNote}</Note></div>}
       {d && <MapView className="map-half" lines={[{ coords: d.shape.length ? d.shape : pts, color, width: 5 }]}
         points={[
           ...d.stops.filter(s => s.lat != null).map(s => ({ id: `s${s.id}`, at: [s.lat!, s.lon!] as LatLon, color: "#ffffff", kind: "stop" as const, ring: color })),

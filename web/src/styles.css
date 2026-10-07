@@ -539,6 +539,10 @@ h2 { font-size: 19px; }
 .trip-sum-time { font-size: 20px; font-weight: 700; font-variant-numeric: tabular-nums; }
 .trip-cta { position: absolute; z-index: 4; inset-inline: 16px; bottom: calc(var(--bar-space) + 6px); }
 .trip-cta .setup-btn { gap: 10px; font-size: 17px; font-weight: 700; box-shadow: 0 8px 24px var(--shadow); }
+.trip-cta:has(.remind-btn) { display: flex; gap: 10px; }
+.trip-cta .setup-btn.lit { flex: 1; }
+.trip-cta .remind-btn { width: auto; flex-shrink: 0; padding: 0 18px; gap: 7px; font-size: 15px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.trip-cta .remind-btn.on { color: var(--accent); }
 
 .timeline { padding: 18px 16px 8px 8px; }
 [dir="rtl"] .timeline { padding: 18px 8px 8px 16px; }
@@ -736,3 +740,5 @@ h2 { font-size: 19px; }
 @keyframes arriving { from { opacity: 1; } to { opacity: .45; } }
 @media (prefers-reduced-motion: reduce) { .eta.arriving b, .arriving b { animation: none; } }
 .too-soon { color: var(--warn, #F5B14C); font-size: .9em; }
+.line-bell.on { color: var(--accent); }
+.notif-row { padding: 6px 0; border-top: .5px solid var(--hairline); }
