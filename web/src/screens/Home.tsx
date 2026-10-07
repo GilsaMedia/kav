@@ -4,9 +4,9 @@ import { useRef, useState } from "react";
 import {
   T, api, usePrefs, getPrefs, setPrefs, useHere, useLoad, useNow, clock, agoText, routeTypeOf, soonest,
   type Place, type Favourite, type Itinerary, type Resolved, type RecentTrip, type LatLon, type Boarding,
-  minutesTo,
+  minutesTo, timeOf, isLive,
 } from "../core.ts";
-import { LineBadge, LiveWaves } from "../ui.tsx";
+import { LineBadge, LiveWaves, NextTimes } from "../ui.tsx";
 import { SearchGlyph, TripGlyph, BriefcaseGlyph, PinGlyph, MoreGlyph, FromToGlyph, PayGlyph } from "../icons.tsx";
 
 interface PlanResult { itineraries: Itinerary[]; resolved: Resolved }
@@ -138,14 +138,25 @@ function QuickWay({ to, here, brief, onWay }: {
   );
 }
 
-// When the vehicle is at your stop, and how long you ride it.
+// When the vehicle is at your stop, and how long you ride it. The soonest one is shown even when the walk
+// is longer than the wait ("probably too soon"), then the two after it.
 export function Arrives({ b, now, short }: { b: Boarding; now: number; short?: boolean }) {
-  const m = minutesTo(b.at, now);
-  const when = <span className={(b.live ? "live-text" : "soon-text") + (m <= 0 ? " arriving" : "")}>{b.live && <LiveWaves />}<b>{m <= 0 ? T("now", "עכשיו") : m}</b>{m > 0 && " " + T("min", "דק׳")}</span>;
-  if (short) return <span className="arrives short">{m <= 0 ? T("Here", "מגיע") : T("Here in", "מגיע בעוד")} {when}<span className="dim"> · {T(`ride ${b.rideMin} min`, `נסיעה ${b.rideMin} דק׳`)}</span></span>;
+  const first = b.next[0] ?? b.dep;
+  const at = first ? timeOf(first) : b.at;
+  const live = first ? isLive(first) : b.live;
+  const m = minutesTo(at, now);
+  const tooSoon = b.walkMin > 0 && at - now < b.walkMin * 60;
+  const after = b.next.slice(first === b.next[0] ? 1 : 0, (first === b.next[0] ? 1 : 0) + 2);
+  const when = <span className={(live ? "live-text" : "soon-text") + (m <= 0 ? " arriving" : "")}>{live && <LiveWaves />}
+    <b>{m <= 0 ? T("now", "עכשיו") : m >= 60 ? clock(at) : m}</b>{m > 0 && m < 60 && " " + T("min", "דק׳")}</span>;
+  const lead = m <= 0 ? T("Here", "מגיע") : m >= 60 ? T("Here at", "מגיע ב-") : T("Here in", "מגיע בעוד");
+  const soon = tooSoon && <span className="too-soon"> · {T("probably too soon", "כנראה מוקדם מדי")}</span>;
+  const then = after.length > 0 && <span className="dim"> · {T("then ", "אחר כך ")}<NextTimes ds={after} now={now} /></span>;
+  if (short) return <span className="arrives short">{lead} {when}{soon}{then}<span className="dim"> · {T(`ride ${b.rideMin} min`, `נסיעה ${b.rideMin} דק׳`)}</span></span>;
   return (
     <div className="arrives">
-      <div>{m <= 0 ? T("At your stop", "בתחנה שלך") : T("At your stop in", "בתחנה שלך בעוד")} {when}</div>
+      <div>{m <= 0 ? T("At your stop", "בתחנה שלך") : m >= 60 ? T("At your stop at", "בתחנה שלך ב-") : T("At your stop in", "בתחנה שלך בעוד")} {when}{soon}</div>
+      {after.length > 0 && <div className="dim small">{T("then ", "אחר כך ")}<NextTimes ds={after} now={now} /></div>}
       <div className="dim small"><bdi>{b.stop}</bdi>{b.walkMin > 0 ? T(` · ${b.walkMin} min walk`, ` · ${b.walkMin} דק׳ הליכה`) : ""}</div>
       <div className="dim small">{T(`Ride: ${b.rideMin} min`, `זמן נסיעה: ${b.rideMin} דק׳`)}</div>
     </div>

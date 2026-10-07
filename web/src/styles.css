@@ -734,3 +734,4 @@ h2 { font-size: 19px; }
 .eta.arriving b, .arriving b { animation: arriving 1.2s ease-in-out infinite alternate; }
 @keyframes arriving { from { opacity: 1; } to { opacity: .45; } }
 @media (prefers-reduced-motion: reduce) { .eta.arriving b, .arriving b { animation: none; } }
+.too-soon { color: var(--warn, #F5B14C); font-size: .9em; }

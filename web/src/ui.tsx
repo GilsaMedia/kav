@@ -40,8 +40,12 @@ export function Eta({ d, now, inline }: { d: Departure; now: number; inline?: bo
 // The ones after the first, small: "12, 25 min".
 export function NextTimes({ ds, now }: { ds: Departure[]; now: number }) {
   if (!ds.length) return null;
-  const parts = ds.map(d => { const m = minutesTo(timeOf(d), now); return m <= 0 ? T("now", "עכשיו") : m < 60 ? String(m) : clock(timeOf(d)); });
+  // All within the hour: "12, 25 min". An hour or more away is its clock time: "12 min, 14:05".
   const allMinutes = ds.every(d => timeOf(d) - now < 3600) && ds.some(d => minutesTo(timeOf(d), now) > 0);
+  const parts = ds.map(d => {
+    const m = minutesTo(timeOf(d), now);
+    return m <= 0 ? T("now", "עכשיו") : m >= 60 ? clock(timeOf(d)) : allMinutes ? String(m) : T(`${m} min`, `${m} דק׳`);
+  });
   return <span className="next-times">{parts.join(", ")}{allMinutes ? " " + T("min", "דק׳") : ""}</span>;
 }
 

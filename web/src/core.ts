@@ -332,7 +332,8 @@ export const options = (l: Leg) => (l.alternatives.length ? l.alternatives : [l]
 
 // The first ride of a way there, from where you get on: when the vehicle is at that stop (live when
 // Moovit tracks it), how long you ride, and how long you walk before it.
-export interface Boarding { ride: Leg; at: number; live: boolean; dep: Departure | null; stop: string; rideMin: number; walkMin: number; numbers: string[] }
+// next: the line's coming vehicles at that stop from now, soonest first, including ones too soon to walk to.
+export interface Boarding { ride: Leg; at: number; live: boolean; dep: Departure | null; stop: string; rideMin: number; walkMin: number; numbers: string[]; next: Departure[] }
 
 export function boardingOf(it: Itinerary, r: Resolved, now: number): Boarding | null {
   const i = it.legs.findIndex(l => l.kind === "ride");
@@ -343,7 +344,11 @@ export function boardingOf(it: Itinerary, r: Resolved, now: number): Boarding | 
   // The very vehicle this way is planned on, else the next one of the line.
   const dep = deps.find(d => String(d.tripId) === String(ride.tripId)) ?? deps.sort((a, b) => timeOf(a) - timeOf(b))[0] ?? null;
   const walk = it.legs.slice(0, i).filter(l => l.kind === "walk").reduce((s, l) => s + Math.max(0, l.arr - l.dep), 0);
+  const seen = new Set<string>();
+  const next = [...deps].sort((a, b) => timeOf(a) - timeOf(b))
+    .filter(d => { const k = `${d.tripId}:${timeOf(d)}`; if (seen.has(k)) return false; seen.add(k); return true; });
   return {
+    next,
     ride, dep, at: dep ? timeOf(dep) : ride.dep, live: !!dep && isLive(dep), stop: r.stops[ride.fromStop]?.name ?? "",
     rideMin: Math.max(1, Math.round((ride.arr - ride.dep) / 60)), walkMin: Math.round(walk / 60),
     numbers: [...new Set(options(ride).map(o => r.lines[o.lineId]?.number || o.shortName).filter(Boolean))].slice(0, 3),
