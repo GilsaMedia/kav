@@ -1,7 +1,7 @@
 // Planning a trip: where from and to, the ways there, one of them in detail, and walking through it.
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
-  T, api, usePrefs, getPrefs, setPrefs, rememberTrip, boardingOf, useHere, useLoad, useNow, clock, minutesText, distanceText, metres, shekels, failure,
+  T, api, usePrefs, getPrefs, setPrefs, rememberTrip, boardingOf, useHere, useLoad, useNow, clock, minutesText, minutesTo, distanceText, metres, shekels, failure,
   timeOf, isLive, isCancelled, distinctDeps, routeTypeOf, options, modeColor, modeName, MODE_FILTERS, mergeResolved, emptyResolved,
   type Place, type Itinerary, type Leg, type Resolved, type Arrival, type LatLon, type Departure,
 } from "../core.ts";
@@ -11,7 +11,8 @@ import { Home, Arrives, type Opened } from "./Home.tsx";
 import { DragSheet } from "../sheet.tsx";
 import { WhenButton, WhenSheet, type When } from "../when.tsx";
 import { DelayNote } from "../delays.tsx";
-import { canNotify, useJobs, addReminder, removeReminder, rodeLines } from "../remind.ts";
+import { canNotify, useJobs, addReminder, removeReminder, rodeLines, setStepNotices, clearStepNotices } from "../remind.ts";
+import type { Notice } from "../../backend/jobs.ts";
 import { isNative, keepAwake, showTrip, endTrip, buzz, type TripLive } from "../native.ts";
 import { SwapGlyph, StarGlyph, CloseGlyph, RecentGlyph, WalkGlyph, BikeGlyph, TaxiGlyph, DotGlyph, ShareGlyph, PlayGlyph, ChevronGlyph, BackGlyph, PayGlyph, LocateGlyph, PinGlyph, StationMark, BellGlyph, FlagGlyph, modeOf } from "../icons.tsx";
 
@@ -309,7 +310,8 @@ export function TripDetail({ trip: planned, resolved: first, from, to, onBack, o
   const [lockNote, setLockNote] = useState<string | null>(null);
   useEffect(() => {
     if (navigating) return;
-    showTrip(to, preview).then(res => setLockNote(res && !res.ok ? liveWhy(res) : null));
+    // Inside LiveContainer there's never a lock screen card; Live Directions' notifications stand in for it.
+    showTrip(to, preview).then(res => setLockNote(res && !res.ok && res.why !== "container" ? liveWhy(res) : null));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [previewKey, navigating]);
   useEffect(() => () => endTrip(), []);
@@ -555,6 +557,29 @@ function tripLiveOf(trip: Itinerary, r: Resolved, live: Arrival[] | undefined, n
   })();
 }
 
+// The notifications for each step still ahead, a couple of minutes before it: the vehicle reaching your stop,
+// and getting off (moved by the vehicle's delay).
+const STEP_LEAD = 120;
+function stepNoticesOf(trip: Itinerary, r: Resolved, live: Arrival[] | undefined, now: number): Notice[] {
+  const out: Notice[] = [];
+  trip.legs.forEach((ride, i) => {
+    if (ride.kind !== "ride") return;
+    const wait = trip.legs[i - 1]?.kind === "wait" ? trip.legs[i - 1] : undefined;
+    const deps = departuresFor(ride, wait, live, now);
+    const mine = deps.find(d => String(d.tripId) === String(ride.tripId)) ?? deps[0];
+    const board = mine ? timeOf(mine) : ride.dep;
+    const late = mine && mine.rtUtc > 0 && mine.staticUtc > 0 ? mine.rtUtc - mine.staticUtc : 0;
+    const off = ride.arr + late;
+    const numbers = [...new Set(options(ride).map(o => r.lines[o.lineId]?.number || o.shortName).filter(Boolean))].slice(0, 2).join(" / ");
+    const from = r.stops[ride.fromStop]?.name ?? "", to = r.stops[ride.toStop]?.name ?? "";
+    if (board - STEP_LEAD > now + 20) out.push({ id: `nav-board-${i}`, at: (board - STEP_LEAD) * 1000,
+      title: T(`${numbers} at your stop in 2 min`, `${numbers} בתחנה בעוד 2 דק׳`), body: from });
+    if (off - STEP_LEAD > now + 20) out.push({ id: `nav-off-${i}`, at: (off - STEP_LEAD) * 1000,
+      title: T("Get off in 2 min", "יורדים בעוד 2 דק׳"), body: T(`At ${to}`, `בתחנה ${to}`) });
+  });
+  return out;
+}
+
 function Navigate({ trip, r, live, here, lines, ends, vehicles, from, to, onPay, onShare, onExit, onPick }: {
   trip: Itinerary; r: Resolved; live?: Arrival[]; here: LatLon | null; lines: MapLine[]; ends: MapPoint[]; vehicles: MapPoint[];
   from: string; to: string; onPay: (at?: LatLon, routeType?: number) => void; onShare: () => void; onExit: () => void; onPick: PickLine;
@@ -616,6 +641,19 @@ function Navigate({ trip, r, live, here, lines, ends, vehicles, from, to, onPay,
   useEffect(() => { showTrip(to, tripLive); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [shown]);
   useEffect(() => () => endTrip(), []);
 
+  // And as notifications, which come inside LiveContainer too, where there's no lock screen card. Set again
+  // only when a time moves by half a minute or more.
+  const notices = stepNoticesOf(trip, r, live, now);
+  const noticesKey = JSON.stringify(notices.map(n => [n.id, Math.round(n.at / 30_000)]));
+  useEffect(() => { if (alerts) setStepNotices(notices); else clearStepNotices(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [noticesKey, alerts]);
+  useEffect(() => () => clearStepNotices(), []);
+
+  // The countdown, big: to the vehicle at your stop, to getting off, to arriving. Near your stop on a ride,
+  // getting off instead.
+  const countMins = minutesTo(Math.floor(tripLive.target / 1000), now);
+  const offAt = card.kind === "ride" ? endOf(card.ride) : null;
+  const getOff = card.kind === "ride" && !!here && !!offAt && metres(here, offAt) < 400;
+
   // A swipe on the card turns it, as Moovit's do.
   const touch = useRef<number | null>(null);
   const rtl = document.documentElement.dir === "rtl";
@@ -650,6 +688,11 @@ function Navigate({ trip, r, live, here, lines, ends, vehicles, from, to, onPay,
         </div>
         <button className="ld-arrow" onClick={() => go(step + 1)} disabled={step === cards.length - 1} aria-label={T("Next step", "השלב הבא")}><BackGlyph size={16} style={{ rotate: "180deg" }} /></button>
       </div>
+      {getOff ? <div className="ld-count off"><b>{T("Get off at the next stop", "יורדים בתחנה הבאה")}</b><span><bdi>{tripLive.stop}</bdi></span></div>
+        : card.kind !== "arrive" && <div className="ld-count">
+          <span className="ld-count-label">{tripLive.live && <LiveDot />}{tripLive.label}</span>
+          <b className="ld-count-big">{countMins === 0 ? T("Now", "עכשיו") : <>{countMins}<small>{T("min", "דק׳")}</small></>}</b>
+        </div>}
       <div className="ld-map">
         <MapView className="map-full" lines={lines} points={[...ends, ...vehicles]} user={here} follow={follow ? here : null}
           fit={stepCoords.length ? stepCoords : lines.flatMap(l => l.coords)} fitKey={`nav${trip.guid}:${step}`} onMove={() => setFollow(false)} />

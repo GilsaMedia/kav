@@ -114,3 +114,22 @@ export function rodeLines(lines: { groupId: number; label: string }[]) {
 }
 // Whether they're allowed, learned at start without asking.
 if (isNative) KavNative.notifyAllowed().then(r => { granted = r.granted; }, () => {});
+
+// ---- the steps of a trip you follow with Start
+
+// Set ahead for each step ("72 at your stop in 2 min", "Get off in 2 min"), so they come with Kav in the
+// background too, and set again as the live times move them. Taken back when you stop.
+let navIds: string[] = [];
+export async function setStepNotices(notices: Notice[]) {
+  if (!isNative) return;
+  if (!(granted ||= await allowed())) return;
+  const ids = notices.map(n => n.id);
+  const gone = navIds.filter(id => !ids.includes(id));
+  navIds = ids;
+  await notify(notices, gone);
+}
+export function clearStepNotices() {
+  if (!isNative || !navIds.length) return;
+  const gone = navIds; navIds = [];
+  notify([], gone);
+}
