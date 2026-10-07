@@ -361,7 +361,6 @@ function BusPurchase({ qr: kept, onBack, onBought }: { qr?: string; onBack: () =
   const [qr, setQrState] = useState<string | null>(kept ?? null);
   const setQr = (code: string | null) => { if (code) keepBus(code); setQrState(code); };
   const offerAt = useRef(0);
-  const [manual, setManual] = useState("");
   const [offer, setOffer] = useState<Offer | null>(null);
   const [fare, setFare] = useState<Fare | null>(null);
   const [quote, setQuote] = useState<Quote | null>(null);
@@ -397,14 +396,7 @@ function BusPurchase({ qr: kept, onBack, onBought }: { qr?: string; onBack: () =
       <Header title={T("Pay for a bus", "תשלום באוטובוס")} back={onBack} />
       <div className="scroll">
         <div className="pad stack">
-          {!qr && <>
-            <Scanner onCode={setQr} />
-            <div className="dim small">{T("Or type the number under the code:", "או הקלידו את המספר שמתחת לברקוד:")}</div>
-            <div className="row-btns">
-              <input className="field ltr" inputMode="numeric" value={manual} onChange={e => setManual(e.target.value.trim())} placeholder="123456" />
-              <button className="btn" disabled={!manual} onClick={() => setQr(manual)}>{T("Next", "הבא")}</button>
-            </div>
-          </>}
+          {!qr && <Scanner onCode={setQr} onCancel={onBack} />}
           {loading && <Spinner text={T("Asking Moovit for the fare…", "שואלים את Moovit על המחיר…")} />}
           {noFix && offer && <Note tone="warn">{T("Kav couldn't find your location, so Moovit priced the ride from the city centre. Check the fare before paying.",
             "Kav לא מצאה את המיקום שלכם, ולכן Moovit תמחרה את הנסיעה ממרכז העיר. בדקו את המחיר לפני התשלום.")}</Note>}
@@ -453,12 +445,13 @@ function PayButton({ busy, quote, fallback, guests, onPay }: { busy: boolean; qu
     {busy ? T("Paying…", "משלמים…") : T(`Pay ${total != null ? shekels(total) : ""}`, `תשלום ${total != null ? shekels(total) : ""}`)}</button>;
 }
 
-function Scanner({ onCode }: { onCode: (code: string) => void }) {
-  return isNative ? <NativeScanner onCode={onCode} /> : <WebScanner onCode={onCode} />;
+function Scanner({ onCode, onCancel }: { onCode: (code: string) => void; onCancel: () => void }) {
+  return isNative ? <NativeScanner onCode={onCode} onCancel={onCancel} /> : <WebScanner onCode={onCode} />;
 }
 
-// On iPhone the camera opens in a screen of its own as soon as paying for a bus starts.
-function NativeScanner({ onCode }: { onCode: (code: string) => void }) {
+// On iPhone the camera opens in a screen of its own as soon as paying for a bus starts. Cancelled, it goes back
+// to Pay; only a camera that can't open stays here, to say why.
+function NativeScanner({ onCode, onCancel }: { onCode: (code: string) => void; onCancel: () => void }) {
   const [error, setError] = useState<string | null>(null);
   const [open, setOpen] = useState(false);
   const opened = useRef(false);
@@ -467,11 +460,11 @@ function NativeScanner({ onCode }: { onCode: (code: string) => void }) {
     setOpen(true); setError(null);
     try {
       const code = await scanQr({ title: T("Point the camera at the QR code on the bus", "כוונו את המצלמה לברקוד שבאוטובוס"), cancel: T("Cancel", "ביטול"), torch: T("Light", "פנס") });
-      if (code) onCode(code);
+      if (code) onCode(code); else onCancel();
     } catch (e) {
       setError(e instanceof CameraDenied
-        ? T("The camera is off for Kav. Allow it in Settings → Kav → Camera, or type the number.", "המצלמה כבויה עבור Kav. אפשרו אותה בהגדרות → Kav → מצלמה, או הקלידו את המספר.")
-        : T("The camera isn't available. Type the number under the code.", "המצלמה אינה זמינה. הקלידו את המספר שמתחת לברקוד."));
+        ? T("The camera is off for Kav. Allow it in Settings → Kav → Camera.", "המצלמה כבויה עבור Kav. אפשרו אותה בהגדרות → Kav → מצלמה.")
+        : T("The camera isn't available.", "המצלמה אינה זמינה."));
     }
     setOpen(false);
   };
@@ -505,7 +498,7 @@ function WebScanner({ onCode }: { onCode: (code: string) => void }) {
         timer = window.setTimeout(tick, 200);
       };
       tick();
-    }).catch(() => setError(T("Kav can't use the camera. Allow it for this site, or type the number.", "ל-Kav אין גישה למצלמה. אפשרו אותה לאתר הזה, או הקלידו את המספר.")));
+    }).catch(() => setError(T("Kav can't use the camera. Allow it for this site.", "ל-Kav אין גישה למצלמה. אפשרו אותה לאתר הזה.")));
     if (!navigator.mediaDevices) setError(T("The camera isn't available here.", "המצלמה אינה זמינה כאן."));
     return () => { gone = true; clearTimeout(timer); stream?.getTracks().forEach(t => t.stop()); };
   }, [onCode]);

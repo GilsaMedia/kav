@@ -62,7 +62,8 @@ export function installGestures() {
   document.addEventListener("touchstart", e => {
     const t = e.touches[0];
     const sheet = (e.target as HTMLElement).closest?.(".pay-sheet, .sheet") as HTMLElement | null;
-    if (!sheet) return;
+    // A wheel in the sheet scrolls by itself; the sheet stays put under it.
+    if (!sheet || (e.target as HTMLElement).closest(".time-wheel")) return;
     const top = sheet.getBoundingClientRect().top;
     const scroller = sheet.querySelector(".scroll") as HTMLElement | null;
     if (t.clientY - top > 90 && (scroller?.scrollTop ?? sheet.scrollTop) > 0) return;

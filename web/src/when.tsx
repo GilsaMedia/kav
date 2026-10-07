@@ -78,8 +78,8 @@ function TimeWheel({ when, mode, onDone, onClose }: { when: When; mode: "depart"
     </div>
     <div className="wheels" dir="ltr">
       <Wheel items={days} index={day} onChange={setDay} grow />
-      <Wheel items={Array.from({ length: 24 }, (_, i) => String(i))} index={hour} onChange={setHour} />
-      <Wheel items={Array.from({ length: 60 }, (_, i) => String(i).padStart(2, "0"))} index={minute} onChange={setMinute} />
+      <Wheel items={Array.from({ length: 24 }, (_, i) => String(i))} index={hour} onChange={setHour} loop />
+      <Wheel items={Array.from({ length: 60 }, (_, i) => String(i).padStart(2, "0"))} index={minute} onChange={setMinute} loop />
     </div>
     <button className="btn primary big when-done" onClick={done}>{T("Done", "סיום")}</button>
   </>;
@@ -87,20 +87,39 @@ function TimeWheel({ when, mode, onDone, onClose }: { when: When; mode: "depart"
 
 const ITEM = 40; // px, as .time-wheel-item
 
-// One column of the wheel: it scrolls and snaps, and the row in the band is the value.
-function Wheel({ items, index, onChange, grow }: { items: string[]; index: number; onChange: (i: number) => void; grow?: boolean }) {
+// One column of the wheel: it scrolls and snaps, and the row in the band is the value. A looping one (the hours
+// and minutes) goes round: after 23 comes 0 again. It holds its rows many times over, and once it comes to rest
+// it moves back to the middle copy, to the same row, so it never reaches an end.
+function Wheel({ items, index, onChange, grow, loop }: { items: string[]; index: number; onChange: (i: number) => void; grow?: boolean; loop?: boolean }) {
   const ref = useRef<HTMLDivElement>(null);
-  useEffect(() => { if (ref.current) ref.current.scrollTop = index * ITEM; /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, []);
+  const n = items.length;
+  const copies = loop ? 2 * Math.ceil(500 / n) + 1 : 1;
+  const middle = Math.floor(copies / 2) * n;
+  const rest = useRef(0), touching = useRef(false);
+  useEffect(() => { if (ref.current) ref.current.scrollTop = (middle + index) * ITEM; /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, []);
+  const recentre = () => {
+    clearTimeout(rest.current);
+    if (copies === 1) return;
+    rest.current = window.setTimeout(() => {
+      const el = ref.current; if (!el || touching.current) return;
+      const k = Math.round(el.scrollTop / ITEM);
+      el.scrollTop += (middle + k % n - k) * ITEM;
+    }, 150);
+  };
+  useEffect(() => () => clearTimeout(rest.current), []);
   const onScroll = () => {
     const el = ref.current; if (!el) return;
-    const i = Math.min(items.length - 1, Math.max(0, Math.round(el.scrollTop / ITEM)));
+    const i = Math.min(n * copies - 1, Math.max(0, Math.round(el.scrollTop / ITEM))) % n;
     if (i !== index) onChange(i);
+    recentre();
   };
   return (
-    <div className={"time-wheel" + (grow ? " grow" : "")} ref={ref} onScroll={onScroll}>
-      {items.map((t, i) => (
-        <div key={i} className={"time-wheel-item" + (i === index ? " on" : "")}
-          onClick={() => ref.current?.scrollTo({ top: i * ITEM, behavior: "smooth" })}>{t}</div>
+    <div className={"time-wheel" + (grow ? " grow" : "")} ref={ref} onScroll={onScroll}
+      onTouchStart={() => { touching.current = true; clearTimeout(rest.current); }}
+      onTouchEnd={() => { touching.current = false; recentre(); }}>
+      {Array.from({ length: n * copies }, (_, i) => (
+        <div key={i} className={"time-wheel-item" + (i % n === index ? " on" : "")}
+          onClick={() => ref.current?.scrollTo({ top: i * ITEM, behavior: "smooth" })}>{items[i % n]}</div>
       ))}
     </div>
   );

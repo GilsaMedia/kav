@@ -709,6 +709,7 @@ h2 { font-size: 19px; }
 .wheels::before { content: ""; position: absolute; inset-inline: 0; top: 90px; height: 40px; border-radius: 10px; background: var(--plate-strong); pointer-events: none; }
 .time-wheel {
   position: relative; width: 64px; height: 100%; overflow-y: scroll; scroll-snap-type: y mandatory; padding: 90px 0; scrollbar-width: none;
+  overscroll-behavior: contain;
   -webkit-mask-image: linear-gradient(transparent, #000 32%, #000 68%, transparent); mask-image: linear-gradient(transparent, #000 32%, #000 68%, transparent);
 }
 .time-wheel::-webkit-scrollbar { display: none; }
