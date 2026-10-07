@@ -153,7 +153,7 @@ public class KavNativePlugin: CAPPlugin, CAPBridgedPlugin, URLSessionDownloadDel
 
     // Kav run by another app rather than installed: its bundle lies in the host's data (LiveContainer keeps
     // its apps in Documents/Applications) instead of where iOS installs apps, or the host says so.
-    private static var hosted: Bool {
+    static var hosted: Bool {
         let path = Bundle.main.bundlePath.lowercased()
         return path.contains("livecontainer") || path.contains("/documents/applications/")
             || ProcessInfo.processInfo.environment["LC_HOME_PATH"] != nil
@@ -377,8 +377,10 @@ enum KavBackground {
     static let taskId = "com.gilsamedia.kav.refresh"
     private static var running: JobRunner?
 
-    // At launch, before it ends, as iOS requires.
+    // At launch, before it ends, as iOS requires. Not when Kav is run by another app (LiveContainer): iOS
+    // checks the id against that app's list, not Kav's, and stops an app that registers one it doesn't know.
     static func register() {
+        guard !KavNativePlugin.hosted else { return }
         BGTaskScheduler.shared.register(forTaskWithIdentifier: taskId, using: nil) { task in
             guard let task = task as? BGAppRefreshTask else { return task.setTaskCompleted(success: false) }
             run(task)
@@ -387,6 +389,7 @@ enum KavBackground {
 
     // Asked for each time Kav goes to the background, if there's anything to keep an eye on. iOS decides when.
     static func schedule() {
+        guard !KavNativePlugin.hosted else { return }
         guard hasJobs() else { BGTaskScheduler.shared.cancel(taskRequestWithIdentifier: taskId); return }
         let request = BGAppRefreshTaskRequest(identifier: taskId)
         request.earliestBeginDate = Date(timeIntervalSinceNow: 15 * 60)
@@ -433,10 +436,10 @@ final class JobRunner {
             self.context = ctx
             ctx.exceptionHandler = { _, e in NSLog("Kav background: %@", e?.toString() ?? "?") }
             let log: @convention(block) (String) -> Void = { NSLog("Kav background: %@", $0) }
-            let timeout: @convention(block) (Double, JSValue) -> Void = { [weak self] ms, f in
+            let timeout: @convention(block) (Double, JavaScriptCore.JSValue) -> Void = { [weak self] ms, f in
                 self?.queue.asyncAfter(deadline: .now() + ms / 1000) { _ = f.call(withArguments: []) }
             }
-            let request: @convention(block) (String, String, String, JSValue, Double, JSValue) -> Void = { [weak self] method, url, headers, body, ms, done in
+            let request: @convention(block) (String, String, String, JavaScriptCore.JSValue, Double, JavaScriptCore.JSValue) -> Void = { [weak self] method, url, headers, body, ms, done in
                 self?.request(method: method, url: url, headers: headers, body: body.isString ? body.toString() : nil, timeoutMs: ms, done: done)
             }
             let finished: @convention(block) (String) -> Void = { [weak self] out in self?.finish(out) }
@@ -454,7 +457,7 @@ final class JobRunner {
         }
     }
 
-    private func request(method: String, url: String, headers: String, body: String?, timeoutMs: Double, done: JSValue) {
+    private func request(method: String, url: String, headers: String, body: String?, timeoutMs: Double, done: JavaScriptCore.JSValue) {
         let reply: (Int, String, String, String?) -> Void = { [weak self] status, h, b, error in
             let e: Any = error.map { $0 as Any } ?? NSNull()
             self?.queue.async { _ = done.call(withArguments: [status, h, b, e]) }
