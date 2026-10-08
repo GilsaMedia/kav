@@ -750,3 +750,4 @@ h2 { font-size: 19px; }
 .too-soon { color: var(--warn, #F5B14C); font-size: .9em; }
 .line-bell.on { color: var(--accent); }
 .notif-row { padding: 6px 0; border-top: .5px solid var(--hairline); }
+.row-line { display: flex; align-items: center; gap: 10px; min-width: 0; }

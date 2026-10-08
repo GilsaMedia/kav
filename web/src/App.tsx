@@ -30,9 +30,9 @@ export function App() {
   const [tab, setTab] = useState<Tab>(() => (sessionStorage.getItem("kav-tab") as Tab) || "plan");
   const [liveSeen, setLiveSeen] = useState(false);
   if (tab === "live" && !liveSeen) setLiveSeen(true);
-  const [payStart, setPayStart] = useState<{ at?: LatLon; routeType?: number } | null>(null);
+  const [payStart, setPayStart] = useState<{ at?: LatLon; routeType?: number; off?: LatLon } | null>(null);
   // Paying from a trip: a sheet over it with only the payment, the trip still underneath.
-  const [paySheet, setPaySheet] = useState<{ at?: LatLon; routeType?: number } | null>(null);
+  const [paySheet, setPaySheet] = useState<{ at?: LatLon; routeType?: number; off?: LatLon } | null>(null);
   // Tabs crossfade, as on Android: the screen inside doesn't slide.
   // Directions tapped again while it's open goes back to its home screen, as an iPhone tab does.
   const [planHome, setPlanHome] = useState(0);
@@ -45,7 +45,7 @@ export function App() {
     <div className="app" key={prefs.lang}>
       <main className="main">
         {/* Screens stay mounted, so a trip or a board is still there after a look at another tab. */}
-        <div hidden={tab !== "plan"} className="tab-page"><PlanScreen home={planHome} onPay={(at, routeType) => setPaySheet({ at, routeType })} /></div>
+        <div hidden={tab !== "plan"} className="tab-page"><PlanScreen home={planHome} onPay={(at, routeType, off) => setPaySheet({ at, routeType, off })} /></div>
         <div hidden={tab !== "stations"} className="tab-page"><StationsScreen /></div>
         <div hidden={tab !== "lines"} className="tab-page"><LinesScreen /></div>
         {/* Live stays too once opened: its map and vehicles are there when you come back. */}
@@ -176,7 +176,7 @@ function Notifications() {
   </>;
 }
 
-function PaySheet({ start, onClose }: { start: { at?: LatLon; routeType?: number }; onClose: () => void }) {
+function PaySheet({ start, onClose }: { start: { at?: LatLon; routeType?: number; off?: LatLon }; onClose: () => void }) {
   const [leaving, leave] = useLeaving(onClose, 260);
   return (
     <div className={"pay-sheet-backdrop" + (leaving ? " leaving" : "")} onClick={leave}>

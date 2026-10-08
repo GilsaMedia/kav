@@ -19,7 +19,7 @@ import { SwapGlyph, StarGlyph, CloseGlyph, RecentGlyph, WalkGlyph, BikeGlyph, Ta
 
 interface PlanResult { itineraries: Itinerary[]; resolved: Resolved; refusal?: { code: number; title: string; detail: string } }
 
-export function PlanScreen({ home, onPay }: { home: number; onPay: (at?: LatLon, routeType?: number) => void }) {
+export function PlanScreen({ home, onPay }: { home: number; onPay: (at?: LatLon, routeType?: number, off?: LatLon) => void }) {
   const prefs = usePrefs();
   const here = useHere();
   const [from, setFrom] = useState<Place | null>(null);
@@ -270,7 +270,7 @@ const pickOf = (leg: Leg) => {
 type PickLine = (legIndex: number, option: number) => void;
 
 export function TripDetail({ trip: planned, resolved: first, from, to, onBack, onPay }: {
-  trip: Itinerary; resolved: Resolved; from: string; to: string; onBack: () => void; onPay: (at?: LatLon, routeType?: number) => void;
+  trip: Itinerary; resolved: Resolved; from: string; to: string; onBack: () => void; onPay: (at?: LatLon, routeType?: number, off?: LatLon) => void;
 }) {
   const live = useTripLive(planned);
   const [picks, setPicks] = useState<Record<number, number>>({});
@@ -413,7 +413,7 @@ function Step({ color, walk, children }: { color: string; walk?: boolean; childr
 
 function Timeline({ trip, r, live, now, from, to, onPay, stopAt, onPick }: {
   trip: Itinerary; r: Resolved; live?: Arrival[]; now: number; from: string; to: string;
-  onPay: (at?: LatLon, routeType?: number) => void; stopAt: (id: number) => LatLon | null; onPick: PickLine;
+  onPay: (at?: LatLon, routeType?: number, off?: LatLon) => void; stopAt: (id: number) => LatLon | null; onPick: PickLine;
 }) {
   const legs = trip.legs.filter(l => l.kind !== "wait" && !(l.kind === "walk" && l.arr - l.dep < 30));
   const colorOf = (l: Leg | undefined) => !l ? null : l.kind === "ride" ? modeColor(routeTypeOf(r, l.lineId)) : l.kind === "walk" ? WALK : "var(--accent)";
@@ -443,7 +443,7 @@ function Timeline({ trip, r, live, now, from, to, onPay, stopAt, onPick }: {
 
 // A ride: the stop you get on at (with the next departures, live), the ride, and the stop you get off at.
 function RideSteps({ leg, wait, r, live, now, onPay, stopAt, prev, below, onPick }: {
-  leg: Leg; wait?: Leg; r: Resolved; live?: Arrival[]; now: number; onPay: (at?: LatLon, routeType?: number) => void;
+  leg: Leg; wait?: Leg; r: Resolved; live?: Arrival[]; now: number; onPay: (at?: LatLon, routeType?: number, off?: LatLon) => void;
   stopAt: (id: number) => LatLon | null; prev: string | null; below: string | null; onPick: (option: number) => void;
 }) {
   const [open, setOpen] = useState(false);
@@ -479,7 +479,7 @@ function RideSteps({ leg, wait, r, live, now, onPay, stopAt, prev, below, onPick
         {T(`Ride ${minutesText(Math.round((ride.arr - ride.dep) / 60))}`, `נסיעה ${minutesText(Math.round((ride.arr - ride.dep) / 60))}`)} · {T(`${between.length + 1} stops`, `${between.length + 1} תחנות`)}
       </button>
       {open && <ol className="tl-mini">{between.map(id => <li key={id} dir="auto">{stopName(id) || `#${id}`}</li>)}</ol>}
-      {payMode != null && <button className="btn small" onClick={() => onPay(stopAt(ride.fromStop) ?? undefined, payMode)}><PayGlyph size={16} />{T("Pay for this ride", "תשלום על הנסיעה")}</button>}
+      {payMode != null && <button className="btn small" onClick={() => onPay(stopAt(ride.fromStop) ?? undefined, payMode, stopAt(ride.toStop) ?? undefined)}><PayGlyph size={16} />{T("Pay for this ride", "תשלום על הנסיעה")}</button>}
     </Step>
     <Stop time={ride.arr} above={color} below={below} title={stopName(ride.toStop)}>
       <div className="dim small">{T("Get off here", "יורדים כאן")}</div>
@@ -582,7 +582,7 @@ function stepNoticesOf(trip: Itinerary, r: Resolved, live: Arrival[] | undefined
 
 function Navigate({ trip, r, live, here, lines, ends, vehicles, from, to, onPay, onShare, onExit, onPick }: {
   trip: Itinerary; r: Resolved; live?: Arrival[]; here: LatLon | null; lines: MapLine[]; ends: MapPoint[]; vehicles: MapPoint[];
-  from: string; to: string; onPay: (at?: LatLon, routeType?: number) => void; onShare: () => void; onExit: () => void; onPick: PickLine;
+  from: string; to: string; onPay: (at?: LatLon, routeType?: number, off?: LatLon) => void; onShare: () => void; onExit: () => void; onPick: PickLine;
 }) {
   const cards = useMemo(() => cardsOf(trip), [trip]);
   const [step, setStep] = useState(0);
@@ -705,7 +705,7 @@ function Navigate({ trip, r, live, here, lines, ends, vehicles, from, to, onPay,
       </div>
       <div className="ld-actions">
         <button className="ld-act stop" onClick={onExit}><span className="ld-square" />{T("Stop", "עצירה")}</button>
-        {payMode != null && <button className="ld-act" onClick={() => onPay(payHere ? stopAt(payHere.fromStop) ?? undefined : undefined, payMode)}><PayGlyph size={18} />{T("Pay", "תשלום")}</button>}
+        {payMode != null && <button className="ld-act" onClick={() => onPay(payHere ? stopAt(payHere.fromStop) ?? undefined : undefined, payMode, payHere ? stopAt(payHere.toStop) ?? undefined : undefined)}><PayGlyph size={18} />{T("Pay", "תשלום")}</button>}
         <button className="ld-act" onClick={onShare}><ShareGlyph size={18} />{T("Share", "שיתוף")}</button>
       </div>
     </div>

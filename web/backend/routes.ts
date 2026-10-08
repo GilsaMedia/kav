@@ -292,6 +292,40 @@ route("live", async q => {
 
 // ---- paying ----------------------------------------------------------------------------------
 
+// The bus you're on or about to board, for its fare: a vehicle Moovit tracks right by you, or one at the stop
+// you're at now. The closest first. Your exact place stays here: Moovit is only asked about the stops.
+route("pay/buses", async (_q, b) => {
+  const at = bAt(b.at); if (!at) throw new HttpError(400, "at is needed");
+  const s = await St.browse();
+  const near = net.nearestStops(at[0], at[1], 10, 250);
+  const ids = new Map<number, number>();
+  await M.pool(near.slice(0, 8), 4, async ([g, d]) => {
+    const id = St.stopIds[stopKey(g)] ?? await moovitStopId(s, g).catch(() => null);
+    if (id) ids.set(id, d);
+  });
+  if (!ids.size) return { buses: [], resolved: await M.resolveIds(s, [], []) };
+  const { arrivals } = await M.stopArrivals(s, [...ids.keys()]);
+  const now = Date.now() / 1000;
+  const when = (a: M.Arrival) => a.rtUtc > 0 ? a.rtUtc : a.statisticalUtc > 0 ? a.statisticalUtc : a.staticUtc;
+  const best = new Map<string, { lineId: number; patternId: number; stopId: number; tripId: number | string; metres: number | null; inSecs: number; score: number }>();
+  for (const a of arrivals) {
+    if (a.lineId <= 0 || a.status === 3) continue;
+    const vehicle = a.tracked && a.lat ? metres(at[0], at[1], a.lat, a.lon) : null;
+    const dt = when(a) - now, stop = ids.get(a.stopId) ?? 1e9;
+    const byVehicle = vehicle != null && vehicle < 200;
+    const atStop = stop < 120 && dt > -180 && dt < 240;
+    if (!byVehicle && !atStop) continue;
+    const score = byVehicle ? vehicle! : 150 + Math.abs(dt) / 2 + stop;
+    const key = String(a.tripId);
+    if ((best.get(key)?.score ?? Infinity) > score) best.set(key, { lineId: a.lineId, patternId: a.patternId, stopId: a.stopId, tripId: a.tripId, metres: vehicle == null ? null : Math.round(vehicle), inSecs: Math.round(dt), score });
+  }
+  // Buses only: a train or light rail line through a stop next door isn't the bus whose code was scanned.
+  const all = [...best.values()].sort((x, y) => x.score - y.score).slice(0, 12);
+  const resolved = await M.resolveIds(s, [...new Set(all.map(x => x.lineId))], []);
+  const isBus = (lineId: number) => { const l = resolved.lines[lineId]; return !l || (resolved.routeTypes[l.agencyId] ?? 3) === 3; };
+  return { buses: all.filter(x => isBus(x.lineId)).slice(0, 8), resolved };
+});
+
 function payAt(b: any): M.LatLon {
   const at = bAt(b?.at);
   return standIn(at, b?.private !== false) ?? M.NEUTRAL;

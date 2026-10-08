@@ -2,8 +2,8 @@
 // or at a station, ending a train ride, and the tickets, history and bills on the account.
 import { useEffect, useRef, useState } from "react";
 import jsQR from "jsqr";
-import { T, api, useLoad, useNow, clock, shekels, failure, locateOnce, ApiError, type LatLon } from "../core.ts";
-import { Header, Spinner, Note, Qr, Sheet } from "../ui.tsx";
+import { T, api, useLoad, useNow, clock, shekels, failure, locateOnce, ApiError, metres, routeTypeOf, type LatLon, type Resolved } from "../core.ts";
+import { Header, Spinner, Note, Qr, Sheet, LineBadge } from "../ui.tsx";
 import { ModeGlyph, QrGlyph, MinusGlyph, PlusGlyph, BackGlyph } from "../icons.tsx";
 import { isNative, scanQr, CameraDenied } from "../native.ts";
 
@@ -52,7 +52,7 @@ function forgetBus() { try { localStorage.removeItem(LAST_BUS); } catch { /* not
 
 async function payAt(): Promise<LatLon | null> { try { return await locateOnce(); } catch { return null; } }
 
-export function PayScreen({ start, onStarted }: { start: { at?: LatLon; routeType?: number } | null; onStarted: () => void }) {
+export function PayScreen({ start, onStarted }: { start: { at?: LatLon; routeType?: number; off?: LatLon } | null; onStarted: () => void }) {
   const state = useLoad<{ signedIn: boolean; unfinished?: boolean; account?: { name: string; phone: string; connected: boolean } | null }>("pay", s => api("pay/state", undefined, s));
   // Moovit wants a step finished before it takes payments: back to signing in, at that step.
   useEffect(() => {
@@ -61,14 +61,14 @@ export function PayScreen({ start, onStarted }: { start: { at?: LatLon; routeTyp
     return () => window.removeEventListener(UNFINISHED, unfinished);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-  const [flow, setFlow] = useState<null | { kind: "bus"; qr?: string } | { kind: "station"; routeType: number; at?: LatLon } | { kind: "exit"; ticket: Ticket } | { kind: "history" }>(null);
+  const [flow, setFlow] = useState<null | { kind: "bus"; qr?: string; off?: LatLon } | { kind: "station"; routeType: number; at?: LatLon } | { kind: "exit"; ticket: Ticket } | { kind: "history" }>(null);
   const [bought, setBought] = useState<Ticket[] | null>(null);
   const [walletKey, setWalletKey] = useState(0);
 
   // A ride paid from a trip's card: a bus is scanned, a station is the trip's own.
   useEffect(() => {
     if (!start || !state.data?.signedIn) return;
-    setFlow(start.routeType === 3 || start.routeType == null ? { kind: "bus" } : { kind: "station", routeType: start.routeType, at: start.at });
+    setFlow(start.routeType === 3 || start.routeType == null ? { kind: "bus", off: start.off } : { kind: "station", routeType: start.routeType, at: start.at });
     onStarted();
   }, [start, state.data?.signedIn]);
 
@@ -77,7 +77,7 @@ export function PayScreen({ start, onStarted }: { start: { at?: LatLon; routeTyp
   if (!state.data?.signedIn || state.data.unfinished) return <SignIn onDone={state.reload} />;
 
   const done = (t: Ticket[]) => { setFlow(null); setBought(t); setWalletKey(k => k + 1); };
-  if (flow?.kind === "bus") return <BusPurchase qr={flow.qr} onBack={() => setFlow(null)} onBought={done} />;
+  if (flow?.kind === "bus") return <BusPurchase qr={flow.qr} off={flow.off} onBack={() => setFlow(null)} onBought={done} />;
   if (flow?.kind === "station") return <StationPurchase routeType={flow.routeType} at={flow.at} onBack={() => setFlow(null)} onBought={done} />;
   if (flow?.kind === "exit") return <TrainExit ticket={flow.ticket} onBack={() => setFlow(null)} onDone={done} />;
   if (flow?.kind === "history") return <History onBack={() => setFlow(null)} />;
@@ -356,13 +356,16 @@ function LastBus({ onPay }: { onPay: (qr: string) => void }) {
   );
 }
 
-function BusPurchase({ qr: kept, onBack, onBought }: { qr?: string; onBack: () => void; onBought: (t: Ticket[]) => void }) {
+function BusPurchase({ qr: kept, off, onBack, onBought }: { qr?: string; off?: LatLon; onBack: () => void; onBought: (t: Ticket[]) => void }) {
   const [qr, setQrState] = useState<string | null>(kept ?? null);
   const setQr = (code: string | null) => { if (code) keepBus(code); setQrState(code); };
   const offerAt = useRef(0);
   const [offer, setOffer] = useState<Offer | null>(null);
   const [fare, setFare] = useState<Fare | null>(null);
   const [quote, setQuote] = useState<Quote | null>(null);
+  // How Kav found the fare, said under it; and a new search for it when that wasn't right.
+  const [fareWhy, setFareWhy] = useState<string | null>(null);
+  const [finding, setFinding] = useState(0);
   const [guests, setGuests] = useState(0);
   const [loading, setLoading] = useState(false);
   const [noFix, setNoFix] = useState(false);
@@ -399,17 +402,10 @@ function BusPurchase({ qr: kept, onBack, onBought }: { qr?: string; onBack: () =
           {loading && <Spinner text={T("Asking Moovit for the fare…", "שואלים את Moovit על המחיר…")} />}
           {noFix && offer && <Note tone="warn">{T("Kav couldn't find your location, so Moovit priced the ride from the city centre. Check the fare before paying.",
             "Kav לא מצאה את המיקום שלכם, ולכן Moovit תמחרה את הנסיעה ממרכז העיר. בדקו את המחיר לפני התשלום.")}</Note>}
-          {offer && !fare && <>
-            <div className="list-head">{T("Where are you going?", "לאן נוסעים?")}</div>
-            {offer.fares.map((f, k) => (
-              <button key={k} className="card row-card" onClick={() => setFare(f)}>
-                <span dir="auto">{f.to ?? (f.radius ? T(`Up to ${f.radius / 1000} km`, `עד ${f.radius / 1000} ק״מ`) : T("Ride", "נסיעה"))}</span>
-                <b>{money(f.price)}</b>
-              </button>
-            ))}
-          </>}
+          {offer && !fare && <FareFinder key={finding} offer={offer} at={at.current} off={off} onFare={(f, why) => { setFare(f); setFareWhy(why); }} />}
           {offer && fare && <>
             <div className="dim" dir="auto">{[offer.profile, fare.to ?? (fare.radius ? T(`up to ${fare.radius / 1000} km`, `עד ${fare.radius / 1000} ק״מ`) : "")].filter(Boolean).join(" · ")}</div>
+            {fareWhy && <div className="dim small" dir="auto">{fareWhy}</div>}
             <Summary quote={quote} fallback={fallback} guests={guests} setGuests={setGuests} />
             <PayButton busy={p.busy} quote={quote} fallback={fallback} guests={guests}
               onPay={() => p.buy(async () => {
@@ -426,7 +422,7 @@ function BusPurchase({ qr: kept, onBack, onBought }: { qr?: string; onBack: () =
                 }
                 return api("pay/buy", { offer: o, fare: f, at: at.current, count: guests + 1 });
               })} />
-            {offer.fares.length > 1 && <button className="link" onClick={() => { setFare(null); setQuote(null); }}>{T("Choose another fare", "בחירת מחיר אחר")}</button>}
+            {offer.fares.length > 1 && <button className="link" onClick={() => { setFare(null); setQuote(null); setFareWhy(null); setFinding(n => n + 1); }}>{T("Not right? Find it again", "לא נכון? חיפוש מחדש")}</button>}
           </>}
           {p.error && <Note tone="error">{p.error}</Note>}
           {qr && !p.busy && <button className="link" onClick={() => { setQr(null); setOffer(null); setFare(null); setQuote(null); setNoFix(false); p.setError(null); }}>{T("Scan again", "סריקה מחדש")}</button>}
@@ -434,6 +430,97 @@ function BusPurchase({ qr: kept, onBack, onBought }: { qr?: string; onBack: () =
       </div>
     </div>
   );
+}
+
+interface Bus { lineId: number; patternId: number; stopId: number; tripId: number | string; metres: number | null; inSecs: number }
+
+// Israel's bus fares go by the straight-line distance from where you get on to where you get off: the fare
+// is the smallest distance band that reaches that far.
+function fareFor(fares: Fare[], from: LatLon, to: LatLon): Fare | null {
+  const d = metres(from, to);
+  return fares.filter(f => f.radius > 0 && f.radius >= d).sort((a, b) => a.radius - b.radius)[0] ?? null;
+}
+
+// The fare, found by Kav rather than picked by you. Paying from a trip, its ride says where you get off.
+// Otherwise the bus you're on (the one Moovit tracks right by you, or asked from the few at your stop) and
+// its stops from here on: one fare all the way is taken at once; a bus whose stops ahead cost differently
+// asks where you get off, each stop with its price. Only when all that fails, Moovit's fares to pick from.
+function FareFinder({ offer, at, off, onFare }: { offer: Offer; at: LatLon | null; off?: LatLon; onFare: (f: Fare, why: string) => void }) {
+  const [found, setFound] = useState<{ buses: Bus[]; resolved: Resolved } | null>(null);
+  const [bus, setBus] = useState<Bus | null>(null);
+  const [ahead, setAhead] = useState<{ stop: StopInfo; fare: Fare }[] | null>(null);
+  const [manual, setManual] = useState(false);
+  const lineOf = (b: Bus) => found?.resolved.lines[b.lineId];
+  const named = (b: Bus) => `${T("Bus", "קו")} ${lineOf(b)?.number ?? ""}`.trim();
+
+  useEffect(() => {
+    if (off && at) {
+      const f = fareFor(offer.fares, at, off);
+      if (f) { onFare(f, T("Found from your trip: where you get off.", "לפי המסלול שלכם: איפה שאתם יורדים.")); return; }
+    }
+    if (!at) { setManual(true); return; }
+    api<{ buses: Bus[]; resolved: Resolved }>("pay/buses", { at }).then(r => {
+      setFound(r);
+      const [a, b] = r.buses;
+      if (!a) setManual(true);
+      // One bus here, or one right by you and no other near: that's the one.
+      else if (!b || (a.metres != null && a.metres < 60 && (b.metres == null || b.metres > 150))) setBus(a);
+    }, () => setManual(true));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    if (!bus || !at) return;
+    api<{ stops: StopInfo[] }>(`pattern?id=${bus.patternId}`).then(({ stops }) => {
+      const placed = stops.filter(s => s.lat != null && s.lon != null);
+      const where = (s: StopInfo): LatLon => [s.lat!, s.lon!];
+      if (!placed.length) { setManual(true); return; }
+      // From the stop nearest you: the one you're at, or the one the bus is passing.
+      let k = 0;
+      placed.forEach((s, i) => { if (metres(at, where(s)) < metres(at, where(placed[k]))) k = i; });
+      const rest = placed.slice(k + 1).map(s => ({ stop: s, fare: fareFor(offer.fares, at, where(s)) }));
+      if (!rest.length || rest.some(x => !x.fare)) { setManual(true); return; }
+      if (rest.every(x => x.fare === rest[0].fare))
+        onFare(rest[0].fare!, T(`${named(bus)}: the same fare to the end of the line.`, `${named(bus)}: אותו מחיר עד סוף הקו.`));
+      else setAhead(rest as { stop: StopInfo; fare: Fare }[]);
+    }, () => setManual(true));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [bus]);
+
+  if (manual) return <>
+    <div className="list-head">{T("Where are you going?", "לאן נוסעים?")}</div>
+    <div className="dim small">{T("Kav couldn't tell which bus you're on.", "Kav לא הצליחה לזהות באיזה אוטובוס אתם.")}</div>
+    {offer.fares.map((f, k) => (
+      <button key={k} className="card row-card" onClick={() => onFare(f, "")}>
+        <span dir="auto">{f.to ?? (f.radius ? T(`Up to ${f.radius / 1000} km`, `עד ${f.radius / 1000} ק״מ`) : T("Ride", "נסיעה"))}</span>
+        <b>{money(f.price)}</b>
+      </button>
+    ))}
+  </>;
+
+  if (bus && ahead) return <>
+    <div className="list-head">{T("Where are you getting off?", "איפה יורדים?")}</div>
+    <div className="dim small">{T(`${named(bus)}: the fare depends on how far you ride.`, `${named(bus)}: המחיר תלוי במרחק הנסיעה.`)}</div>
+    {ahead.map(({ stop, fare }) => (
+      <button key={stop.id} className="card row-card" onClick={() => onFare(fare, T(`To ${stop.name}.`, `עד ${stop.name}.`))}>
+        <span dir="auto">{stop.name}</span><b>{money(fare.price)}</b>
+      </button>
+    ))}
+    {(found?.buses.length ?? 0) > 1 && <button className="link" onClick={() => { setBus(null); setAhead(null); }}>{T("Not this bus?", "לא האוטובוס הזה?")}</button>}
+  </>;
+
+  if (found && !bus) return <>
+    <div className="list-head">{T("Which bus are you on?", "באיזה אוטובוס אתם?")}</div>
+    {found.buses.map(b => (
+      <button key={String(b.tripId)} className="card row-card" onClick={() => setBus(b)}>
+        <span className="row-line"><LineBadge number={lineOf(b)?.number ?? "?"} type={routeTypeOf(found.resolved, b.lineId)} /><span dir="auto">{lineOf(b)?.destination ?? ""}</span></span>
+        <span className="dim small">{b.metres != null && b.metres < 120 ? T("here", "כאן") : b.inSecs > 60 ? T(`in ${Math.round(b.inSecs / 60)} min`, `בעוד ${Math.round(b.inSecs / 60)} דק׳`) : T("now", "עכשיו")}</span>
+      </button>
+    ))}
+    <button className="link" onClick={() => setManual(true)}>{T("None of these", "אף אחד מאלה")}</button>
+  </>;
+
+  return <Spinner text={T("Finding your bus…", "מחפשים את האוטובוס שלכם…")} />;
 }
 
 function PayButton({ busy, quote, fallback, guests, onPay }: { busy: boolean; quote: Quote | null; fallback: Cost | null; guests: number; onPay: () => void }) {
