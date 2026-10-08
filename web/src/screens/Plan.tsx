@@ -291,8 +291,12 @@ export function TripDetail({ trip: planned, resolved: first, from, to, onBack, o
   });
   const vehicles: MapPoint[] = (live.data?.arrivals ?? []).filter(a => a.tracked && a.lat && legs.some(l => l.kind === "ride" && l.lineId === a.lineId && a.stopId === l.fromStop))
     .map(a => ({ id: `v${a.tripId}`, at: [a.lat, a.lon] as LatLon, color: modeColor(routeTypeOf(r, a.lineId)), kind: "vehicle" as const, label: r.lines[a.lineId]?.number ?? "" }));
-  const ends: MapPoint[] = legs.filter(l => l.kind === "ride").flatMap(l => [l.fromStop, l.toStop]).map(id => ({ id: `s${id}`, at: stopAt(id), name: r.stops[id]?.name }))
-    .filter(p => p.at).map(p => ({ id: p.id, at: p.at!, color: "#ffffff", kind: "end" as const, label: p.name, size: 5, ring: "#000" }));
+  // The stops each ride passes and stops at, small in the line's colour (their names close up), then the
+  // stops you get on and off at.
+  const passing: MapPoint[] = legs.filter(l => l.kind === "ride").flatMap(l => l.stops.slice(1, -1).map(id => ({ id, at: stopAt(id), ring: modeColor(routeTypeOf(r, l.lineId)) })))
+    .filter(p => p.at).map(p => ({ id: `p${p.id}`, at: p.at!, color: "#ffffff", kind: "stop" as const, label: r.stops[p.id]?.name, size: 4, ring: p.ring }));
+  const ends: MapPoint[] = [...passing, ...legs.filter(l => l.kind === "ride").flatMap(l => [l.fromStop, l.toStop]).map(id => ({ id: `s${id}`, at: stopAt(id), name: r.stops[id]?.name }))
+    .filter(p => p.at).map(p => ({ id: p.id, at: p.at!, color: "#ffffff", kind: "end" as const, label: p.name, size: 5, ring: "#000" }))];
   const all = lines.flatMap(l => l.coords);
 
   const share = async () => {

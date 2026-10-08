@@ -121,6 +121,10 @@ async function acquire(light: boolean, host: HTMLElement, owner: Owner, center: 
     m.addLayer({ id: "kav-label", type: "symbol", source: "kav-points", filter: ["==", ["get", "kind"], "vehicle"],
       layout: { "text-field": ["get", "label"], "text-font": ["NotoMedium"], "text-size": 11, "text-allow-overlap": true, "text-ignore-placement": true },
       paint: { "text-color": "#ffffff" } });
+    // The names of stops on the way, once close enough in to read them.
+    m.addLayer({ id: "kav-way-label", type: "symbol", source: "kav-points", filter: ["all", ["==", ["get", "kind"], "stop"], ["!=", ["get", "label"], ""]], minzoom: 14.5,
+      layout: { "text-field": ["get", "label"], "text-font": ["NotoMedium"], "text-size": 11, "text-offset": [0, 1.1], "text-anchor": "top", "text-max-width": 9 },
+      paint: { "text-color": light ? "#55555C" : "#B4B4BC", "text-halo-color": light ? "#ffffff" : "#000000", "text-halo-width": 1.2 } });
     m.addLayer({ id: "kav-stop-label", type: "symbol", source: "kav-points", filter: ["==", ["get", "kind"], "end"], minzoom: 12,
       layout: { "text-field": ["get", "label"], "text-font": ["NotoMedium"], "text-size": 12, "text-offset": [0, 1.3], "text-anchor": "top", "text-max-width": 10 },
       paint: { "text-color": light ? "#16161A" : "#F5F5F7", "text-halo-color": light ? "#ffffff" : "#000000", "text-halo-width": 1.5 } });
