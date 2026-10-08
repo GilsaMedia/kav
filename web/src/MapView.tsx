@@ -5,6 +5,11 @@ import "maplibre-gl/dist/maplibre-gl.css";
 import { Protocol, PMTiles } from "pmtiles";
 import { T, usePrefs, type LatLon } from "./core.ts";
 import { isNative, nativeMapSource, getMapState, subscribeMap, downloadMap, MAP_BYTES } from "./native.ts";
+import rtlText from "../node_modules/@mapbox/mapbox-gl-rtl-text/dist/mapbox-gl-rtl-text.js?url";
+
+// Hebrew on the map, street names and stops alike, reads right to left only with this plugin: without it
+// MapLibre lays the letters out left to right. Kept inside the app, so it works with no network.
+if (maplibregl.getRTLTextPluginStatus() === "unavailable") maplibregl.setRTLTextPlugin(rtlText, false).catch(() => {});
 
 const protocol = new Protocol();
 maplibregl.addProtocol("pmtiles", protocol.tile);

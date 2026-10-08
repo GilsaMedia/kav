@@ -1,6 +1,6 @@
 {
   "name": "web",
-  "version": "2.2.1",
+  "version": "2.2.2",
   "description": "",
   "main": "index.js",
   "scripts": {
@@ -19,6 +19,7 @@
     "@capacitor/core": "^8.5.2",
     "@capacitor/geolocation": "^8.2.3",
     "@capacitor/ios": "^8.5.2",
+    "@mapbox/mapbox-gl-rtl-text": "^0.3.0",
     "fflate": "^0.8.3",
     "jsqr": "^1.4.0",
     "maplibre-gl": "^5.24.0",
