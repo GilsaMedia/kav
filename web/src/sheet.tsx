@@ -43,11 +43,11 @@ export function DragSheet({ detents, start = 0, className, style, children, onDe
   useEffect(() => {
     const node = el.current;
     if (!node) return;
-    let y0 = 0, base = 0, t0 = 0, mode: "drag" | "scroll" | null = null, last = 0, lastT = 0, v = 0;
+    let x0 = 0, y0 = 0, base = 0, t0 = 0, mode: "drag" | "scroll" | null = null, last = 0, lastT = 0, v = 0;
 
     const start = (e: TouchEvent) => {
       if (e.touches.length !== 1) return;
-      y0 = last = e.touches[0].clientY; t0 = lastT = performance.now(); v = 0;
+      x0 = e.touches[0].clientX; y0 = last = e.touches[0].clientY; t0 = lastT = performance.now(); v = 0;
       base = stopsRef.current[atRef.current] ?? 0; mode = null;
     };
     const move = (e: TouchEvent) => {
@@ -56,6 +56,8 @@ export function DragSheet({ detents, start = 0, className, style, children, onDe
       v = (y - last) / Math.max(1, now - lastT); last = y; lastT = now;
       if (mode === null) {
         if (Math.abs(dy) < 6) return;
+        // Sideways is a swipe to another page (Live Directions' steps), not the panel's to move.
+        if (Math.abs(e.touches[0].clientX - x0) > Math.abs(dy)) { mode = "scroll"; return; }
         // Down while the content is at its top, or any way while the panel isn't fully up: the panel moves.
         // Otherwise the content scrolls.
         const top = atRef.current === 0;

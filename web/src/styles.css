@@ -602,12 +602,28 @@ h2 { font-size: 19px; }
 .ld-count.off b { font-size: 22px; font-weight: 800; }
 @keyframes pulse-in { from { transform: scale(.96); opacity: .4; } }
 .ld-locate { position: absolute; top: 14px; inset-inline-end: 14px; z-index: 2; }
+/* The step's card in a layer of its own, so it can slide sideways from one step to the next. */
+.ld-slide { position: absolute; inset: 0; z-index: 3; pointer-events: none; will-change: transform; }
+.ld-slide > * { pointer-events: auto; }
+.ld-slide.from-right { animation: ld-from-right .3s cubic-bezier(.22,1,.36,1) backwards; }
+.ld-slide.from-left { animation: ld-from-left .3s cubic-bezier(.22,1,.36,1) backwards; }
+.ld-slide:is(.from-right, .from-left) .ld-card { animation: none; }
+@keyframes ld-from-right { from { transform: translateX(70%); opacity: 0; } }
+@keyframes ld-from-left { from { transform: translateX(-70%); opacity: 0; } }
 .ld-card {
   position: absolute; z-index: 3; inset-inline: 12px; bottom: 12px; max-height: 58%; overflow-y: auto; padding: 0;
   background: var(--pane-solid); border-radius: var(--r-card); box-shadow: 0 10px 30px var(--shadow);
   animation: pop-in .4s var(--spring-pop) backwards; touch-action: pan-y;
 }
-:root[data-glass="liquid"] .ld-card { background: color-mix(in srgb, var(--bg) 82%, transparent); -webkit-backdrop-filter: blur(16px) saturate(1.5); backdrop-filter: blur(16px) saturate(1.5); }
+:root[data-glass="liquid"] /* The step's card in a layer of its own, so it can slide sideways from one step to the next. */
+.ld-slide { position: absolute; inset: 0; z-index: 3; pointer-events: none; will-change: transform; }
+.ld-slide > * { pointer-events: auto; }
+.ld-slide.from-right { animation: ld-from-right .3s cubic-bezier(.22,1,.36,1) backwards; }
+.ld-slide.from-left { animation: ld-from-left .3s cubic-bezier(.22,1,.36,1) backwards; }
+.ld-slide:is(.from-right, .from-left) .ld-card { animation: none; }
+@keyframes ld-from-right { from { transform: translateX(70%); opacity: 0; } }
+@keyframes ld-from-left { from { transform: translateX(-70%); opacity: 0; } }
+.ld-card { background: color-mix(in srgb, var(--bg) 82%, transparent); -webkit-backdrop-filter: blur(16px) saturate(1.5); backdrop-filter: blur(16px) saturate(1.5); }
 .ld-band { position: sticky; top: 0; z-index: 1; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 13px 18px; background: var(--s3); font-size: 17px; }
 .ld-body { padding: 14px 18px 18px; display: flex; flex-direction: column; gap: 12px; }
 .ld-place { display: flex; align-items: center; gap: 14px; font-size: 19px; }
@@ -689,6 +705,14 @@ h2 { font-size: 19px; }
 .ld-band { cursor: pointer; }
 
 /* Live directions: the card grows to show its whole step, and folds down to its heading. */
+/* The step's card in a layer of its own, so it can slide sideways from one step to the next. */
+.ld-slide { position: absolute; inset: 0; z-index: 3; pointer-events: none; will-change: transform; }
+.ld-slide > * { pointer-events: auto; }
+.ld-slide.from-right { animation: ld-from-right .3s cubic-bezier(.22,1,.36,1) backwards; }
+.ld-slide.from-left { animation: ld-from-left .3s cubic-bezier(.22,1,.36,1) backwards; }
+.ld-slide:is(.from-right, .from-left) .ld-card { animation: none; }
+@keyframes ld-from-right { from { transform: translateX(70%); opacity: 0; } }
+@keyframes ld-from-left { from { transform: translateX(-70%); opacity: 0; } }
 .ld-card { max-height: calc(100% - 24px); overflow: hidden; }
 .ld-card .sheet-grip { position: sticky; top: 0; z-index: 2; background: var(--s3); height: 18px; }
 .ld-card .sheet-grip::after { top: 7px; background: var(--s4); }

@@ -596,7 +596,26 @@ function Navigate({ trip, r, live, here, lines, ends, vehicles, from, to, onPay,
   const card = cards[step];
   const stopAt = (id: number): LatLon | null => { const s = r.stops[id]; return s && s.lat != null && s.lon != null ? [s.lat, s.lon] : null; };
   const endOf = (l: Leg): LatLon | null => (l.toStop > 0 ? stopAt(l.toStop) : null) ?? (l.shape.length ? l.shape[l.shape.length - 1] : null);
-  const go = (to: number) => { setStep(Math.max(0, Math.min(cards.length - 1, to))); setFollow(false); };
+  // A step turns as a page does: the card slides out the way it's going, the next slides in after it.
+  const slide = useRef<HTMLDivElement>(null);
+  const turning = useRef(false);
+  const [enter, setEnter] = useState<"from-left" | "from-right" | null>(null);
+  const rtl = document.documentElement.dir === "rtl";
+  const turn = (to: number) => {
+    const next = Math.max(0, Math.min(cards.length - 1, to));
+    if (next === step || turning.current) return;
+    // Forward goes out to the left (to the right in Hebrew), and the next comes in from the other side.
+    const out = (next > step) !== rtl ? -1 : 1;
+    const el = slide.current;
+    turning.current = true;
+    const done = () => { turning.current = false; setEnter(out < 0 ? "from-right" : "from-left"); setStep(next); };
+    if (!el) return done();
+    el.style.transition = "transform .18s cubic-bezier(.4,0,1,1), opacity .18s";
+    el.style.transform = `translateX(${out * 110}%)`;
+    el.style.opacity = "0";
+    setTimeout(done, 170);
+  };
+  const go = (to: number) => { turn(to); setFollow(false); };
 
   // Keep the screen on while walking through the trip.
   useEffect(() => {
@@ -613,11 +632,11 @@ function Navigate({ trip, r, live, here, lines, ends, vehicles, from, to, onPay,
     const c = cards[step];
     const start = lines[0]?.coords[0];
     const near = (p: LatLon | null, m: number) => !!p && metres(here, p) < m;
-    if (c.kind === "start" && start && !near(start, 40)) setStep(step + 1);
-    else if (c.kind === "walk" && near(endOf(c.leg), 35)) setStep(step + 1);
+    if (c.kind === "start" && start && !near(start, 40)) turn(step + 1);
+    else if (c.kind === "walk" && near(endOf(c.leg), 35)) turn(step + 1);
     // Only once the stop is known: an unknown one isn't a reason to think the rider has left it.
-    else if (c.kind === "wait" && stopAt(c.ride.fromStop) && !near(stopAt(c.ride.fromStop), 150)) setStep(step + 1);
-    else if (c.kind === "ride" && near(endOf(c.ride), 120)) setStep(step + 1);
+    else if (c.kind === "wait" && stopAt(c.ride.fromStop) && !near(stopAt(c.ride.fromStop), 150)) turn(step + 1);
+    else if (c.kind === "ride" && near(endOf(c.ride), 120)) turn(step + 1);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [here?.[0], here?.[1], step]);
 
@@ -658,15 +677,37 @@ function Navigate({ trip, r, live, here, lines, ends, vehicles, from, to, onPay,
   const offAt = card.kind === "ride" ? endOf(card.ride) : null;
   const getOff = card.kind === "ride" && !!here && !!offAt && metres(here, offAt) < 400;
 
-  // A swipe on the card turns it, as Moovit's do.
-  const touch = useRef<number | null>(null);
-  const rtl = document.documentElement.dir === "rtl";
+  // A swipe on the card turns it, as Moovit's do. The card follows the finger, and only a swipe a third of the
+  // way across turns it; a shorter one, as by accident, springs back. Past the first or the last step it gives
+  // only a little.
+  const touch = useRef<{ x: number; y: number; dx: number; sideways: boolean | null } | null>(null);
   const swipe = {
-    onTouchStart: (e: React.TouchEvent) => { touch.current = e.touches[0].clientX; },
-    onTouchEnd: (e: React.TouchEvent) => {
-      if (touch.current == null) return;
-      const dx = e.changedTouches[0].clientX - touch.current; touch.current = null;
-      if (Math.abs(dx) > 50) go(step + ((dx < 0) !== rtl ? 1 : -1));
+    onTouchStart: (e: React.TouchEvent) => {
+      if (turning.current) return;
+      touch.current = { x: e.touches[0].clientX, y: e.touches[0].clientY, dx: 0, sideways: null };
+      if (slide.current) slide.current.style.transition = "none";
+    },
+    onTouchMove: (e: React.TouchEvent) => {
+      const t = touch.current, el = slide.current;
+      if (!t || !el) return;
+      const dx = e.touches[0].clientX - t.x, dy = e.touches[0].clientY - t.y;
+      if (t.sideways === null) {
+        if (Math.abs(dx) < 10 && Math.abs(dy) < 10) return;
+        t.sideways = Math.abs(dx) > Math.abs(dy) * 1.3;
+      }
+      if (!t.sideways) return;
+      const target = step + ((dx < 0) !== rtl ? 1 : -1);
+      t.dx = dx;
+      el.style.transform = `translateX(${target < 0 || target >= cards.length ? dx / 4 : dx}px)`;
+    },
+    onTouchEnd: () => {
+      const t = touch.current, el = slide.current;
+      touch.current = null;
+      if (!t?.sideways || !el) return;
+      const target = step + ((t.dx < 0) !== rtl ? 1 : -1);
+      if (Math.abs(t.dx) > el.offsetWidth / 3 && target >= 0 && target < cards.length) { go(target); return; }
+      el.style.transition = "transform .35s cubic-bezier(.34,1.36,.64,1)";
+      el.style.transform = "";
     },
   };
 
@@ -702,10 +743,12 @@ function Navigate({ trip, r, live, here, lines, ends, vehicles, from, to, onPay,
           fit={stepCoords.length ? stepCoords : lines.flatMap(l => l.coords)} fitKey={`nav${trip.guid}:${step}`} onMove={() => setFollow(false)} />
         <button className="plate-btn ld-locate" onClick={() => setFollow(true)} aria-label={T("Recenter", "מרכוז")}><LocateGlyph /></button>
         {/* Pulled down to its heading to see the map, up again for the whole step; sideways for the next step. */}
-        <DragSheet key={step} className="ld-card card" detents={el => [0, Math.max(0, el.offsetHeight - 64)]}>
-          <div className="sheet-grip" data-grip data-toggle />
-          <div {...swipe}><StepCard card={card} trip={trip} r={r} live={live} now={now} here={here} from={from} to={to} endOf={endOf} onPick={onPick} /></div>
-        </DragSheet>
+        <div key={step} ref={slide} className={"ld-slide" + (enter ? " " + enter : "")} {...swipe} onTouchCancel={swipe.onTouchEnd}>
+          <DragSheet className="ld-card card" detents={el => [0, Math.max(0, el.offsetHeight - 64)]}>
+            <div className="sheet-grip" data-grip data-toggle />
+            <StepCard card={card} trip={trip} r={r} live={live} now={now} here={here} from={from} to={to} endOf={endOf} onPick={onPick} />
+          </DragSheet>
+        </div>
       </div>
       <div className="ld-actions">
         <button className="ld-act stop" onClick={onExit}><span className="ld-square" />{T("Stop", "עצירה")}</button>
