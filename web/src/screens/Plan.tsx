@@ -17,7 +17,8 @@ import { isNative, keepAwake, showTrip, endTrip, buzz, type TripLive } from "../
 import { SwapGlyph, StarGlyph, CloseGlyph, RecentGlyph, WalkGlyph, BikeGlyph, TaxiGlyph, DotGlyph, ShareGlyph, PlayGlyph, ChevronGlyph, BackGlyph, PayGlyph, LocateGlyph, PinGlyph, StationMark, BellGlyph, FlagGlyph, modeOf } from "../icons.tsx";
 
 
-interface PlanResult { itineraries: Itinerary[]; resolved: Resolved; refusal?: { code: number; title: string; detail: string } }
+// noneWith: the modes chosen above the results, when no way there uses any of them (the rest are shown).
+interface PlanResult { itineraries: Itinerary[]; resolved: Resolved; refusal?: { code: number; title: string; detail: string }; noneWith?: boolean }
 
 export function PlanScreen({ home, onPay }: { home: number; onPay: (at?: LatLon, routeType?: number, off?: LatLon) => void }) {
   const prefs = usePrefs();
@@ -41,14 +42,32 @@ export function PlanScreen({ home, onPay }: { home: number; onPay: (at?: LatLon,
   }, [home]);
 
   const fromAt = (): LatLon | null => from ? [from.lat, from.lon] : here;
-  const plan = useLoad<PlanResult>(searchKey, signal => {
+  // A mode chosen above the results (Light rail, say) means a way that uses it, with whatever else gets you to
+  // it. Moovit's own best ways are asked first; when few of them use it, Moovit is asked again for ways by
+  // that mode alone and with buses to reach it. When none does at all, that's said, and every way is shown.
+  const plan = useLoad<PlanResult>(searchKey, async signal => {
     const f = fromAt();
     if (!f || !to) throw new Error(T("Waiting for your location…", "ממתינים למיקום שלכם…"));
-    const types = prefs.modes.length ? prefs.modes : undefined;
-    return api("plan", {
+    const ask = (types?: number[]) => api<PlanResult>("plan", {
       from: f, to: [to.lat, to.lon], routeTypes: types,
       when: when.kind === "depart" || when.kind === "arrive" ? when.ms : 0, timeType: when.kind === "arrive" ? 1 : when.kind === "last" ? 3 : 2,
     }, signal);
+    const want = prefs.modes;
+    const all = await ask();
+    if (!want.length || all.refusal) return all;
+    let resolved = all.resolved;
+    const uses = (it: Itinerary) => it.legs.some(l => l.kind === "ride" && options(l).some(o => want.includes(routeTypeOf(resolved, o.lineId))));
+    const found = all.itineraries.filter(uses);
+    if (found.length < 3) {
+      for (const types of [want, [...new Set([...want, 3])]]) {
+        const more = await ask(types).catch(() => null);
+        if (!more) continue;
+        resolved = mergeResolved(resolved, more.resolved);
+        found.push(...more.itineraries.filter(uses));
+      }
+    }
+    if (!found.length) return { ...all, noneWith: true };
+    return { itineraries: found.map(it => ({ ...it, section: "" })).sort((a, b) => a.arr - b.arr || a.dep - b.dep), resolved };
   });
 
   // A new search whenever the ends, the time or the modes change.
@@ -151,6 +170,10 @@ export function PlanScreen({ home, onPay }: { home: number; onPay: (at?: LatLon,
             {plan.error && <Note tone="error">{plan.error} <button className="link" onClick={plan.reload}>{T("Try again", "נסו שוב")}</button></Note>}
             {plan.data?.refusal && <Note tone="warn"><b>{plan.data.refusal.title}</b><br />{plan.data.refusal.detail}</Note>}
             {plan.data && !plan.loading && !its.length && !plan.data.refusal && <Note>{T("No routes found.", "לא נמצאו מסלולים.")}</Note>}
+            {plan.data?.noneWith && !plan.loading && <Note tone="warn">{(() => {
+              const names = MODE_FILTERS.filter(m => m.types.some(t => prefs.modes.includes(t))).map(m => m.label()).join(T(" or ", " או "));
+              return T(`There's no way there by ${names}. These are the other ways.`, `אין דרך להגיע לשם ב${names}. אלה הדרכים האחרות.`);
+            })()}</Note>}
             {its.map((it, i) => (
               <div key={it.guid + i} className="it-wrap">
                 {it.section && it.section !== its[i - 1]?.section && <div className="list-head">{it.section}</div>}
