@@ -430,8 +430,11 @@ h2 { font-size: 19px; }
 }
 .eta b { font-size: 22px; font-weight: 700; letter-spacing: -.02em; }
 .eta small { font-size: 11px; color: var(--dim); font-weight: 500; }
-.eta.live, .eta.live small { color: var(--live); }
-.eta.late b { color: var(--problem); }
+/* The time white while the vehicle's place isn't known; coloured once it's on the map, by how it runs. */
+.eta.seen.on-time b, .eta.seen.on-time small:not(.eta-late) { color: #34C46E; }
+.eta.seen.late b, .eta.seen.late small:not(.eta-late) { color: #F0A23A; }
+.eta.seen.very-late b, .eta.seen.very-late small:not(.eta-late) { color: #FF5A4F; }
+.eta.seen.early b, .eta.seen.early small:not(.eta-late) { color: #5AA8FF; }
 .eta small.eta-late { color: var(--problem); font-weight: 600; }
 .eta.cancelled b { color: var(--critical); text-decoration: line-through; font-size: 16px; }
 .eta.cancelled small { color: var(--critical); }

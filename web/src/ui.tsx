@@ -4,7 +4,7 @@ import { BackGlyph, ModeGlyph, modeOf, StationMark, StarGlyph, RecentGlyph, PinG
 import qrcode from "qrcode-generator";
 import {
   T, api, usePrefs, getPrefs, setPrefs, remember, useHere, modeName, distanceText, metres, currentHere, locateOnce, failure,
-  clock, timeOf, isLive, isCancelled, type Place, type Departure,
+  clock, timeOf, isLive, isCancelled, isSeen, type Place, type Departure,
   minutesTo,
 } from "./core.ts";
 
@@ -27,9 +27,15 @@ export function Eta({ d, now, inline }: { d: Departure; now: number; inline?: bo
   if (isCancelled(d)) return <span className={"eta cancelled" + (inline ? " inline" : "")}><b>{clock(d.staticUtc)}</b><small>{T("cancelled", "בוטל")}</small></span>;
   const mins = minutesTo(t, now);
   const live = isLive(d), late = isLate(d);
+  // As Moovit colours it: white while the vehicle's place isn't known; once it is (it's on the map), green on
+  // time, amber late, red very late, blue early.
+  const seen = isSeen(d);
+  const delay = d.rtUtc > 0 && d.staticUtc > 0 ? d.rtUtc - d.staticUtc : 0;
+  const tone = !seen ? "" : delay >= 300 ? " seen very-late" : delay >= 120 ? " seen late" : delay <= -120 ? " seen early" : " seen on-time";
   const label = mins <= 0 ? T("now", "עכשיו") : mins < 60 ? T(`in ${mins} minutes`, `בעוד ${mins} דקות`) : clock(t);
   return (
-    <span className={"eta" + (live ? " live" : "") + (late ? " late" : "") + (mins <= 0 ? " arriving" : "") + (inline ? " inline" : "")} aria-label={label + (late ? T(", delayed", ", באיחור") : "")}>
+    <span className={"eta" + (live ? " live" : "") + tone + (mins <= 0 ? " arriving" : "") + (inline ? " inline" : "")}
+      aria-label={label + (late ? T(", delayed", ", באיחור") : "") + (seen ? T(", its location is live", ", המיקום שלו בזמן אמת") : "")}>
       {live && <LiveWaves />}
       {mins <= 0 ? <b>{T("now", "עכשיו")}</b> : mins < 60 ? <><b>{mins}</b><small>{T("min", "דק׳")}</small></> : <b>{clock(t)}</b>}
       {late && <small className="eta-late">{T("delayed", "באיחור")}</small>}

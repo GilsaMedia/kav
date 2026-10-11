@@ -327,6 +327,11 @@ export const mergeResolved = (a: Resolved, b?: Resolved | null): Resolved => b ?
 export const timeOf = (d: Departure) => d.rtUtc > 0 ? d.rtUtc : d.statisticalUtc > 0 ? d.statisticalUtc : d.staticUtc;
 export const isLive = (d: Departure) => d.status !== 3 && !d.frequency && d.vehicleStatus !== 2 && d.rtUtc > 0 && d.vehicleStatus !== 3;
 export const isCancelled = (d: Departure) => d.status === 3;
+// Its place is known right now: Moovit has the vehicle's position from the last few minutes, so it's on the map.
+export const isSeen = (d: Departure) => {
+  const a = d as Partial<Arrival>;
+  return !!a.tracked && !!a.lat && !!a.sampleUtc && Date.now() / 1000 - a.sampleUtc < 180;
+};
 export const routeTypeOf = (r: Resolved, lineId: number) => { const l = r.lines[lineId]; return l ? r.routeTypes[l.agencyId] ?? 3 : 3; };
 export const options = (l: Leg) => (l.alternatives.length ? l.alternatives : [l]);
 

@@ -2,7 +2,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   T, api, usePrefs, getPrefs, setPrefs, rememberTrip, boardingOf, useHere, useLoad, useNow, clock, minutesText, minutesTo, distanceText, metres, shekels, failure,
-  timeOf, isLive, isCancelled, distinctDeps, routeTypeOf, options, modeColor, modeName, MODE_FILTERS, mergeResolved, emptyResolved,
+  timeOf, isLive, isCancelled, isSeen, distinctDeps, routeTypeOf, options, modeColor, modeName, MODE_FILTERS, mergeResolved, emptyResolved,
   type Place, type Itinerary, type Leg, type Resolved, type Arrival, type LatLon, type Departure,
 } from "../core.ts";
 import { Header, LineBadge, Spinner, Note, LiveDot, PlacePicker, SaveFavourite, HERE_NAME, Sheet, Eta, NextTimes, isLate, goBack, stayPut, liveWhy } from "../ui.tsx";
@@ -833,7 +833,8 @@ function StepCard({ card, trip, r, live, now, here, from, to, endOf, onPick }: {
           return (
             <div key={k} className="ld-option">
               <LineBadge number={line?.number || o.shortName} type={routeTypeOf(r, o.lineId)} />
-              <div className="grow"><bdi>{line?.destination ?? ""}</bdi>{deps[0] && isLive(deps[0]) && <div className="ld-live">{T("Arrival time is live", "זמן ההגעה בזמן אמת")}</div>}</div>
+              <div className="grow"><bdi>{line?.destination ?? ""}</bdi>{deps[0] && isSeen(deps[0]) ? <div className="ld-live">{T("On the map now: its location is live", "על המפה עכשיו: המיקום שלו בזמן אמת")}</div>
+                : deps[0] && isLive(deps[0]) && <div className="ld-live">{T("Arrival time is live", "זמן ההגעה בזמן אמת")}</div>}</div>
               <div className="ld-when">{deps[0] ? <Eta d={deps[0]} now={now} /> : <b>{clock(o.dep)}</b>}{deps.length > 1 && <small>{deps.slice(1, 3).map(d => clock(timeOf(d))).join(", ")}</small>}</div>
             </div>
           );
