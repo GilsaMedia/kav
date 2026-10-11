@@ -619,6 +619,12 @@ function Navigate({ trip, r, live, here, lines, ends, vehicles, from, to, onPay,
   const card = cards[step];
   const stopAt = (id: number): LatLon | null => { const s = r.stops[id]; return s && s.lat != null && s.lon != null ? [s.lat, s.lon] : null; };
   const endOf = (l: Leg): LatLon | null => (l.toStop > 0 ? stopAt(l.toStop) : null) ?? (l.shape.length ? l.shape[l.shape.length - 1] : null);
+  // When the vehicle you wait for is at your stop: its live time, or the timetable's.
+  const boardTime = (c: { ride: Leg; wait?: Leg }) => {
+    const deps = departuresFor(c.ride, c.wait, live, now);
+    const mine = deps.find(d => String(d.tripId) === String(c.ride.tripId)) ?? deps[0];
+    return mine ? timeOf(mine) : c.ride.dep;
+  };
   // A step turns as a page does: the card slides out the way it's going, the next slides in after it.
   const slide = useRef<HTMLDivElement>(null);
   const turning = useRef(false);
@@ -657,11 +663,41 @@ function Navigate({ trip, r, live, here, lines, ends, vehicles, from, to, onPay,
     const near = (p: LatLon | null, m: number) => !!p && metres(here, p) < m;
     if (c.kind === "start" && start && !near(start, 40)) turn(step + 1);
     else if (c.kind === "walk" && near(endOf(c.leg), 35)) turn(step + 1);
-    // Only once the stop is known: an unknown one isn't a reason to think the rider has left it.
-    else if (c.kind === "wait" && stopAt(c.ride.fromStop) && !near(stopAt(c.ride.fromStop), 150)) turn(step + 1);
-    else if (c.kind === "ride" && near(endOf(c.ride), 120)) turn(step + 1);
+    // On the vehicle once you're well away from the stop and it has come: a fix that wanders a little while you
+    // wait isn't boarding. Only once the stop is known, too.
+    else if (c.kind === "wait" && stopAt(c.ride.fromStop) && !near(stopAt(c.ride.fromStop), 250) && now >= boardTime(c) - 60) turn(step + 1);
+    else if (c.kind === "ride" && near(endOf(c.ride), 200)) turn(step + 1);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [here?.[0], here?.[1], step]);
+
+  // How far along each ride you are: the last of its stops you've reached. It only goes forward, so a fix that
+  // wanders off the line, or none at all (underground, in a tunnel), never takes you off the ride: by where you
+  // are when a stop is near enough, else by the ride's own times, moved by the vehicle's delay.
+  const [reached, setReached] = useState<Record<number, number>>({});
+  useEffect(() => {
+    if (card.kind !== "ride") return;
+    const ride = card.ride, last = ride.stops.length - 1;
+    const before = reached[step] ?? 0;
+    let k = before;
+    let byPlace = -1;
+    if (here) {
+      let best = Infinity;
+      ride.stops.forEach((id, i) => { const p = stopAt(id); const m = p ? metres(here, p) : Infinity; if (m < best) { best = m; byPlace = i; } });
+      if (best > 400) byPlace = -1;
+    }
+    if (byPlace >= 0) k = Math.max(k, byPlace);
+    else {
+      const wait = trip.legs[trip.legs.indexOf(ride) - 1];
+      const deps = departuresFor(ride, wait?.kind === "wait" ? wait : undefined, live, now);
+      const mine = deps.find(d => String(d.tripId) === String(ride.tripId));
+      const late = mine && mine.rtUtc > 0 && mine.staticUtc > 0 ? mine.rtUtc - mine.staticUtc : 0;
+      const along = (now - (ride.dep + late)) / Math.max(60, ride.arr - ride.dep);
+      // Not the last stop by the clock alone: getting off is for where you are to say.
+      k = Math.max(k, Math.min(last - 1, Math.floor(along * last)));
+    }
+    if (k !== before) setReached(r => ({ ...r, [step]: k }));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [here?.[0], here?.[1], now, step]);
 
   // Nearly there on a ride: the phone says so, once.
   const told = useRef(-1);
@@ -769,7 +805,7 @@ function Navigate({ trip, r, live, here, lines, ends, vehicles, from, to, onPay,
         <div key={step} ref={slide} className={"ld-slide" + (enter ? " " + enter : "")} {...swipe} onTouchCancel={swipe.onTouchEnd}>
           <DragSheet className="ld-card card" detents={el => [0, Math.max(0, el.offsetHeight - 64)]}>
             <div className="sheet-grip" data-grip data-toggle />
-            <StepCard card={card} trip={trip} r={r} live={live} now={now} here={here} from={from} to={to} endOf={endOf} onPick={onPick} />
+            <StepCard card={card} trip={trip} r={r} live={live} now={now} here={here} from={from} to={to} endOf={endOf} onPick={onPick} reached={reached[step] ?? 0} />
           </DragSheet>
         </div>
       </div>
@@ -782,10 +818,13 @@ function Navigate({ trip, r, live, here, lines, ends, vehicles, from, to, onPay,
   );
 }
 
-function StepCard({ card, trip, r, live, now, here, from, to, endOf, onPick }: {
+function StepCard({ card, trip, r, live, now, here, from, to, endOf, onPick, reached }: {
   card: Card; trip: Itinerary; r: Resolved; live?: Arrival[]; now: number; here: LatLon | null; from: string; to: string;
-  endOf: (l: Leg) => LatLon | null; onPick: PickLine;
+  endOf: (l: Leg) => LatLon | null; onPick: PickLine; reached: number;
 }) {
+  // The stop you're at on a ride kept in view as you go.
+  const hereRow = useRef<HTMLLIElement>(null);
+  useEffect(() => { hereRow.current?.scrollIntoView({ block: "center", behavior: "smooth" }); }, [reached]);
   const stop = (id: number) => r.stops[id];
   const far = (l: Leg) => { const e = endOf(l); return here && e ? distanceText(metres(here, e)) : l.meters > 0 ? distanceText(l.meters) : ""; };
   const head = (text: string, end?: React.ReactNode) => <div className="ld-band" data-grip data-toggle><b>{text}</b>{end}</div>;
@@ -851,8 +890,6 @@ function StepCard({ card, trip, r, live, now, here, from, to, endOf, onPick }: {
   const setPick = (k: number) => onPick(trip.legs.indexOf(card.ride), k);
   const n = Math.max(1, ride.stops.length - 1);
   const mins = Math.max(1, Math.round((ride.arr - ride.dep) / 60));
-  const at = here ? ride.stops.map((id, i) => ({ i, m: (() => { const s = stop(id); return s?.lat != null && s?.lon != null ? metres(here, [s.lat, s.lon]) : Infinity; })() }))
-    .sort((a, b) => a.m - b.m)[0] : null;
   const color = modeColor(routeTypeOf(r, ride.lineId));
   return <>
     {head(T(`Ride ${n} stops to`, `נסיעה ${n} תחנות אל`), <span>{minutesText(mins)}</span>)}
@@ -865,7 +902,9 @@ function StepCard({ card, trip, r, live, now, here, from, to, endOf, onPick }: {
         : <LineBadge number={r.lines[ride.lineId]?.number || ride.shortName} type={routeTypeOf(r, ride.lineId)} />}
         <bdi className="dim">{r.lines[ride.lineId]?.destination ?? ""}</bdi></div>
       <ol className="ld-stops" style={{ "--c": color } as React.CSSProperties}>
-        {ride.stops.map((id, i) => <li key={id + ":" + i} className={(at && at.i === i && at.m < 300 ? "here " : "") + (i === 0 || i === ride.stops.length - 1 ? "end" : "")}><bdi>{stop(id)?.name ?? `#${id}`}</bdi></li>)}
+        {ride.stops.map((id, i) => <li key={id + ":" + i} ref={i === reached ? hereRow : undefined}
+          className={(i === reached ? "here " : i < reached ? "passed " : "") + (i === 0 || i === ride.stops.length - 1 ? "end" : "")}>
+          <bdi>{stop(id)?.name ?? `#${id}`}</bdi>{i === reached && i > 0 && <small className="ld-at">{T("last stop reached", "התחנה האחרונה שהגעתם אליה")}</small>}</li>)}
       </ol>
     </div>
   </>;

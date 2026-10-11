@@ -778,3 +778,5 @@ h2 { font-size: 19px; }
 .line-bell.on { color: var(--accent); }
 .notif-row { padding: 6px 0; border-top: .5px solid var(--hairline); }
 .row-line { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.ld-stops li.passed { opacity: .45; }
+.ld-stops li .ld-at { display: block; font-size: 12px; font-weight: 500; color: var(--dim); }
