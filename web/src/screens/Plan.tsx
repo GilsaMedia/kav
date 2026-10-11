@@ -712,8 +712,8 @@ function Navigate({ trip, r, live, here, lines, ends, vehicles, from, to, onPay,
     el.style.opacity = "0";
     setTimeout(done, 170);
   };
-  // Turned by hand: a step ahead says you've got that far (the phone may not have noticed yet); back is a look.
-  const go = (to: number) => { turn(to); setFollow(false); if (to > progress) setProgress(Math.min(cards.length - 1, to)); };
+  // Turned by hand: only a look. Where you are is for the phone to follow, and Recenter goes back to it.
+  const go = (to: number) => { turn(to); setFollow(false); };
   const recenter = () => { setFollow(true); turn(progress); };
 
   // Keep the screen on while walking through the trip.
@@ -725,20 +725,31 @@ function Navigate({ trip, r, live, here, lines, ends, vehicles, from, to, onPay,
     return () => { keepAwake(false); lock?.release().catch(() => {}); };
   }, []);
 
-  // Where you are moves on by itself: off once you've left, on the vehicle once it pulls away, off it near your
-  // stop. The card shown follows only when it's the one you're at, never from another step you're looking at.
+  // Where you are moves on by itself, each step when you reach its end: off once you've left, at the stop at the
+  // end of a walk, on the vehicle once it pulls away, off it near your stop. Several steps at once when you're
+  // further on than that (on the bus without the walk to its stop having been seen). The card shown follows only
+  // when it's the one you're at, never from another step you're looking at.
   useEffect(() => {
     if (!here || progress >= cards.length - 1) return;
-    const c = cards[progress];
-    const advance = () => { setProgress(progress + 1); if (step === progress) turn(progress + 1); };
     const start = lines[0]?.coords[0];
     const near = (p: LatLon | null, m: number) => !!p && metres(here, p) < m;
-    if (c.kind === "start" && start && !near(start, 40)) advance();
-    else if (c.kind === "walk" && near(endOf(c.leg), 35)) advance();
-    // On the vehicle once you're well away from the stop and it has come: a fix that wanders a little while you
-    // wait isn't boarding. Only once the stop is known, too.
-    else if (c.kind === "wait" && stopAt(c.ride.fromStop) && !near(stopAt(c.ride.fromStop), 250) && now >= boardTime(c) - 60) advance();
-    else if (c.kind === "ride" && near(endOf(c.ride), 200)) advance();
+    // On a vehicle of the line: well away from the stop, and at one of the ride's next two stops (not its last,
+    // which a line coming back may pass near where you got on).
+    const aboard = (ride: Leg) => !!stopAt(ride.fromStop) && !near(stopAt(ride.fromStop), 250)
+      && ride.stops.slice(1, Math.min(3, ride.stops.length - 1)).some(id => near(stopAt(id), 200));
+    const done = (c: Card) =>
+      c.kind === "start" ? !!start && !near(start, 40)
+      : c.kind === "walk" ? near(endOf(c.leg), 60) || (!!c.next && aboard(c.next))
+      // Waiting: gone once you're well away from the stop and the vehicle has come (a fix that wanders a little
+      // isn't boarding), or once you're plainly aboard.
+      : c.kind === "wait" ? !!stopAt(c.ride.fromStop) && !near(stopAt(c.ride.fromStop), 250) && (now >= boardTime(c) - 60 || aboard(c.ride))
+      : c.kind === "ride" ? near(endOf(c.ride), 200) && nearlyOff(c.ride)
+      : false;
+    let k = progress;
+    while (k < cards.length - 1 && done(cards[k])) k++;
+    if (k === progress) return;
+    setProgress(k);
+    if (step === progress) turn(k);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [here?.[0], here?.[1], progress, now]);
 
@@ -746,36 +757,43 @@ function Navigate({ trip, r, live, here, lines, ends, vehicles, from, to, onPay,
   // wanders off the line, or none at all (underground, in a tunnel), never takes you off the ride: by where you
   // are when a stop is near enough, else by the ride's own times, moved by the vehicle's delay.
   const [reached, setReached] = useState<Record<number, number>>({});
+  // The ride you're really on (not one you're looking at), so the stops and getting off follow you. A stop near
+  // you counts only if the vehicle could be there by now: a line that comes back past where you are (your
+  // stop near where you got on) isn't taken for the end of the ride.
+  const byClock = (ride: Leg) => {
+    const wait = trip.legs[trip.legs.indexOf(ride) - 1];
+    const deps = departuresFor(ride, wait?.kind === "wait" ? wait : undefined, live, now);
+    const mine = deps.find(d => String(d.tripId) === String(ride.tripId));
+    const late = mine && mine.rtUtc > 0 && mine.staticUtc > 0 ? mine.rtUtc - mine.staticUtc : 0;
+    return Math.floor((now - (ride.dep + late)) / Math.max(60, ride.arr - ride.dep) * (ride.stops.length - 1));
+  };
+  // Near the end of the ride: within its last two stops.
+  const nearlyOff = (ride: Leg) => (reached[cards.findIndex(c => c.kind === "ride" && c.ride === ride)] ?? 0) >= ride.stops.length - 3;
   useEffect(() => {
-    if (card.kind !== "ride") return;
-    const ride = card.ride, last = ride.stops.length - 1;
-    const before = reached[step] ?? 0;
+    const c = cards[progress];
+    if (c?.kind !== "ride") return;
+    const ride = c.ride, last = ride.stops.length - 1;
+    const before = reached[progress] ?? 0;
+    const clock = byClock(ride);
     let k = before;
     let byPlace = -1;
     if (here) {
       let best = Infinity;
       ride.stops.forEach((id, i) => { const p = stopAt(id); const m = p ? metres(here, p) : Infinity; if (m < best) { best = m; byPlace = i; } });
-      if (best > 400) byPlace = -1;
+      if (best > 400 || byPlace > Math.max(before, clock) + 2) byPlace = -1;
     }
     if (byPlace >= 0) k = Math.max(k, byPlace);
-    else {
-      const wait = trip.legs[trip.legs.indexOf(ride) - 1];
-      const deps = departuresFor(ride, wait?.kind === "wait" ? wait : undefined, live, now);
-      const mine = deps.find(d => String(d.tripId) === String(ride.tripId));
-      const late = mine && mine.rtUtc > 0 && mine.staticUtc > 0 ? mine.rtUtc - mine.staticUtc : 0;
-      const along = (now - (ride.dep + late)) / Math.max(60, ride.arr - ride.dep);
-      // Not the last stop by the clock alone: getting off is for where you are to say.
-      k = Math.max(k, Math.min(last - 1, Math.floor(along * last)));
-    }
-    if (k !== before) setReached(r => ({ ...r, [step]: k }));
+    // Not the last stop by the clock alone: getting off is for where you are to say.
+    else k = Math.max(k, Math.min(last - 1, clock));
+    if (k !== before) setReached(r => ({ ...r, [progress]: k }));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [here?.[0], here?.[1], now, step]);
+  }, [here?.[0], here?.[1], now, progress]);
 
   // Nearly there on a ride: the phone says so, once.
   const told = useRef(-1);
   useEffect(() => {
     const at = cards[progress];
-    if (!alerts || !here || at?.kind !== "ride" || told.current === progress) return;
+    if (!alerts || !here || at?.kind !== "ride" || told.current === progress || !nearlyOff(at.ride)) return;
     const end = endOf(at.ride);
     if (end && metres(here, end) < 400) { told.current = progress; buzz("alert"); }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -783,8 +801,31 @@ function Navigate({ trip, r, live, here, lines, ends, vehicles, from, to, onPay,
 
   // The map frames the card's own part of the way, until you ask it to follow you again.
   const stepLeg = card.kind === "walk" ? card.leg : card.kind === "wait" || card.kind === "ride" ? card.ride : null;
+  // Waiting: the way the vehicle comes to your stop, from where it is now (or from the start of its trip when
+  // Moovit doesn't know), so you can see it comes straight and doesn't go round first. Faint and thin, under the
+  // way you'll ride, so it isn't taken for it or for a walk; only on the step of waiting.
+  const waitCard = card.kind === "wait" ? card : null;
+  const coming = waitCard ? (() => {
+    const deps = departuresFor(waitCard.ride, waitCard.wait, live, now);
+    return (deps.find(d => String(d.tripId) === String(waitCard.ride.tripId)) ?? deps[0]) as Partial<Arrival> | undefined;
+  })() : undefined;
+  const shapeId = coming?.tripShapeId && coming.tripShapeId > 0 ? coming.tripShapeId : null;
+  const comingShape = useLoad<{ shape: LatLon[] }>(shapeId ? `shape:${shapeId}` : null, sig => api(`shape?id=${shapeId}`, undefined, sig));
+  const yourStop = waitCard ? stopAt(waitCard.ride.fromStop) : null;
+  const approach: LatLon[] = useMemo(() => {
+    const pts = comingShape.data?.shape;
+    if (!pts?.length || !yourStop) return [];
+    const nearest = (p: LatLon, from = 0) => { let n = from; for (let i = from; i < pts.length; i++) if (metres(p, pts[i]) < metres(p, pts[n])) n = i; return n; };
+    const from = coming?.tracked && coming.lat && coming.lon ? nearest([coming.lat, coming.lon]) : 0;
+    const to = nearest(yourStop, from);
+    return to > from ? pts.slice(from, to + 1) : [];
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [comingShape.data, coming?.lat, coming?.lon, yourStop?.[0], yourStop?.[1]]);
+  const approachLine: MapLine[] = approach.length && waitCard
+    ? [{ coords: approach, color: modeColor(routeTypeOf(r, waitCard.ride.lineId)), width: 3, opacity: 0.45 }] : [];
+
   const stepCoords: LatLon[] = card.kind === "start" ? (lines[0]?.coords.slice(0, 2) ?? []) : card.kind === "arrive" ? (lines[lines.length - 1]?.coords.slice(-2) ?? [])
-    : card.kind === "wait" ? [stopAt(card.ride.fromStop)].filter(Boolean) as LatLon[]
+    : card.kind === "wait" ? [stopAt(card.ride.fromStop), ...approach].filter(Boolean) as LatLon[]
     : stepLeg ? (stepLeg.shape.length ? stepLeg.shape : stepLeg.stops.map(stopAt).filter(Boolean) as LatLon[]) : [];
   const left = Math.max(0, Math.round((trip.arr - now) / 60));
 
@@ -809,7 +850,7 @@ function Navigate({ trip, r, live, here, lines, ends, vehicles, from, to, onPay,
   // getting off instead.
   const countMins = minutesTo(Math.floor(tripLive.target / 1000), now);
   const offAt = atCard.kind === "ride" ? endOf(atCard.ride) : null;
-  const getOff = atCard.kind === "ride" && !!here && !!offAt && metres(here, offAt) < 400;
+  const getOff = atCard.kind === "ride" && !!here && !!offAt && metres(here, offAt) < 400 && nearlyOff(atCard.ride);
 
   // A swipe on the card turns it, as Moovit's do. The card follows the finger, and only a swipe a third of the
   // way across turns it; a shorter one, as by accident, springs back. Past the first or the last step it gives
@@ -873,14 +914,14 @@ function Navigate({ trip, r, live, here, lines, ends, vehicles, from, to, onPay,
           <b className="ld-count-big">{countMins === 0 ? T("Now", "עכשיו") : <>{countMins}<small>{T("min", "דק׳")}</small></>}</b>
         </div>}
       <div className="ld-map">
-        <MapView className="map-full" lines={lines} points={[...ends, ...vehicles]} user={here} follow={follow ? here : null}
-          fit={stepCoords.length ? stepCoords : lines.flatMap(l => l.coords)} fitKey={`nav${trip.guid}:${step}`} onMove={() => setFollow(false)} />
+        <MapView className="map-full" lines={[...approachLine, ...lines]} points={[...ends, ...vehicles]} user={here} follow={follow ? here : null}
+          fit={stepCoords.length ? stepCoords : lines.flatMap(l => l.coords)} fitKey={`nav${trip.guid}:${step}:${approach.length ? "way" : ""}`} onMove={() => setFollow(false)} />
         <button className="plate-btn ld-locate" onClick={recenter} aria-label={T("Recenter", "מרכוז")}><LocateGlyph /></button>
         {/* Pulled down to its heading to see the map, up again for the whole step; sideways for the next step. */}
         <div key={step} ref={slide} className={"ld-slide" + (enter ? " " + enter : "")} {...swipe} onTouchCancel={swipe.onTouchEnd}>
           <DragSheet className="ld-card card" detents={el => [0, Math.max(0, el.offsetHeight - 64)]}>
             <div className="sheet-grip" data-grip data-toggle />
-            <StepCard card={card} trip={trip} r={r} live={live} now={now} here={here} from={from} to={to} endOf={endOf} onPick={onPick} reached={reached[step] ?? 0} />
+            <StepCard card={card} trip={trip} r={r} live={live} now={now} here={here} from={from} to={to} endOf={endOf} onPick={onPick} reached={reached[step] ?? 0} wayShown={approach.length > 0} />
           </DragSheet>
         </div>
       </div>
@@ -893,9 +934,9 @@ function Navigate({ trip, r, live, here, lines, ends, vehicles, from, to, onPay,
   );
 }
 
-function StepCard({ card, trip, r, live, now, here, from, to, endOf, onPick, reached }: {
+function StepCard({ card, trip, r, live, now, here, from, to, endOf, onPick, reached, wayShown }: {
   card: Card; trip: Itinerary; r: Resolved; live?: Arrival[]; now: number; here: LatLon | null; from: string; to: string;
-  endOf: (l: Leg) => LatLon | null; onPick: PickLine; reached: number;
+  endOf: (l: Leg) => LatLon | null; onPick: PickLine; reached: number; wayShown?: boolean;
 }) {
   // The stop you're at on a ride kept in view as you go.
   const hereRow = useRef<HTMLLIElement>(null);
@@ -954,6 +995,7 @@ function StepCard({ card, trip, r, live, now, here, from, to, endOf, onPick, rea
           );
         })}
         <div className="ld-sub"><bdi>{stop(card.ride.fromStop)?.name ?? ""}</bdi></div>
+        {wayShown && <div className="ld-sub">{T("The pale line on the map is its way to your stop.", "הקו הבהיר במפה הוא הדרך שלו עד התחנה שלכם.")}</div>}
       </div>
     </>;
   }
