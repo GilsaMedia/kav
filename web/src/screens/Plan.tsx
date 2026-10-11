@@ -431,7 +431,9 @@ export function TripDetail({ trip: planned, resolved: first, from, to, onBack, o
   };
 
   if (navigating) return <Navigate key={base.guid} trip={trip} r={r} live={live.data?.arrivals} here={here} lines={lines} ends={ends} vehicles={vehicles}
-    from={from} to={to} onPay={onPay} onShare={share} onExit={() => setNavigating(false)} onPick={pickLine} startStep={navStart} />;
+    from={from} to={to} onPay={onPay} onShare={share}
+    // Taken up again from the home screen, leaving goes back there rather than to the way's page.
+    onExit={() => resume != null ? onBack() : setNavigating(false)} onPick={pickLine} startStep={navStart} />;
 
   const mins = Math.max(1, Math.round((trip.arr - trip.dep) / 60));
   const b = boardingOf(trip, r, now);
