@@ -291,6 +291,42 @@ function chooseLines(trip: Itinerary, picks: Record<number, number>): Itinerary 
   }) };
 }
 
+// Starting from a stop further along the way than the one planned (you walked on to a later stop, or got on
+// already): the way from there. Its ride starts at that stop, its time there estimated along the ride (and
+// set by the vehicle's live time there once Moovit's arrivals for it come in); what came before is left out.
+function fromWhereYouAre(trip: Itinerary, r: Resolved, here: LatLon): Itinerary | null {
+  const where = (id: number): LatLon | null => { const s = r.stops[id]; return s && s.lat != null && s.lon != null ? [s.lat, s.lon] : null; };
+  let best: { leg: number; k: number; m: number } | null = null;
+  trip.legs.forEach((l, i) => {
+    if (l.kind !== "ride") return;
+    // Not a ride's last stop: that's where you get off it.
+    l.stops.slice(0, -1).forEach((id, k) => {
+      const p = where(id); const m = p ? metres(here, p) : Infinity;
+      if (m < 120 && (!best || m < best.m)) best = { leg: i, k, m };
+    });
+  });
+  if (!best) return null;
+  const { leg: i, k } = best as { leg: number; k: number; m: number };
+  if (i === trip.legs.findIndex(l => l.kind === "ride") && k === 0) return null;
+  const stopId = trip.legs[i].stops[k];
+  const cut = (o: Leg): Leg | null => {
+    const j = o.stops.indexOf(stopId);
+    if (j < 0 || j >= o.stops.length - 1) return null;
+    const shift = Math.round(j / Math.max(1, o.stops.length - 1) * (o.arr - o.dep));
+    const at = where(stopId);
+    let shape = o.shape;
+    if (at && shape.length) { let n = 0; shape.forEach((p, q) => { if (metres(at, p) < metres(at, shape[n])) n = q; }); shape = shape.slice(n); }
+    const moved = (t: number) => t > 0 ? t + shift : 0;
+    return { ...o, fromStop: stopId, stops: o.stops.slice(j), dep: o.dep + shift, shape,
+      nextDeps: o.nextDeps.map(d => ({ ...d, staticUtc: moved(d.staticUtc), rtUtc: moved(d.rtUtc), statisticalUtc: moved(d.statisticalUtc) })) };
+  };
+  const ride = cut(trip.legs[i]);
+  if (!ride) return null;
+  const alternatives = trip.legs[i].alternatives.map(cut).filter((x): x is Leg => !!x);
+  return { ...trip, guid: `${trip.guid}:from${stopId}`, dep: ride.dep,
+    legs: [{ ...ride, alternatives, alternativeLineIds: ride.alternativeLineIds.filter(id => alternatives.some(a => a.lineId === id)) }, ...trip.legs.slice(i + 1)] };
+}
+
 // Which of a ride's lines is the one shown.
 const pickOf = (leg: Leg) => {
   const opts = options(leg);
@@ -303,15 +339,30 @@ export function TripDetail({ trip: planned, resolved: first, from, to, onBack, o
   trip: Itinerary; resolved: Resolved; from: string; to: string; onBack: () => void; onPay: (at?: LatLon, routeType?: number, off?: LatLon) => void;
   resume?: number;
 }) {
-  const live = useTripLive(planned);
+  // The way as planned, or from the stop you were at when you started, if that was further along it.
+  const [fromHere, setFromHere] = useState<Itinerary | null>(null);
+  const [navStart, setNavStart] = useState(resume ?? 0);
+  // Looked at with each fix in the first minute after Start (the first may be an old one): at a stop further
+  // along than planned, the way from there, waiting for the vehicle at that stop.
+  const startedAt = useRef(0);
+  const base = fromHere ?? planned;
+  const live = useTripLive(base);
   const [picks, setPicks] = useState<Record<number, number>>({});
-  const trip = useMemo(() => chooseLines(planned, picks), [planned, picks]);
+  const trip = useMemo(() => chooseLines(base, picks), [base, picks]);
   const pickLine: PickLine = (i, k) => setPicks(p => ({ ...p, [i]: k }));
   const now = useNow(10000);
   const [navigating, setNavigating] = useState(resume != null);
   const [shareNote, setShareNote] = useState<string | null>(null);
   const r = mergeResolved(first ?? emptyResolved(), live.data?.resolved);
   const here = useHere(navigating);
+  useEffect(() => {
+    if (!navigating || fromHere || resume != null || !here || Date.now() - startedAt.current > 60_000) return;
+    const moved = fromWhereYouAre(planned, r, here);
+    if (!moved) return;
+    setFromHere(moved); setPicks({}); setNavStart(1);
+    saveRide({ trip: moved, resolved: r, from, to, step: 1 });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [navigating, here?.[0], here?.[1]]);
 
   const legs = trip.legs;
   const stopAt = (id: number): LatLon | null => { const s = r.stops[id]; return s && s.lat != null && s.lon != null ? [s.lat, s.lon] : null; };
@@ -374,12 +425,13 @@ export function TripDetail({ trip: planned, resolved: first, from, to, onBack, o
     rodeLines(legs.filter(l => l.kind === "ride" && r.lines[l.lineId]?.groupId)
       .map(l => ({ groupId: r.lines[l.lineId].groupId, label: `${modeName(routeTypeOf(r, l.lineId))} ${r.lines[l.lineId].number}` })));
     // Kept, for the home screen to take up again until it's stopped or over.
-    saveRide({ trip: planned, resolved: r, from, to, step: 0 });
+    saveRide({ trip: base, resolved: r, from, to, step: 0 });
+    startedAt.current = Date.now();
     setNavigating(true);
   };
 
-  if (navigating) return <Navigate trip={trip} r={r} live={live.data?.arrivals} here={here} lines={lines} ends={ends} vehicles={vehicles}
-    from={from} to={to} onPay={onPay} onShare={share} onExit={() => setNavigating(false)} onPick={pickLine} startStep={resume ?? 0} />;
+  if (navigating) return <Navigate key={base.guid} trip={trip} r={r} live={live.data?.arrivals} here={here} lines={lines} ends={ends} vehicles={vehicles}
+    from={from} to={to} onPay={onPay} onShare={share} onExit={() => setNavigating(false)} onPick={pickLine} startStep={navStart} />;
 
   const mins = Math.max(1, Math.round((trip.arr - trip.dep) / 60));
   const b = boardingOf(trip, r, now);
@@ -623,9 +675,12 @@ function Navigate({ trip, r, live, here, lines, ends, vehicles, from, to, onPay,
   startStep: number;
 }) {
   const cards = useMemo(() => cardsOf(trip), [trip]);
+  // The step shown, and the step you're really at as the phone follows you. They're apart while you look at
+  // another step: nothing pulls you back from it, and Recenter takes you to where you are.
   const [step, setStep] = useState(startStep);
-  // The step you're at, kept with the ride, so taking it up again from the home screen opens here.
-  useEffect(() => { setRideStep(step); }, [step]);
+  const [progress, setProgress] = useState(startStep);
+  // Where you are, kept with the ride, so taking it up again from the home screen opens there.
+  useEffect(() => { setRideStep(progress); }, [progress]);
   const [follow, setFollow] = useState(true);
   const [alerts, setAlerts] = useState(true);
   const now = useNow(5000);
@@ -657,7 +712,9 @@ function Navigate({ trip, r, live, here, lines, ends, vehicles, from, to, onPay,
     el.style.opacity = "0";
     setTimeout(done, 170);
   };
-  const go = (to: number) => { turn(to); setFollow(false); };
+  // Turned by hand: a step ahead says you've got that far (the phone may not have noticed yet); back is a look.
+  const go = (to: number) => { turn(to); setFollow(false); if (to > progress) setProgress(Math.min(cards.length - 1, to)); };
+  const recenter = () => { setFollow(true); turn(progress); };
 
   // Keep the screen on while walking through the trip.
   useEffect(() => {
@@ -668,20 +725,22 @@ function Navigate({ trip, r, live, here, lines, ends, vehicles, from, to, onPay,
     return () => { keepAwake(false); lock?.release().catch(() => {}); };
   }, []);
 
-  // The card moves on by itself: off once you've left, on the vehicle once it pulls away, off it near your stop.
+  // Where you are moves on by itself: off once you've left, on the vehicle once it pulls away, off it near your
+  // stop. The card shown follows only when it's the one you're at, never from another step you're looking at.
   useEffect(() => {
-    if (!here || step >= cards.length - 1) return;
-    const c = cards[step];
+    if (!here || progress >= cards.length - 1) return;
+    const c = cards[progress];
+    const advance = () => { setProgress(progress + 1); if (step === progress) turn(progress + 1); };
     const start = lines[0]?.coords[0];
     const near = (p: LatLon | null, m: number) => !!p && metres(here, p) < m;
-    if (c.kind === "start" && start && !near(start, 40)) turn(step + 1);
-    else if (c.kind === "walk" && near(endOf(c.leg), 35)) turn(step + 1);
+    if (c.kind === "start" && start && !near(start, 40)) advance();
+    else if (c.kind === "walk" && near(endOf(c.leg), 35)) advance();
     // On the vehicle once you're well away from the stop and it has come: a fix that wanders a little while you
     // wait isn't boarding. Only once the stop is known, too.
-    else if (c.kind === "wait" && stopAt(c.ride.fromStop) && !near(stopAt(c.ride.fromStop), 250) && now >= boardTime(c) - 60) turn(step + 1);
-    else if (c.kind === "ride" && near(endOf(c.ride), 200)) turn(step + 1);
+    else if (c.kind === "wait" && stopAt(c.ride.fromStop) && !near(stopAt(c.ride.fromStop), 250) && now >= boardTime(c) - 60) advance();
+    else if (c.kind === "ride" && near(endOf(c.ride), 200)) advance();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [here?.[0], here?.[1], step]);
+  }, [here?.[0], here?.[1], progress, now]);
 
   // How far along each ride you are: the last of its stops you've reached. It only goes forward, so a fix that
   // wanders off the line, or none at all (underground, in a tunnel), never takes you off the ride: by where you
@@ -715,11 +774,12 @@ function Navigate({ trip, r, live, here, lines, ends, vehicles, from, to, onPay,
   // Nearly there on a ride: the phone says so, once.
   const told = useRef(-1);
   useEffect(() => {
-    if (!alerts || !here || card?.kind !== "ride" || told.current === step) return;
-    const end = endOf(card.ride);
-    if (end && metres(here, end) < 400) { told.current = step; buzz("alert"); }
+    const at = cards[progress];
+    if (!alerts || !here || at?.kind !== "ride" || told.current === progress) return;
+    const end = endOf(at.ride);
+    if (end && metres(here, end) < 400) { told.current = progress; buzz("alert"); }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [here?.[0], here?.[1], step, alerts]);
+  }, [here?.[0], here?.[1], progress, alerts]);
 
   // The map frames the card's own part of the way, until you ask it to follow you again.
   const stepLeg = card.kind === "walk" ? card.leg : card.kind === "wait" || card.kind === "ride" ? card.ride : null;
@@ -731,7 +791,9 @@ function Navigate({ trip, r, live, here, lines, ends, vehicles, from, to, onPay,
   // The lock screen and the Dynamic Island: the next thing to wait for, counted down by the system so it
   // runs on with Kav in the background. Before boarding, the vehicle at your stop; on it, getting off
   // (moved by its delay); after the last ride, arriving.
-  const tripLive = tripLiveOf(trip, r, live, now, to, cards, step);
+  // Of where you are, not of a step you're looking at.
+  const tripLive = tripLiveOf(trip, r, live, now, to, cards, progress);
+  const atCard = cards[progress];
   const shown = JSON.stringify(tripLive);
   useEffect(() => { showTrip(to, tripLive); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [shown]);
   useEffect(() => () => endTrip(), []);
@@ -746,8 +808,8 @@ function Navigate({ trip, r, live, here, lines, ends, vehicles, from, to, onPay,
   // The countdown, big: to the vehicle at your stop, to getting off, to arriving. Near your stop on a ride,
   // getting off instead.
   const countMins = minutesTo(Math.floor(tripLive.target / 1000), now);
-  const offAt = card.kind === "ride" ? endOf(card.ride) : null;
-  const getOff = card.kind === "ride" && !!here && !!offAt && metres(here, offAt) < 400;
+  const offAt = atCard.kind === "ride" ? endOf(atCard.ride) : null;
+  const getOff = atCard.kind === "ride" && !!here && !!offAt && metres(here, offAt) < 400;
 
   // A swipe on the card turns it, as Moovit's do. The card follows the finger, and only a swipe a third of the
   // way across turns it; a shorter one, as by accident, springs back. Past the first or the last step it gives
@@ -801,19 +863,19 @@ function Navigate({ trip, r, live, here, lines, ends, vehicles, from, to, onPay,
         <button className="ld-arrow" onClick={() => go(step - 1)} disabled={step === 0} aria-label={T("Previous step", "השלב הקודם")}><BackGlyph size={16} /></button>
         <div className="ld-dots">
           <div className="dots">{cards.map((_, i) => <span key={i} className={i === step ? "on" : ""} onClick={() => go(i)} />)}</div>
-          {!follow && <button className="link ld-recenter" onClick={() => setFollow(true)}>{T("Recenter", "מרכוז")}</button>}
+          {(!follow || step !== progress) && <button className="link ld-recenter" onClick={recenter}>{T("Recenter", "מרכוז")}</button>}
         </div>
         <button className="ld-arrow" onClick={() => go(step + 1)} disabled={step === cards.length - 1} aria-label={T("Next step", "השלב הבא")}><BackGlyph size={16} style={{ rotate: "180deg" }} /></button>
       </div>
       {getOff ? <div className="ld-count off"><b>{T("Get off at the next stop", "יורדים בתחנה הבאה")}</b><span><bdi>{tripLive.stop}</bdi></span></div>
-        : card.kind !== "arrive" && <div className="ld-count">
+        : atCard.kind !== "arrive" && <div className="ld-count">
           <span className="ld-count-label">{tripLive.live && <LiveDot />}{tripLive.label}</span>
           <b className="ld-count-big">{countMins === 0 ? T("Now", "עכשיו") : <>{countMins}<small>{T("min", "דק׳")}</small></>}</b>
         </div>}
       <div className="ld-map">
         <MapView className="map-full" lines={lines} points={[...ends, ...vehicles]} user={here} follow={follow ? here : null}
           fit={stepCoords.length ? stepCoords : lines.flatMap(l => l.coords)} fitKey={`nav${trip.guid}:${step}`} onMove={() => setFollow(false)} />
-        <button className="plate-btn ld-locate" onClick={() => setFollow(true)} aria-label={T("Recenter", "מרכוז")}><LocateGlyph /></button>
+        <button className="plate-btn ld-locate" onClick={recenter} aria-label={T("Recenter", "מרכוז")}><LocateGlyph /></button>
         {/* Pulled down to its heading to see the map, up again for the whole step; sideways for the next step. */}
         <div key={step} ref={slide} className={"ld-slide" + (enter ? " " + enter : "")} {...swipe} onTouchCancel={swipe.onTouchEnd}>
           <DragSheet className="ld-card card" detents={el => [0, Math.max(0, el.offsetHeight - 64)]}>
