@@ -11,6 +11,7 @@ import { Home, Arrives, type Opened } from "./Home.tsx";
 import { DragSheet } from "../sheet.tsx";
 import { WhenButton, WhenSheet, type When } from "../when.tsx";
 import { DelayNote } from "../delays.tsx";
+import { saveRide, clearRide, setRideStep, useRide } from "../ride.ts";
 import { canNotify, useJobs, addReminder, removeReminder, rodeLines, setStepNotices, clearStepNotices } from "../remind.ts";
 import type { Notice } from "../../backend/jobs.ts";
 import { isNative, keepAwake, showTrip, endTrip, buzz, type TripLive } from "../native.ts";
@@ -33,12 +34,15 @@ export function PlanScreen({ home, onPay }: { home: number; onPay: (at?: LatLon,
   const [saving, setSaving] = useState<Place | null>(null);
   // A way opened straight from a card on the home screen.
   const [opened, setOpened] = useState<Opened | null>(null);
+  // The ride you started, taken up again from the home screen, in Live Directions where you left it.
+  const ride = useRide();
+  const [resuming, setResuming] = useState(false);
 
   // Back to the home screen, from wherever in Directions you are.
   useEffect(() => {
     if (!home) return;
     stayPut();
-    setPicking(null); setTimeSheet(false); setOpened(null); setChosen(null); setTo(null); setFrom(null); setSearchKey(null);
+    setPicking(null); setTimeSheet(false); setOpened(null); setChosen(null); setTo(null); setFrom(null); setSearchKey(null); setResuming(false);
   }, [home]);
 
   const fromAt = (): LatLon | null => from ? [from.lat, from.lon] : here;
@@ -102,6 +106,9 @@ export function PlanScreen({ home, onPay }: { home: number; onPay: (at?: LatLon,
       }} />;
   }
 
+  if (resuming && ride) return <TripDetail trip={ride.trip} resolved={ride.resolved} from={ride.from} to={ride.to} resume={ride.step}
+    onBack={() => setResuming(false)} onPay={onPay} />;
+
   if (opened) return <TripDetail trip={opened.it} resolved={opened.resolved} from={HERE_NAME()} to={opened.to.name}
     onBack={() => setOpened(null)} onPay={onPay} />;
 
@@ -109,7 +116,7 @@ export function PlanScreen({ home, onPay }: { home: number; onPay: (at?: LatLon,
   if (!to) return (
     <div className="screen">
       <Home onSearch={() => setPicking("to")} onGo={p => { setFrom(null); setTo(p); }} onOpen={o => { rememberTrip(null, o.to); setOpened(o); }} onTrip={t => { setFrom(t.from); setTo(t.to); }}
-        onPay={() => onPay()} onAdd={() => setPicking("fav")} />
+        onPay={() => onPay()} onAdd={() => setPicking("fav")} ride={ride} onResume={() => setResuming(true)} />
       {saving && <SaveFavourite place={saving} onDone={() => setSaving(null)} />}
     </div>
   );
@@ -292,15 +299,16 @@ const pickOf = (leg: Leg) => {
 };
 type PickLine = (legIndex: number, option: number) => void;
 
-export function TripDetail({ trip: planned, resolved: first, from, to, onBack, onPay }: {
+export function TripDetail({ trip: planned, resolved: first, from, to, onBack, onPay, resume }: {
   trip: Itinerary; resolved: Resolved; from: string; to: string; onBack: () => void; onPay: (at?: LatLon, routeType?: number, off?: LatLon) => void;
+  resume?: number;
 }) {
   const live = useTripLive(planned);
   const [picks, setPicks] = useState<Record<number, number>>({});
   const trip = useMemo(() => chooseLines(planned, picks), [planned, picks]);
   const pickLine: PickLine = (i, k) => setPicks(p => ({ ...p, [i]: k }));
   const now = useNow(10000);
-  const [navigating, setNavigating] = useState(false);
+  const [navigating, setNavigating] = useState(resume != null);
   const [shareNote, setShareNote] = useState<string | null>(null);
   const r = mergeResolved(first ?? emptyResolved(), live.data?.resolved);
   const here = useHere(navigating);
@@ -365,11 +373,13 @@ export function TripDetail({ trip: planned, resolved: first, from, to, onBack, o
     // The lines you ride are followed for their alerts.
     rodeLines(legs.filter(l => l.kind === "ride" && r.lines[l.lineId]?.groupId)
       .map(l => ({ groupId: r.lines[l.lineId].groupId, label: `${modeName(routeTypeOf(r, l.lineId))} ${r.lines[l.lineId].number}` })));
+    // Kept, for the home screen to take up again until it's stopped or over.
+    saveRide({ trip: planned, resolved: r, from, to, step: 0 });
     setNavigating(true);
   };
 
   if (navigating) return <Navigate trip={trip} r={r} live={live.data?.arrivals} here={here} lines={lines} ends={ends} vehicles={vehicles}
-    from={from} to={to} onPay={onPay} onShare={share} onExit={() => setNavigating(false)} onPick={pickLine} />;
+    from={from} to={to} onPay={onPay} onShare={share} onExit={() => setNavigating(false)} onPick={pickLine} startStep={resume ?? 0} />;
 
   const mins = Math.max(1, Math.round((trip.arr - trip.dep) / 60));
   const b = boardingOf(trip, r, now);
@@ -607,12 +617,15 @@ function stepNoticesOf(trip: Itinerary, r: Resolved, live: Arrival[] | undefined
   return out;
 }
 
-function Navigate({ trip, r, live, here, lines, ends, vehicles, from, to, onPay, onShare, onExit, onPick }: {
+function Navigate({ trip, r, live, here, lines, ends, vehicles, from, to, onPay, onShare, onExit, onPick, startStep }: {
   trip: Itinerary; r: Resolved; live?: Arrival[]; here: LatLon | null; lines: MapLine[]; ends: MapPoint[]; vehicles: MapPoint[];
   from: string; to: string; onPay: (at?: LatLon, routeType?: number, off?: LatLon) => void; onShare: () => void; onExit: () => void; onPick: PickLine;
+  startStep: number;
 }) {
   const cards = useMemo(() => cardsOf(trip), [trip]);
-  const [step, setStep] = useState(0);
+  const [step, setStep] = useState(startStep);
+  // The step you're at, kept with the ride, so taking it up again from the home screen opens here.
+  useEffect(() => { setRideStep(step); }, [step]);
   const [follow, setFollow] = useState(true);
   const [alerts, setAlerts] = useState(true);
   const now = useNow(5000);
@@ -810,7 +823,7 @@ function Navigate({ trip, r, live, here, lines, ends, vehicles, from, to, onPay,
         </div>
       </div>
       <div className="ld-actions">
-        <button className="ld-act stop" onClick={onExit}><span className="ld-square" />{T("Stop", "עצירה")}</button>
+        <button className="ld-act stop" onClick={() => { clearRide(); onExit(); }}><span className="ld-square" />{T("Stop", "עצירה")}</button>
         {payMode != null && <button className="ld-act" onClick={() => onPay(payHere ? stopAt(payHere.fromStop) ?? undefined : undefined, payMode, payHere ? stopAt(payHere.toStop) ?? undefined : undefined)}><PayGlyph size={18} />{T("Pay", "תשלום")}</button>}
         <button className="ld-act" onClick={onShare}><ShareGlyph size={18} />{T("Share", "שיתוף")}</button>
       </div>

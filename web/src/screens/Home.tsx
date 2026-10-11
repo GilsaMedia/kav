@@ -7,7 +7,8 @@ import {
   minutesTo, timeOf, isLive,
 } from "../core.ts";
 import { LineBadge, LiveWaves, NextTimes } from "../ui.tsx";
-import { SearchGlyph, TripGlyph, BriefcaseGlyph, PinGlyph, MoreGlyph, FromToGlyph, PayGlyph } from "../icons.tsx";
+import { SearchGlyph, TripGlyph, BriefcaseGlyph, PinGlyph, MoreGlyph, FromToGlyph, PayGlyph, PlayGlyph } from "../icons.tsx";
+import type { SavedRide } from "../ride.ts";
 
 interface PlanResult { itineraries: Itinerary[]; resolved: Resolved }
 
@@ -21,8 +22,9 @@ function placeGlyph(label: string) {
 
 export type Opened = { to: Place; it: Itinerary; resolved: Resolved };
 
-export function Home({ onSearch, onGo, onOpen, onTrip, onPay, onAdd }: {
+export function Home({ onSearch, onGo, onOpen, onTrip, onPay, onAdd, ride, onResume }: {
   onSearch: () => void; onGo: (to: Place) => void; onOpen: (o: Opened) => void; onTrip: (t: RecentTrip) => void; onPay: () => void; onAdd: () => void;
+  ride: SavedRide | null; onResume: () => void;
 }) {
   const prefs = usePrefs();
   const here = useHere();
@@ -38,6 +40,16 @@ export function Home({ onSearch, onGo, onOpen, onTrip, onPay, onAdd }: {
           <span className="home-search-icon"><SearchGlyph size={18} /></span>
         </button>
       </div>
+
+      {/* The ride you started, first: back into Live Directions in one tap, until you stop it or it's over. */}
+      {ride && <button className="home-row home-ride" onClick={onResume}>
+        <span className="home-row-icon lit"><PlayGlyph size={20} /></span>
+        <div className="grow">
+          <b>{T("Your ride", "הנסיעה שלכם")}</b>
+          <div className="dim small" dir="auto">{T(`To ${ride.to} · arriving ${clock(ride.trip.arr)}`, `אל ${ride.to} · הגעה ב-${clock(ride.trip.arr)}`)}</div>
+        </div>
+        <span className="home-pill">{T("Resume", "המשך")}</span>
+      </button>}
 
       {frequent.length > 0 && <Frequent places={frequent} here={here} onGo={onGo} onOpen={onOpen} />}
 
