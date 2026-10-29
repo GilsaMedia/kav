@@ -17,15 +17,37 @@ maplibregl.addProtocol("pmtiles", protocol.tile);
 if (isNative) protocol.add(new PMTiles(nativeMapSource));
 const MAP_SOURCE = () => isNative ? "pmtiles://kav-map" : `pmtiles://${location.origin}/map/israel.pmtiles`;
 
-const styles = new Map<string, Promise<maplibregl.StyleSpecification>>();
-function styleFor(light: boolean) {
-  const key = light ? "light" : "black";
+// Kav's own map in its two looks, or satellite photos (online) under its names.
+type MapKind = "black" | "light" | "satellite";
+const styles = new Map<MapKind, Promise<maplibregl.StyleSpecification>>();
+function styleFor(key: MapKind) {
+  const light = key === "light";
   if (!styles.has(key)) styles.set(key, fetch(light ? "/map/style-light.json" : "/map/style.json").then(r => r.text()).then(text => {
     const origin = location.origin;
     const s = JSON.parse(text.replace("__MAP__", MAP_SOURCE()).replaceAll("asset://map/", `${origin}/map/`));
-    return s;
+    return key === "satellite" ? satellite(s) : s;
   }).catch(e => { styles.delete(key); throw e; }));
   return styles.get(key)!;
+}
+
+// Esri's World Imagery needs no key and has photos to zoom 19 over Israel.
+const PHOTOS = "https://services.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}";
+
+// The photos under the map's names, as the Android app draws them: the land, water, buildings and roads on top would
+// hide what the photo shows, so only the background and the names stay, the names white with a dark edge.
+function satellite(style: maplibregl.StyleSpecification): maplibregl.StyleSpecification {
+  const layers: maplibregl.LayerSpecification[] = [];
+  for (const layer of style.layers) {
+    if (layer.type === "background") {
+      layers.push(layer, { id: "satellite", type: "raster", source: "satellite" });
+    } else if (layer.type === "symbol" && layer.id !== "roads_oneway") {
+      const paint = layer.paint as Record<string, unknown> | undefined;
+      layers.push(paint && "text-halo-color" in paint
+        ? { ...layer, paint: { ...paint, "text-color": "rgba(255,255,255,0.95)", "text-halo-color": "rgba(0,0,0,0.75)", "text-halo-width": 1.5 } } as maplibregl.LayerSpecification
+        : layer);
+    }
+  }
+  return { ...style, sources: { ...style.sources, satellite: { type: "raster", tiles: [PHOTOS], tileSize: 256, maxzoom: 19 } }, layers };
 }
 
 export interface MapLine { coords: LatLon[]; color: string; width?: number; dashed?: boolean; opacity?: number }
@@ -88,19 +110,20 @@ export function MapView(props: Props) {
 // are kept and handed from screen to screen instead of being thrown away: going back to a screen or
 // switching tabs shows the map as it was, tiles and all.
 interface Owner { onPoint?: (id: string) => void; onMove?: (center: LatLon, zoom: number) => void }
-interface Pooled { m: maplibregl.Map; div: HTMLDivElement; light: boolean; loaded: Promise<void>; owner: Owner | null }
+interface Pooled { m: maplibregl.Map; div: HTMLDivElement; kind: MapKind; loaded: Promise<void>; owner: Owner | null }
 const pool: Pooled[] = [];
 const POOL_MAX = 3;
 
-async function acquire(light: boolean, host: HTMLElement, owner: Owner, center: LatLon | null | undefined, zoom: number): Promise<Pooled> {
-  const free = pool.find(p => !p.owner && p.light === light);
+async function acquire(kind: MapKind, host: HTMLElement, owner: Owner, center: LatLon | null | undefined, zoom: number): Promise<Pooled> {
+  const light = kind === "light";
+  const free = pool.find(p => !p.owner && p.kind === kind);
   if (free) {
     free.owner = owner;
     host.appendChild(free.div);
     free.m.resize();
     return free;
   }
-  const style = await styleFor(light);
+  const style = await styleFor(kind);
   const div = document.createElement("div");
   div.className = "map-canvas";
   host.appendChild(div);
@@ -109,9 +132,9 @@ async function acquire(light: boolean, host: HTMLElement, owner: Owner, center: 
     center: center ? [center[1], center[0]] : [34.7818, 32.0853], zoom: center ? zoom : 11,
     maxBounds: [[33.5, 29.0], [36.6, 33.7]], dragRotate: false, pitchWithRotate: false, fadeDuration: 0,
   });
-  const p: Pooled = { m, div, light, owner, loaded: Promise.resolve() };
+  const p: Pooled = { m, div, kind, owner, loaded: Promise.resolve() };
   m.touchZoomRotate.disableRotation();
-  m.addControl(new maplibregl.AttributionControl({ compact: true, customAttribution: "© OpenStreetMap" }), "bottom-left");
+  m.addControl(new maplibregl.AttributionControl({ compact: true, customAttribution: kind === "satellite" ? "Esri, Vantor, Earthstar Geographics · © OpenStreetMap" : "© OpenStreetMap" }), "bottom-left");
   p.loaded = new Promise(done => m.on("load", () => {
     m.addSource("kav-lines", { type: "geojson", data: lineFeatures([]) });
     m.addSource("kav-points", { type: "geojson", data: pointFeatures([]) });
@@ -170,15 +193,15 @@ function LiveMap({ lines = [], points = [], fit, fitKey, center, zoom = 14, foll
   const el = useRef<HTMLDivElement>(null);
   const map = useRef<maplibregl.Map | null>(null);
   const [ready, setReady] = useState(false);
-  const { look } = usePrefs();
-  const light = look === "light";
+  const { look, mapStyle } = usePrefs();
+  const kind: MapKind = mapStyle === "satellite" ? "satellite" : look === "light" ? "light" : "black";
   const owner = useRef<Owner>({});
   owner.current.onPoint = onPoint;
   owner.current.onMove = onMove;
 
   useEffect(() => {
     let gone = false, held: Pooled | null = null;
-    acquire(light, el.current!, owner.current, center, zoom).then(async p => {
+    acquire(kind, el.current!, owner.current, center, zoom).then(async p => {
       held = p;
       if (gone) { release(p); return; }
       await p.loaded;
@@ -188,7 +211,7 @@ function LiveMap({ lines = [], points = [], fit, fitKey, center, zoom = 14, foll
     }).catch(() => { /* no style: the map stays empty until it's shown again */ });
     return () => { gone = true; setReady(false); map.current = null; if (held) release(held); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [light]);
+  }, [kind]);
 
   const allPoints = user ? [...points, { id: "__user", at: user, color: "#4A90FF", kind: "user" as const, size: 7 }] : points;
   useEffect(() => {

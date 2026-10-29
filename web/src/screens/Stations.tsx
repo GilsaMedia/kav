@@ -1,10 +1,11 @@
 // The stops you saved, stops near you or found by name, and the departure board of one: live from Moovit, then
 // the timetable.
 import { useRef, useState, type ReactNode } from "react";
-import { T, api, useHere, useLoad, useNow, usePrefs, getPrefs, setPrefs, moved, clock, distanceText, metres, timeOf, modeColor, type Arrival, type Resolved, type SavedStop } from "../core.ts";
-import { Header, LineBadge, Spinner, Note, Eta, NextTimes } from "../ui.tsx";
+import { T, api, useHere, useLoad, useNow, usePrefs, getPrefs, setPrefs, moved, askPlan, streetViewUrl, clock, distanceText, metres, timeOf, modeColor, type Arrival, type Resolved, type SavedStop, type SavedLine, agencyOf } from "../core.ts";
+import { Header, SearchField, LineBadge, Spinner, Note, Eta, NextTimes } from "../ui.tsx";
 import { MapView } from "../MapView.tsx";
-import { StationMark, StarGlyph } from "../icons.tsx";
+import { StationMark, StarGlyph, PinGlyph, FlagGlyph } from "../icons.tsx";
+import { LineDetail } from "./Lines.tsx";
 import { useReorder, GripGlyph } from "../reorder.tsx";
 
 interface Stop extends SavedStop { metres?: number }
@@ -41,7 +42,7 @@ export function StationsScreen({ head }: { head?: ReactNode }) {
     <div className="screen">
       {head ?? <Header title={T("Stations", "תחנות")} />}
       <div className="pad">
-        <input className="field" value={q} onChange={e => setQ(e.target.value)} placeholder={T("Stop name or code", "שם תחנה או מספר")} dir="auto" enterKeyHint="search" />
+        <SearchField value={q} onChange={setQ} placeholder={T("Stop name or code", "שם תחנה או מספר")} />
       </div>
       <div className="scroll">
         {!q.trim() && saved.length > 0 && <>
@@ -92,15 +93,31 @@ function Board({ stop, onBack }: { stop: Stop; onBack: () => void }) {
   const live = useLoad<LiveData>(`live:${stop.i}`, s => api<LiveData>(`stations/live?i=${stop.i}`, undefined, s)
     .then(r => { poll.current = Math.min(Math.max(r.poll, 10), 60); return r; }), () => poll.current * 1000);
   const [tab, setTab] = useState<"live" | "timetable">("live");
+  // A line tapped on the board, opened at this stop.
+  const [line, setLine] = useState<{ lineId: number; group: SavedLine } | null>(null);
   const r = live.data?.resolved;
   const arrivals = (live.data?.arrivals ?? []).filter(a => timeOf(a) >= now - 60).sort((a, b) => timeOf(a) - timeOf(b));
 
+  if (line) return <LineDetail group={line.group} lineId={line.lineId} at={live.data?.moovitId ?? undefined} onBack={() => setLine(null)} />;
+  const place = { name: stop.name, detail: stop.city, lat: stop.lat, lon: stop.lon, type: 1 };
+  const openLine = (lineId: number) => {
+    const l = r?.lines[lineId];
+    if (!l?.groupId) return;
+    setLine({ lineId, group: { id: l.groupId, number: l.number, name: l.caption, cities: l.destination, agencyId: l.agencyId, agency: r!.agencies[l.agencyId] ?? "",
+      routeType: r!.routeTypes[l.agencyId] ?? 3 } });
+  };
   return (
     <div className="screen">
       <Header title={stop.name} sub={`${stop.city}${stop.code > 0 ? ` · ${T("stop", "תחנה")} ${stop.code}` : ""}`} back={onBack} right={<SaveStop stop={stop} />} />
       <MapView className="map-small" center={[stop.lat, stop.lon]} zoom={16}
         points={[{ id: "s", at: [stop.lat, stop.lon], color: modeColor(stop.type), kind: "place", size: 9 },
           ...arrivals.filter(a => a.tracked && a.lat).map(a => ({ id: `v${a.tripId}`, at: [a.lat, a.lon] as [number, number], color: modeColor(r?.routeTypes[r?.lines[a.lineId]?.agencyId ?? -1] ?? 3), kind: "vehicle" as const, label: r?.lines[a.lineId]?.number ?? "" }))]} />
+      {/* Planning from or to the stop, and a look at it in Street View. */}
+      <div className="pad stop-actions">
+        <button className="chip" onClick={() => askPlan({ from: place })}><PinGlyph size={15} />{T("From here", "יציאה מכאן")}</button>
+        <button className="chip" onClick={() => askPlan({ to: place })}><FlagGlyph size={15} />{T("To here", "הגעה לכאן")}</button>
+        <a className="chip" href={streetViewUrl(stop.lat, stop.lon)} target="_blank" rel="noreferrer">{T("Street View", "Street View")}</a>
+      </div>
       <div className="pad">
         <div className="segmented">
           <button className={tab === "live" ? "on" : ""} onClick={() => setTab("live")}>{T("Live", "בזמן אמת")}</button>
@@ -119,8 +136,8 @@ function Board({ stop, onBack }: { stop: Stop; onBack: () => void }) {
               const line = r?.lines[a.lineId];
               const type = line ? r?.routeTypes[line.agencyId] ?? 3 : 3;
               return (
-                <li key={`${a.lineId}`} className="row dep-row">
-                  <LineBadge number={line?.number ?? "…"} type={type} />
+                <li key={`${a.lineId}`} className="row dep-row" onClick={() => openLine(a.lineId)}>
+                  <LineBadge number={line?.number ?? "…"} type={type} agency={agencyOf(r, a.lineId)} />
                   <div className="row-main"><div className="dest" dir="auto">{line?.destination || line?.caption || ""}</div>
                     <div className="dim small">{a.platform ? `${T("Platform", "רציף")} ${a.platform}` : ""}{more.length > 0 && <>{a.platform ? " · " : ""}{T("then ", "אחר כך ")}<NextTimes ds={more.slice(0, 2)} now={now} /></>}</div></div>
                   <Eta d={a} now={now} />
@@ -138,7 +155,7 @@ function Board({ stop, onBack }: { stop: Stop; onBack: () => void }) {
               const mins = Math.round(d.inSecs / 60);
               return (
                 <li key={k} className="row">
-                  <LineBadge number={d.short} type={d.type} />
+                  <LineBadge number={d.short} type={d.type} agency={d.agency} />
                   <div className="row-main"><div dir="auto">{d.to}</div><div className="dim small">{d.agency}</div></div>
                   <span className="eta scheduled">{mins <= 0 ? <b>{T("now", "עכשיו")}</b> : mins < 60 ? <><b>{mins}</b><small>{T("min", "דק׳")}</small></> : <b>{clock(t)}</b>}</span>
                 </li>

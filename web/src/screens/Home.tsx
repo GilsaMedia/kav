@@ -4,7 +4,7 @@ import { useRef, useState } from "react";
 import {
   T, api, usePrefs, getPrefs, setPrefs, moved, useHere, useLoad, useNow, clock, agoText, routeTypeOf, soonest,
   type Place, type Favourite, type Itinerary, type Resolved, type RecentTrip, type LatLon, type Boarding,
-  minutesTo, timeOf, isLive,
+  minutesTo, timeOf, isLive, inTraffic, agencyOf,
 } from "../core.ts";
 import { LineBadge, LiveWaves, NextTimes } from "../ui.tsx";
 import { SearchGlyph, TripGlyph, BriefcaseGlyph, PinGlyph, MoreGlyph, FromToGlyph, PayGlyph, PlayGlyph } from "../icons.tsx";
@@ -144,7 +144,7 @@ function QuickWay({ to, here, brief, onWay }: {
   onWay?.({ it: best, resolved: plan.data!.resolved });
   const r = plan.data!.resolved;
   const mins = Math.max(1, Math.round((best.arr - now) / 60));
-  const badge = b && <LineBadge number={b.numbers.join(" / ")} type={routeTypeOf(r, b.ride.lineId)} />;
+  const badge = b && <LineBadge number={b.numbers.join(" / ")} type={routeTypeOf(r, b.ride.lineId)} agency={agencyOf(r, b.ride.lineId)} />;
   if (brief) return <div className="quick brief">{badge}{b ? <Arrives b={b} now={now} short /> : <span className="dim">{T(`${mins} min`, `${mins} דק׳`)}</span>}</div>;
   return (
     <div className="quick">
@@ -169,11 +169,13 @@ export function Arrives({ b, now, short }: { b: Boarding; now: number; short?: b
   const lead = m <= 0 ? T("Here", "מגיע") : m >= 60 ? T("Here at", "מגיע ב-") : T("Here in", "מגיע בעוד");
   const soon = tooSoon && <span className="too-soon"> · {T("probably too soon", "כנראה מוקדם מדי")}</span>;
   const then = after.length > 0 && <span className="dim"> · {T("then ", "אחר כך ")}<NextTimes ds={after} now={now} /></span>;
-  if (short) return <span className="arrives short">{lead} {when}{soon}{then}<span className="dim"> · {T(`ride ${b.rideMin} min`, `נסיעה ${b.rideMin} דק׳`)}</span></span>;
+  const traffic = inTraffic(first) && <span className={"traffic" + (first!.traffic === 3 ? " heavy" : "")}>{T("Delay due to traffic", "עיכוב בגלל עומסי תנועה")}</span>;
+  if (short) return <span className="arrives short">{lead} {when}{soon}{then}<span className="dim"> · {T(`ride ${b.rideMin} min`, `נסיעה ${b.rideMin} דק׳`)}</span>{traffic && <> · {traffic}</>}</span>;
   return (
     <div className="arrives">
       <div>{m <= 0 ? T("At your stop", "בתחנה שלך") : m >= 60 ? T("At your stop at", "בתחנה שלך ב-") : T("At your stop in", "בתחנה שלך בעוד")} {when}{soon}</div>
       {after.length > 0 && <div className="dim small">{T("then ", "אחר כך ")}<NextTimes ds={after} now={now} /></div>}
+      {traffic && <div className="small">{traffic}</div>}
       <div className="dim small"><bdi>{b.stop}</bdi>{b.walkMin > 0 ? T(` · ${b.walkMin} min walk`, ` · ${b.walkMin} דק׳ הליכה`) : ""}</div>
       <div className="dim small">{T(`Ride: ${b.rideMin} min`, `זמן נסיעה: ${b.rideMin} דק׳`)}</div>
     </div>

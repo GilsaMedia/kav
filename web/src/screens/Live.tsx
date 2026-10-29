@@ -1,6 +1,6 @@
 // Every stop around you and the vehicles reporting their position, refreshed as Moovit asks.
 import { useRef, useState } from "react";
-import { T, api, useHere, useLoad, useNow, metres, timeOf, modeColor, mergeResolved, emptyResolved, type Arrival, type Resolved, type LatLon } from "../core.ts";
+import { T, api, useHere, useLoad, useNow, metres, timeOf, modeColor, mergeResolved, emptyResolved, type Arrival, type Resolved, type LatLon, agencyOf } from "../core.ts";
 import { Header, LineBadge, Spinner, Note, Eta } from "../ui.tsx";
 import { MapView, type MapPoint } from "../MapView.tsx";
 import { LocateGlyph, CloseGlyph } from "../icons.tsx";
@@ -86,7 +86,7 @@ export function LiveScreen() {
           <div className="focus-head">
             <button className="icon-btn" onClick={() => setFocus(null)} aria-label={T("Close", "סגירה")}><CloseGlyph size={16} /></button>
             {focusStop && <b dir="auto">{focusStop.name}</b>}
-            {focusVehicle && <><LineBadge number={r.lines[focusVehicle.lineId]?.number ?? "…"} type={typeOf(focusVehicle.lineId)} />
+            {focusVehicle && <><LineBadge number={r.lines[focusVehicle.lineId]?.number ?? "…"} type={typeOf(focusVehicle.lineId)} agency={agencyOf(r, focusVehicle.lineId)} />
               <span dir="auto" className="grow">{T("to", "ל")}{r.lines[focusVehicle.lineId]?.destination ?? ""}</span></>}
           </div>
         )}
@@ -105,7 +105,7 @@ export function LiveScreen() {
             const away = a.nextStopIndex >= 0 && a.stopIndex >= a.nextStopIndex ? a.stopIndex - a.nextStopIndex : -1;
             return (
               <li key={`${a.tripId}:${a.stopId}`} className="row" onClick={() => a.tracked && setFocus({ kind: "vehicle", trip: String(a.tripId) })}>
-                <LineBadge number={line?.number ?? "…"} type={typeOf(a.lineId)} />
+                <LineBadge number={line?.number ?? "…"} type={typeOf(a.lineId)} agency={agencyOf(r, a.lineId)} />
                 <div className="row-main">
                   <div dir="auto">{line?.destination ? `${T("to", "ל")}${line.destination}` : ""}</div>
                   <div className="dim small" dir="auto">{stopById.get(a.stopId)?.name ?? ""}{away > 0 ? T(` · ${away} stops away`, ` · עוד ${away} תחנות`) : away === 0 ? T(" · at the stop", " · בתחנה") : ""}</div>

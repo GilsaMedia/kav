@@ -224,12 +224,17 @@ route("stations/live", async q => {
 route("lines/search", async q => {
   const need = (q.get("q") ?? "").trim().toLowerCase().split(/\s+/).filter(Boolean);
   const all = await M.lineCatalogue(await St.browse());
-  const hits = all.filter(l => {
+  const matching = all.filter(l => {
     const hay = `${l.number} ${l.name} ${l.cities} ${l.agency}`.toLowerCase();
     return need.every(w => w === l.number.toLowerCase() || hay.includes(w));
   });
+  // A line number finds that line (every operator's and town's), not every name with the number in it.
+  const number = need.length === 1 && /^\d+\p{L}?$/u.test(need[0]) ? need[0] : null;
+  const exactly = number ? matching.filter(l => l.number.toLowerCase() === number) : [];
+  const hits = exactly.length ? exactly : matching;
   const exact = (l: M.LineGroup) => need.length && l.number.toLowerCase() === need[0] ? 0 : 1;
-  hits.sort((a, b) => exact(a) - exact(b) || (parseInt(a.number) || 1e9) - (parseInt(b.number) || 1e9) || a.number.localeCompare(b.number));
+  // Lettered numbers (33א) after their number, in order.
+  hits.sort((a, b) => exact(a) - exact(b) || (parseInt(a.number) || 1e9) - (parseInt(b.number) || 1e9) || a.number.localeCompare(b.number, "he"));
   return { lines: hits.slice(0, 80), total: hits.length };
 });
 

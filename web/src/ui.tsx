@@ -1,7 +1,8 @@
 // Small pieces every screen uses.
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
-import { BackGlyph, ModeGlyph, modeOf, StationMark, StarGlyph, RecentGlyph, PinGlyph, LocateGlyph, SearchGlyph } from "./icons.tsx";
+import { BackGlyph, ModeGlyph, modeOf, StationMark, StarGlyph, RecentGlyph, PinGlyph, LocateGlyph, SearchGlyph, CloseGlyph } from "./icons.tsx";
 import qrcode from "qrcode-generator";
+import { operatorColour, operatorPlate, onScreen } from "./operators.ts";
 import {
   T, api, usePrefs, getPrefs, setPrefs, remember, useHere, modeName, distanceText, metres, currentHere, locateOnce, failure,
   clock, timeOf, isLive, isCancelled, isSeen, type Place, type Departure,
@@ -89,13 +90,20 @@ function plateFor(type: number) {
     : m === "funicular" ? PLATES.carmelit : m === "cable" || m === "gondola" ? PLATES.rakavlit : null;
 }
 
-export function LineBadge({ number, type, small }: { number: string; type: number; small?: boolean }) {
-  const plate = plateFor(type);
+// agency: the operator's name, for a bus line's plate in its colour (or, with Moovit's look chosen in Settings, a
+// grey plate over a strip of it).
+export function LineBadge({ number, type, small, agency }: { number: string; type: number; small?: boolean; agency?: string | null }) {
+  const prefs = usePrefs();
+  const light = prefs.look === "light";
+  const colour = !plateFor(type) && modeOf(type) === "bus" ? operatorColour(agency) : null;
+  const plate = plateFor(type) ?? (prefs.moovitBadges ? null : operatorPlate(colour, light));
+  const strip = colour && prefs.moovitBadges ? onScreen(colour, light) : null;
   // Trains are named for their whole route ("Herzliya - Jerusalem/Yitzhak Navon"): the mode reads better on a badge.
   // Several numbers on one plate ("72 / 27 / 282") stay numbers, however long.
   const text = !number || (number.length > 8 && !number.includes(" / ")) ? modeName(type) : number;
-  const style = plate ? { "--plate-fill": plate[0], "--plate-edge": plate[1], "--plate-ink": plate[2], "--plate-glyph": plate[2] } as CSSProperties : undefined;
-  return <span className={"badge" + (small ? " small" : "")} style={style} dir="auto" title={number}>
+  const style = plate ? { "--plate-fill": plate[0], "--plate-edge": plate[1], "--plate-ink": plate[2], "--plate-glyph": plate[2] } as CSSProperties
+    : strip ? { "--strip": strip } as CSSProperties : undefined;
+  return <span className={"badge" + (small ? " small" : "") + (strip ? " strip" : "")} style={style} dir="auto" title={number}>
     <ModeGlyph type={type} size={small ? 11 : 12} />{text}
   </span>;
 }
@@ -192,7 +200,39 @@ export function Qr({ text, size = 240 }: { text: string; size?: number }) {
   return <div className="qr" style={{ width: size, height: size }} dangerouslySetInnerHTML={{ __html: svg }} />;
 }
 
+// ---- searching -----------------------------------------------------------------------------------
+
+// A search field with an X while it holds text, which empties it and keeps the keyboard up.
+export function SearchField({ value, onChange, placeholder, inputRef, icon, inputMode }: {
+  value: string; onChange: (v: string) => void; placeholder: string; inputRef?: React.RefObject<HTMLInputElement | null>; icon?: boolean;
+  inputMode?: "search" | "text";
+}) {
+  const own = useRef<HTMLInputElement>(null);
+  const ref = inputRef ?? own;
+  return (
+    <div className={"search-field" + (icon ? "" : " bare")}>
+      {icon && <SearchGlyph size={18} />}
+      <input ref={ref} className="field" value={value} onChange={e => onChange(e.target.value)} dir="auto" placeholder={placeholder}
+        enterKeyHint="search" inputMode={inputMode} />
+      {value && <button className="field-clear" onMouseDown={e => e.preventDefault()} onClick={() => { onChange(""); ref.current?.focus(); }}
+        aria-label={T("Clear", "ניקוי")}><CloseGlyph size={12} /></button>}
+    </div>
+  );
+}
+
+// Coordinates typed or pasted in ("32.0853, 34.7818"), as a place of their own.
+export function coordinatesIn(text: string): Place | null {
+  const m = text.trim().match(/^\(?\s*(-?\d{1,2}(?:\.\d+)?)\s*[,\s]\s*(-?\d{1,3}(?:\.\d+)?)\s*\)?$/);
+  if (!m) return null;
+  const lat = Number(m[1]), lon = Number(m[2]);
+  if (Math.abs(lat) > 90 || Math.abs(lon) > 180 || !m[1].includes(".") || !m[2].includes(".")) return null;
+  return { name: `${lat.toFixed(5)}, ${lon.toFixed(5)}`, detail: T("Coordinates", "קואורדינטות"), lat, lon };
+}
+
 // ---- choosing a place ------------------------------------------------------------------------
+
+// The last search in the place picker, there again (and selected, to type over) when it opens.
+let lastQuery = "";
 
 interface GtfsStop { i: number; name: string; city: string; code: number; lat: number; lon: number; type: number }
 
@@ -202,17 +242,19 @@ export function PlacePicker({ title, onPick, onClose, allowHere = true }: {
   title: string; onPick: (p: Place) => void; onClose: () => void; allowHere?: boolean;
 }) {
   const prefs = usePrefs();
-  const [q, setQ] = useState("");
+  const [q, setQ0] = useState(lastQuery);
+  const setQ = (v: string) => { lastQuery = v; setQ0(v); };
   const [results, setResults] = useState<{ places: Place[]; stops: GtfsStop[]; error: string | null } | null>(null);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const here = useHere();
   const input = useRef<HTMLInputElement>(null);
-  useEffect(() => { input.current?.focus(); }, []);
+  useEffect(() => { input.current?.focus(); input.current?.select(); }, []);
+  const coords = coordinatesIn(q);
 
   useEffect(() => {
     const text = q.trim();
-    if (text.length < 2) { setResults(null); return; }
+    if (text.length < 2 || coordinatesIn(text)) { setResults(null); return; }
     const ac = new AbortController();
     const t = setTimeout(() => {
       setBusy(true);
@@ -237,14 +279,17 @@ export function PlacePicker({ title, onPick, onClose, allowHere = true }: {
   return (
     <div className={"overlay" + (leaving ? " leaving" : "")}>
       <Header title={title} back={leave} />
-      <div className="pad search-field">
-        <SearchGlyph size={18} />
-        <input ref={input} className="field" value={q} onChange={e => setQ(e.target.value)} dir="auto"
-          placeholder={T("Search a place, address or stop", "חיפוש מקום, כתובת או תחנה")} enterKeyHint="search" />
+      <div className="pad">
+        <SearchField icon inputRef={input} value={q} onChange={setQ} placeholder={T("Search a place, address or stop", "חיפוש מקום, כתובת או תחנה")} />
       </div>
       <div className="scroll">
         {err && <div className="pad"><Note tone="error">{err}</Note></div>}
-        {!results && (
+        {coords && <ul className="list"><li className="row" onClick={() => pick(coords)}>
+          <span className="row-icon lit"><PinGlyph size={18} /></span>
+          <div className="row-main"><div className="ltr">{coords.name}</div><div className="dim">{coords.detail}</div></div>
+          <span className="dim small">{far(coords)}</span>
+        </li></ul>}
+        {!results && !coords && (
           <ul className="list">
             {allowHere && <li className="row" onClick={pickHere}><span className="row-icon lit"><LocateGlyph size={18} /></span><div className="row-main"><div>{HERE_NAME()}</div></div></li>}
             {prefs.favourites.map(f => (

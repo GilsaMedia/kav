@@ -13,6 +13,7 @@ function searchWords(s: string): string[] {
   return s.trim().normalize("NFD").replace(/\p{M}/gu, "").toLowerCase()
     .replace(/[^\p{L}\p{N}]/gu, " ").split(" ").filter(Boolean);
 }
+const STATION_WORDS = new Set(["תחנת", "תחנה"]);
 const spaced = (s: string) => " " + searchWords(s).join(" ") + " ";
 
 export class Net {
@@ -123,17 +124,22 @@ export class Net {
 
   // Like Moovit's own stop search: every typed word has to start a word of the name, code or city.
   searchStops(q: string, at: [number, number] | null, limit = 40): number[] {
-    const need = searchWords(q).map(w => " " + w);
-    if (!need.length) return [];
+    const words = searchWords(q);
+    if (!words.length) return [];
+    // The timetable shortens "תחנת"/"תחנה" to "ת." ("ת.רכבת חדרה מערב"), so a typed one also stands for the short form.
+    const need = words.map(w => STATION_WORDS.has(w) ? [" " + w, " ת "] : [" " + w]);
+    // A typed code finds its own stop first, before the stops whose codes only start with it.
+    const code = words.length === 1 && /^\d+$/.test(words[0]) ? Number(words[0]) : -1;
     const hits: number[] = [];
     const codes = new Set<number>();
     for (let i = 0; i < this.words.length; i++) {
       const w = this.words[i] + spaced(this.cityName(i)).slice(1);
-      if (need.every(t => w.includes(t)) && (this.code[i] <= 0 || !codes.has(this.code[i]))) { codes.add(this.code[i]); hits.push(i); }
+      if (need.every(forms => forms.some(t => w.includes(t))) && (this.code[i] <= 0 || !codes.has(this.code[i]))) { codes.add(this.code[i]); hits.push(i); }
     }
-    if (!at) return hits.sort((a, b) => this.name[a].localeCompare(this.name[b])).slice(0, limit);
+    const own = (i: number) => this.code[i] === code ? 0 : 1;
+    if (!at) return hits.sort((a, b) => own(a) - own(b) || this.name[a].localeCompare(this.name[b])).slice(0, limit);
     const sq = (i: number) => (at[0] - this.lat[i]) ** 2 + (at[1] - this.lon[i]) ** 2;
-    return hits.sort((a, b) => sq(a) - sq(b)).slice(0, limit);
+    return hits.sort((a, b) => own(a) - own(b) || sq(a) - sq(b)).slice(0, limit);
   }
 
   nearestStops(la: number, lo: number, k = 24, radius = 2500): [number, number][] {

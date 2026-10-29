@@ -2,7 +2,7 @@
 // or at a station, ending a train ride, and the tickets, history and bills on the account.
 import { useEffect, useRef, useState } from "react";
 import jsQR from "jsqr";
-import { T, api, useLoad, useNow, clock, shekels, failure, locateOnce, ApiError, metres, routeTypeOf, type LatLon, type Resolved } from "../core.ts";
+import { T, api, useLoad, useNow, clock, shekels, failure, locateOnce, ApiError, metres, routeTypeOf, type LatLon, type Resolved, agencyOf } from "../core.ts";
 import { Header, Spinner, Note, Qr, Sheet, LineBadge } from "../ui.tsx";
 import { ModeGlyph, QrGlyph, MinusGlyph, PlusGlyph, BackGlyph } from "../icons.tsx";
 import { isNative, scanQr, CameraDenied } from "../native.ts";
@@ -513,7 +513,7 @@ function FareFinder({ offer, at, off, onFare }: { offer: Offer; at: LatLon | nul
     <div className="list-head">{T("Which bus are you on?", "באיזה אוטובוס אתם?")}</div>
     {found.buses.map(b => (
       <button key={String(b.tripId)} className="card row-card" onClick={() => setBus(b)}>
-        <span className="row-line"><LineBadge number={lineOf(b)?.number ?? "?"} type={routeTypeOf(found.resolved, b.lineId)} /><span dir="auto">{lineOf(b)?.destination ?? ""}</span></span>
+        <span className="row-line"><LineBadge number={lineOf(b)?.number ?? "?"} type={routeTypeOf(found.resolved, b.lineId)} agency={agencyOf(found.resolved, b.lineId)} /><span dir="auto">{lineOf(b)?.destination ?? ""}</span></span>
         <span className="dim small">{b.metres != null && b.metres < 120 ? T("here", "כאן") : b.inSecs > 60 ? T(`in ${Math.round(b.inSecs / 60)} min`, `בעוד ${Math.round(b.inSecs / 60)} דק׳`) : T("now", "עכשיו")}</span>
       </button>
     ))}

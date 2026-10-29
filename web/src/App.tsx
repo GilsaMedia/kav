@@ -1,10 +1,10 @@
-import { useState, type ComponentType } from "react";
-import { T, usePrefs, getPrefs, setPrefs, clock, type LatLon, type Look } from "./core.ts";
+import { useEffect, useState, type ComponentType } from "react";
+import { T, usePrefs, getPrefs, setPrefs, usePlanAsk, clock, type LatLon, type Look } from "./core.ts";
 import { AccentPicker } from "./Accent.tsx";
 import { Onboarding, SupportPrompt } from "./Onboarding.tsx";
 import { Header, stayPut, useLeaving, liveWhy } from "./ui.tsx";
 import { DirectionsGlyph, LinesTabGlyph, GearGlyph, CloseGlyph } from "./icons.tsx";
-import { isNative, removeMap, getMapState, tryTripLive, type LiveResult } from "./native.ts";
+import { isNative, removeMap, getMapState, tryTripLive, say, type LiveResult } from "./native.ts";
 import { canNotify, useJobs, removeReminder } from "./remind.ts";
 import { PlanScreen } from "./screens/Plan.tsx";
 import { StationsScreen } from "./screens/Stations.tsx";
@@ -31,6 +31,10 @@ export function App() {
   // Directions tapped again while it's open goes back to its home screen, as an iPhone tab does.
   const [planHome, setPlanHome] = useState(0);
   const go = (t: Tab) => { if (t !== tab) stayPut(); else if (t === "plan") setPlanHome(n => n + 1); setTab(t); try { sessionStorage.setItem("kav-tab", t); } catch { /* ignore */ } };
+
+  // A trip asked for from a stop's board opens in Directions.
+  const ask = usePlanAsk();
+  useEffect(() => { if (ask) go("plan"); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [ask?.n]);
 
   // The first launch sets Kav up before anything else, as on Android.
   if (!prefs.onboarded) return <div className="app" key={prefs.lang}><Onboarding onDone={() => setPrefs({ onboarded: true })} /></div>;
@@ -75,6 +79,14 @@ function LinesTab() {
   </>;
 }
 
+// A new GitHub issue with Kav's version and the phone filled in.
+const ISSUES = "https://github.com/GilsaMedia/kav/issues/new";
+function issueUrl(kind: "bug" | "idea") {
+  const about = `Kav for iPhone ${__KAV_VERSION__} · ${navigator.userAgent.match(/OS [\d_]+/)?.[0]?.replace(/_/g, ".") ?? navigator.platform}`;
+  const body = kind === "bug" ? `What happened:\n\nWhat you expected:\n\nSteps:\n1. \n\n---\n${about}` : `What you'd like Kav to do:\n\nWhy:\n\n---\n${about}`;
+  return `${ISSUES}?labels=${kind === "bug" ? "bug" : "enhancement"}&body=${encodeURIComponent(body)}`;
+}
+
 function Settings() {
   const prefs = usePrefs();
   const looks: { look: Look; label: string }[] = [
@@ -99,10 +111,32 @@ function Settings() {
             </div>
             <input type="checkbox" className="switch" checked={prefs.liquid} onChange={e => setPrefs({ liquid: e.target.checked })} />
           </label>
+          <label className="toggle card pad">
+            <div>
+              <div>{T("Line badges like Moovit's", "תגיות קו כמו ב-Moovit")}</div>
+              <div className="dim small">{T("Bus lines on a grey badge over a strip of their operator's colour, rather than on that colour.", "קווי אוטובוס על תגית אפורה עם פס בצבע המפעיל, במקום על הצבע עצמו.")}</div>
+            </div>
+            <input type="checkbox" className="switch" checked={prefs.moovitBadges} onChange={e => setPrefs({ moovitBadges: e.target.checked })} />
+          </label>
+          <div className="list-head">{T("Map", "מפה")}</div>
+          <div className="segmented">
+            <button className={prefs.mapStyle !== "satellite" ? "on" : ""} onClick={() => setPrefs({ mapStyle: "kav" })}>{T("Kav's map", "המפה של Kav")}</button>
+            <button className={prefs.mapStyle === "satellite" ? "on" : ""} onClick={() => setPrefs({ mapStyle: "satellite" })}>{T("Satellite", "לוויין")}</button>
+          </div>
+          {prefs.mapStyle === "satellite" && <div className="dim small">{T("Photos from Esri, loaded online as you look around. Kav's own map works with no connection.",
+            "תמונות מ-Esri, נטענות מהרשת בזמן שאתם מסתכלים. המפה של Kav עובדת גם בלי חיבור.")}</div>}
           <LockScreenTest />
           <div className="list-head">{T("Accent", "צבע הדגשה")}</div>
           <div className="card pad stack center-items"><AccentPicker /></div>
           {canNotify && <Notifications />}
+          <label className="toggle card pad">
+            <div>
+              <div>{T("Read trip alerts out loud", "הקראת התראות בנסיעה")}</div>
+              <div className="dim small">{T("In Live Directions: each step as you reach it, your bus two minutes away, and getting off at the next stop.", "בניווט החי: כל שלב כשמגיעים אליו, האוטובוס שלכם בעוד שתי דקות, והירידה בתחנה הבאה.")}</div>
+            </div>
+            <input type="checkbox" className="switch" checked={prefs.spokenAlerts}
+              onChange={e => { setPrefs({ spokenAlerts: e.target.checked }); if (e.target.checked) say(T("Alerts will sound like this", "כך יישמעו ההתראות")); }} />
+          </label>
           <div className="list-head">{T("Privacy", "פרטיות")}</div>
           <label className="toggle card pad">
             <div>
@@ -116,6 +150,12 @@ function Settings() {
           <div className="list-head">{T("Saved", "שמורים")}</div>
           <button className="btn" onClick={() => { if (confirm(T("Clear recent places?", "לנקות את המקומות האחרונים?"))) setPrefs({ recents: [] }); }}>{T("Clear recent places", "ניקוי מקומות אחרונים")}</button>
           {isNative && getMapState().k === "ready" && <button className="btn" onClick={() => { if (confirm(T("Remove the map from this phone? It can be downloaded again.", "להסיר את המפה מהטלפון? אפשר להוריד אותה שוב."))) removeMap(); }}>{T("Remove the map (185 MB)", "הסרת המפה (185 MB)")}</button>}
+          <div className="list-head">{T("Help and feedback", "עזרה ומשוב")}</div>
+          <div className="row-btns">
+            <a className="btn" href={issueUrl("bug")} target="_blank" rel="noreferrer">{T("Found a bug", "מצאתי באג")}</a>
+            <a className="btn" href={issueUrl("idea")} target="_blank" rel="noreferrer">{T("Request a feature", "בקשת פיצ׳ר")}</a>
+          </div>
+          <a className="btn" href="https://www.buymeacoffee.com/Noamm" target="_blank" rel="noreferrer">{T("Buy Kav's author a coffee", "קנו קפה למפתח של Kav")}</a>
           <p className="dim small">{isNative ? T(
             "Kav plans with Moovit, reads the Ministry of Transport's timetable from inside the app, and draws OpenStreetMap from a file on this phone. No ads, no account, no analytics.",
             "Kav מתכננת עם Moovit, קוראת את לוח הזמנים של משרד התחבורה מתוך האפליקציה, ומציירת את OpenStreetMap מקובץ שבטלפון. בלי פרסומות, בלי חשבון ובלי מעקב.") : T(

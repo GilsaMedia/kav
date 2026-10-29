@@ -201,6 +201,16 @@ export function buzz(kind: "tap" | "alert") {
   else navigator.vibrate?.(kind === "tap" ? 10 : [200, 100, 200]);
 }
 
+// Said out loud, in the app's language, cutting off whatever was being said.
+export function say(text: string) {
+  const s = window.speechSynthesis;
+  if (!s || !text) return;
+  s.cancel();
+  const u = new SpeechSynthesisUtterance(text.replace(/\//g, ","));
+  u.lang = document.documentElement.lang === "he" ? "he-IL" : "en-US";
+  s.speak(u);
+}
+
 export function keepAwake(on: boolean) {
   if (isNative) KavNative.keepAwake({ on }).catch(() => {});
 }

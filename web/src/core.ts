@@ -17,6 +17,12 @@ export interface Prefs {
   trips: RecentTrip[];
   // The lines and the stops you starred, in the order you put them.
   savedLines: SavedLine[]; savedStops: SavedStop[];
+  // Bus line plates as Moovit draws them (grey over a strip of the operator's colour) rather than in that colour.
+  moovitBadges: boolean;
+  // Live Directions says its alerts out loud too.
+  spokenAlerts: boolean;
+  // Kav's own map, or satellite photos under its names (online).
+  mapStyle: "kav" | "satellite";
 }
 export interface RecentTrip { from: Place | null; to: Place; at: number }
 // A line group as the line search lists it, and a stop as the stop search lists it.
@@ -50,7 +56,7 @@ export function agoText(ms: number) {
 export const DEFAULT_ACCENT = "#9ABEFF";
 const DEFAULTS: Prefs = {
   lang: "he", look: "dark", privateSearch: true, recents: [], favourites: [], modes: [], accent: DEFAULT_ACCENT, liquid: true,
-  onboarded: false, supportShown: false, trips: [], savedLines: [], savedStops: [],
+  onboarded: false, supportShown: false, trips: [], savedLines: [], savedStops: [], moovitBadges: false, spokenAlerts: false, mapStyle: "kav",
 };
 const KEY = "kav-prefs";
 
@@ -89,6 +95,23 @@ export function remember(p: Place) {
 
 // English first, then Hebrew, as the Android app writes its strings.
 export const T = (en: string, he: string) => (prefs.lang === "he" ? he : en);
+
+// ---- planning from elsewhere ------------------------------------------------------------------
+
+// A trip asked for from another tab (a stop's "From here" or "To here"): Directions opens with it.
+export interface PlanAsk { from: Place | null; to: Place | null; n: number }
+let planAsk: PlanAsk | null = null;
+const planListeners = new Set<() => void>();
+export function askPlan(a: { from?: Place | null; to?: Place | null }) {
+  planAsk = { from: a.from ?? null, to: a.to ?? null, n: (planAsk?.n ?? 0) + 1 };
+  planListeners.forEach(l => l());
+}
+export function usePlanAsk(): PlanAsk | null {
+  return useSyncExternalStore(cb => { planListeners.add(cb); return () => planListeners.delete(cb); }, () => planAsk);
+}
+
+// Google's Street View at a spot, in the Google Maps app when it's there, else on the web.
+export const streetViewUrl = (lat: number, lon: number) => `https://www.google.com/maps/@?api=1&map_action=pano&viewpoint=${lat},${lon}`;
 
 // ---- the API ---------------------------------------------------------------------------------
 
@@ -340,11 +363,15 @@ export const mergeResolved = (a: Resolved, b?: Resolved | null): Resolved => b ?
 export const timeOf = (d: Departure) => d.rtUtc > 0 ? d.rtUtc : d.statisticalUtc > 0 ? d.statisticalUtc : d.staticUtc;
 export const isLive = (d: Departure) => d.status !== 3 && !d.frequency && d.vehicleStatus !== 2 && d.rtUtc > 0 && d.vehicleStatus !== 3;
 export const isCancelled = (d: Departure) => d.status === 3;
+// Held up in traffic, as Moovit says (its traffic status: 1 none, 2 medium, 3 heavy), so the ride may take longer too.
+export const inTraffic = (d: Departure | null | undefined) => !!d && (d.traffic === 2 || d.traffic === 3);
 // Its place is known right now: Moovit has the vehicle's position from the last few minutes, so it's on the map.
 export const isSeen = (d: Departure) => {
   const a = d as Partial<Arrival>;
   return !!a.tracked && !!a.lat && !!a.sampleUtc && Date.now() / 1000 - a.sampleUtc < 180;
 };
+// The operator of a line, by name, for its plate's colour.
+export const agencyOf = (r: Resolved | undefined, lineId: number) => { const l = r?.lines[lineId]; return l ? r!.agencies[l.agencyId] : undefined; };
 export const routeTypeOf = (r: Resolved, lineId: number) => { const l = r.lines[lineId]; return l ? r.routeTypes[l.agencyId] ?? 3 : 3; };
 export const options = (l: Leg) => (l.alternatives.length ? l.alternatives : [l]);
 
