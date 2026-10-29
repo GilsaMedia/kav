@@ -2,12 +2,13 @@
 // time is over, so leaving Live Directions for a moment, or closing Kav, never loses it.
 import { useSyncExternalStore } from "react";
 import { useNow, type Itinerary, type Resolved } from "./core.ts";
+import { endRideLines } from "./remind.ts";
 
 export interface SavedRide { trip: Itinerary; resolved: Resolved; from: string; to: string; step: number }
 
 const KEY = "kav-ride";
 // Over a few minutes after its arrival: a little late is still the same ride.
-const GRACE_MS = 5 * 60_000;
+export const GRACE_MS = 5 * 60_000;
 
 let ride: SavedRide | null = (() => { try { return JSON.parse(localStorage.getItem(KEY) ?? "null"); } catch { return null; } })();
 const listeners = new Set<() => void>();
@@ -30,7 +31,8 @@ export function useRide(): SavedRide | null {
 }
 
 export const saveRide = (r: SavedRide) => set(r);
-export const clearRide = () => set(null);
+// Stopped: its lines' alerts stop with it.
+export const clearRide = () => { set(null); endRideLines(); };
 export function setRideStep(step: number) {
   if (ride && ride.step !== step) set({ ...ride, step });
 }

@@ -2,13 +2,14 @@
 // saved place right now, paying for a ride, the saved places and the trips planned lately.
 import { useRef, useState } from "react";
 import {
-  T, api, usePrefs, getPrefs, setPrefs, useHere, useLoad, useNow, clock, agoText, routeTypeOf, soonest,
+  T, api, usePrefs, getPrefs, setPrefs, moved, useHere, useLoad, useNow, clock, agoText, routeTypeOf, soonest,
   type Place, type Favourite, type Itinerary, type Resolved, type RecentTrip, type LatLon, type Boarding,
   minutesTo, timeOf, isLive,
 } from "../core.ts";
 import { LineBadge, LiveWaves, NextTimes } from "../ui.tsx";
 import { SearchGlyph, TripGlyph, BriefcaseGlyph, PinGlyph, MoreGlyph, FromToGlyph, PayGlyph, PlayGlyph } from "../icons.tsx";
 import type { SavedRide } from "../ride.ts";
+import { useReorder, GripGlyph } from "../reorder.tsx";
 
 interface PlanResult { itineraries: Itinerary[]; resolved: Resolved }
 
@@ -28,6 +29,8 @@ export function Home({ onSearch, onGo, onOpen, onTrip, onPay, onAdd, ride, onRes
 }) {
   const prefs = usePrefs();
   const here = useHere();
+  const [editing, setEditing] = useState(false);
+  const { list, grip } = useReorder((from, to) => setPrefs({ favourites: moved(getPrefs().favourites, from, to) }));
   // The frequent destinations: the saved places, or the latest trips' ends while there are none.
   const frequent: Favourite[] = prefs.favourites.length ? prefs.favourites
     : prefs.trips.slice(0, 3).map(t => ({ ...t.to, label: t.to.name }));
@@ -59,18 +62,20 @@ export function Home({ onSearch, onGo, onOpen, onTrip, onPay, onAdd, ride, onRes
         <span className="home-pill">{T("Start", "התחלה")}</span>
       </button>
 
-      <div className="home-head"><span>{T("Favorites", "מועדפים")}</span><button className="link" onClick={onAdd}>{T("Add", "הוספה")}</button></div>
-      <ul className="list home-list">
+      <div className="home-head"><span>{T("Favorites", "מועדפים")}</span><span className="home-head-links">
+        {prefs.favourites.length > 1 && <button className="link" onClick={() => setEditing(!editing)}>{editing ? T("Done", "סיום") : T("Edit", "עריכה")}</button>}
+        {!editing && <button className="link" onClick={onAdd}>{T("Add", "הוספה")}</button>}</span></div>
+      <ul className="list home-list" ref={list}>
         {!prefs.favourites.length && <li className="pad dim small">{T("Save Home, Work or any place to get there in one tap.", "שמרו את הבית, העבודה או כל מקום כדי להגיע אליו בהקשה אחת.")}</li>}
-        {prefs.favourites.map(f => (
-          <li key={f.label + f.lat} className="home-fav" onClick={() => onGo(f)}>
+        {prefs.favourites.map((f, i) => (
+          <li key={f.label + f.lat} className="home-fav" data-row onClick={() => { if (!editing) onGo(f); }}>
             <span className="home-row-icon">{placeGlyph(f.label)}</span>
             <div className="row-main">
               <div className="dest" dir="auto">{f.label}</div>
               <QuickWay to={f} here={here} brief />
               {f.label !== f.name && <div className="dim small" dir="auto">{f.name}{f.detail ? ` · ${f.detail}` : ""}</div>}
             </div>
-            <FavMenu f={f} />
+            {editing ? <button {...grip(i)}><GripGlyph /></button> : <FavMenu f={f} />}
           </li>
         ))}
       </ul>

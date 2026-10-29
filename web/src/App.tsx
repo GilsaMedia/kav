@@ -3,34 +3,28 @@ import { T, usePrefs, getPrefs, setPrefs, clock, type LatLon, type Look } from "
 import { AccentPicker } from "./Accent.tsx";
 import { Onboarding, SupportPrompt } from "./Onboarding.tsx";
 import { Header, stayPut, useLeaving, liveWhy } from "./ui.tsx";
-import { DirectionsGlyph, StationTabGlyph, LinesTabGlyph, LiveTabGlyph, TicketGlyph, GearGlyph, CloseGlyph } from "./icons.tsx";
+import { DirectionsGlyph, LinesTabGlyph, GearGlyph, CloseGlyph } from "./icons.tsx";
 import { isNative, removeMap, getMapState, tryTripLive, type LiveResult } from "./native.ts";
-import { canNotify, useJobs, removeReminder, unfollowLine } from "./remind.ts";
-import { isActiveLine } from "../backend/jobs.ts";
+import { canNotify, useJobs, removeReminder } from "./remind.ts";
 import { PlanScreen } from "./screens/Plan.tsx";
 import { StationsScreen } from "./screens/Stations.tsx";
 import { LinesScreen } from "./screens/Lines.tsx";
-import { LiveScreen } from "./screens/Live.tsx";
 import { PayScreen } from "./screens/Pay.tsx";
 
-type Tab = "plan" | "stations" | "lines" | "live" | "pay" | "settings";
+type Tab = "plan" | "lines" | "settings";
 
-// As Moovit names and draws them: the tab you are on is filled and lit.
+// As Moovit names and draws them: the tab you are on is filled and lit. Only three, so the bar isn't crowded:
+// stops are under Lines, and paying is on the Directions home and on each trip.
 const TABS: { tab: Tab; Icon: ComponentType<{ size?: number; on?: boolean }>; label: () => string }[] = [
   { tab: "plan", Icon: DirectionsGlyph, label: () => T("Directions", "מסלולים") },
-  { tab: "stations", Icon: StationTabGlyph, label: () => T("Stations", "תחנות") },
   { tab: "lines", Icon: LinesTabGlyph, label: () => T("Lines", "קווים") },
-  { tab: "live", Icon: LiveTabGlyph, label: () => T("Live", "חי") },
-  { tab: "pay", Icon: TicketGlyph, label: () => T("Tickets", "כרטיסים") },
   { tab: "settings", Icon: GearGlyph, label: () => T("Settings", "הגדרות") },
 ];
+const tabOf = (t: string | null): Tab => TABS.some(x => x.tab === t) ? t as Tab : "plan";
 
 export function App() {
   const prefs = usePrefs();
-  const [tab, setTab] = useState<Tab>(() => (sessionStorage.getItem("kav-tab") as Tab) || "plan");
-  const [liveSeen, setLiveSeen] = useState(false);
-  if (tab === "live" && !liveSeen) setLiveSeen(true);
-  const [payStart, setPayStart] = useState<{ at?: LatLon; routeType?: number; off?: LatLon } | null>(null);
+  const [tab, setTab] = useState<Tab>(() => tabOf(sessionStorage.getItem("kav-tab")));
   // Paying from a trip: a sheet over it with only the payment, the trip still underneath.
   const [paySheet, setPaySheet] = useState<{ at?: LatLon; routeType?: number; off?: LatLon } | null>(null);
   // Tabs crossfade, as on Android: the screen inside doesn't slide.
@@ -46,11 +40,7 @@ export function App() {
       <main className="main">
         {/* Screens stay mounted, so a trip or a board is still there after a look at another tab. */}
         <div hidden={tab !== "plan"} className="tab-page"><PlanScreen home={planHome} onPay={(at, routeType, off) => setPaySheet({ at, routeType, off })} /></div>
-        <div hidden={tab !== "stations"} className="tab-page"><StationsScreen /></div>
-        <div hidden={tab !== "lines"} className="tab-page"><LinesScreen /></div>
-        {/* Live stays too once opened: its map and vehicles are there when you come back. */}
-        {(tab === "live" || liveSeen) && <div hidden={tab !== "live"} className="tab-page"><LiveScreen /></div>}
-        {tab === "pay" && <div className="tab-page"><PayScreen start={payStart} onStarted={() => setPayStart(null)} /></div>}
+        <div hidden={tab !== "lines"} className="tab-page"><LinesTab /></div>
         {tab === "settings" && <div className="tab-page"><Settings /></div>}
       </main>
       <nav className="tabbar">
@@ -64,6 +54,25 @@ export function App() {
       {!prefs.supportShown && <SupportPrompt onDone={() => setPrefs({ supportShown: true })} />}
     </div>
   );
+}
+
+// Lines and stops, one tab: a switch at the top between the two, each keeping its place.
+function LinesTab() {
+  usePrefs(); // the words follow the language
+  const [part, setPart] = useState<"lines" | "stops">(() => sessionStorage.getItem("kav-lines-part") === "stops" ? "stops" : "lines");
+  const pick = (p: "lines" | "stops") => { if (p !== part) stayPut(); setPart(p); try { sessionStorage.setItem("kav-lines-part", p); } catch { /* ignore */ } };
+  const head = (
+    <header className="header">
+      <div className="segmented hub-switch">
+        <button className={part === "lines" ? "on" : ""} onClick={() => pick("lines")}>{T("Lines", "קווים")}</button>
+        <button className={part === "stops" ? "on" : ""} onClick={() => pick("stops")}>{T("Stops", "תחנות")}</button>
+      </div>
+    </header>
+  );
+  return <>
+    <div hidden={part !== "lines"} className="tab-page"><LinesScreen head={head} /></div>
+    <div hidden={part !== "stops"} className="tab-page"><StationsScreen head={head} /></div>
+  </>;
 }
 
 function Settings() {
@@ -146,30 +155,22 @@ function LockScreenTest() {
   );
 }
 
-// What Kav will tell you about while it's closed: the reminders you set, and the lines you follow.
+// What Kav will tell you about while it's closed: the reminders you set. Nothing else comes unless you've
+// started a ride, and then only about that ride.
 function Notifications() {
   const jobs = useJobs();
-  const now = Date.now();
-  const lines = jobs.lines.filter(l => isActiveLine(l, now));
   return <>
     <div className="list-head">{T("Notifications", "התראות")}</div>
     <div className="card pad stack">
       <div className="dim small">{T(
-        "A reminder to leave comes 5 minutes before it's time to go, moved by the bus's live time. Alerts come when a line you follow gets a new one: tap the bell on a line's page, and lines you ride with Start are followed for a month. iPhone checks for Kav every so often while it's closed, as it sees fit.",
-        "תזכורת לצאת מגיעה 5 דקות לפני שצריך לצאת, ומתעדכנת לפי זמן האמת של האוטובוס. התראה על קו מגיעה כשמתפרסמת עליו הודעה חדשה: הקישו על הפעמון בדף הקו, וקווים שנסעתם בהם עם \"יציאה לדרך\" נשמרים לחודש. האייפון בודק עבור Kav מדי פעם כשהיא סגורה, לפי שיקולו.")}</div>
-      {!jobs.reminders.length && !lines.length && <div className="dim">{T("No reminders or lines yet.", "אין עדיין תזכורות או קווים.")}</div>}
+        "Kav only tells you about a ride you started with Start: your vehicle coming to your stop, getting off, and a new alert on its lines while you're on it. A reminder to leave, if you set one on a trip, comes 5 minutes before it's time to go, moved by the bus's live time.",
+        "Kav מודיעה רק על נסיעה שהתחלתם עם \"יציאה לדרך\": הקו שלכם מגיע לתחנה, הירידה, והודעה חדשה על הקווים שלה בזמן שאתם בה. תזכורת לצאת, אם הגדרתם אחת לנסיעה, מגיעה 5 דקות לפני שצריך לצאת, ומתעדכנת לפי זמן האמת של האוטובוס.")}</div>
+      {!jobs.reminders.length && <div className="dim">{T("No reminders.", "אין תזכורות.")}</div>}
       {jobs.reminders.map(r => (
         <div key={r.id} className="row-card notif-row">
           <div className="grow"><div>{T(`Leave for ${r.dest}`, `יציאה אל ${r.dest}`)}</div>
             <div className="dim small">{clock(Math.floor((r.at ?? r.leaveMs - 5 * 60_000) / 1000))} · {r.line}</div></div>
           <button className="icon-btn" onClick={() => removeReminder(r.id)} aria-label={T("Remove", "הסרה")}><CloseGlyph size={14} /></button>
-        </div>
-      ))}
-      {lines.map(l => (
-        <div key={l.groupId} className="row-card notif-row">
-          <div className="grow"><div>{l.label}</div>
-            <div className="dim small">{l.manual ? T("Following", "במעקב") : T("Ridden lately", "נסעתם בו לאחרונה")}</div></div>
-          <button className="icon-btn" onClick={() => unfollowLine(l.groupId)} aria-label={T("Remove", "הסרה")}><CloseGlyph size={14} /></button>
         </div>
       ))}
     </div>

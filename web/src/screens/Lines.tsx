@@ -1,40 +1,71 @@
-// Every line Moovit knows, and the page of one: its route, stops, buses on the road and today's departures.
-import { useEffect, useMemo, useRef, useState } from "react";
-import { T, api, useLoad, useNow, useHere, clock, metres, distanceText, timeOf, modeColor, modeName, type Arrival, type LatLon, type StopInfo, type LineInfo } from "../core.ts";
+// Every line Moovit knows, the lines you saved, and the page of one: its route, stops, buses on the road and today's departures.
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { T, api, useLoad, useNow, useHere, usePrefs, getPrefs, setPrefs, moved, clock, metres, distanceText, timeOf, modeColor, modeName, type Arrival, type LatLon, type StopInfo, type LineInfo, type SavedLine } from "../core.ts";
 import { Header, LineBadge, Spinner, Note, LiveDot, Eta, NextTimes } from "../ui.tsx";
 import { MapView } from "../MapView.tsx";
-import { ChevronGlyph, BellGlyph } from "../icons.tsx";
+import { ChevronGlyph, StarGlyph } from "../icons.tsx";
 import { DelayNote, DelayStats } from "../delays.tsx";
-import { canNotify, useJobs, followsLine, followLine, unfollowLine } from "../remind.ts";
+import { useReorder, GripGlyph } from "../reorder.tsx";
 
-interface LineGroup { id: number; number: string; name: string; cities: string; agencyId: number; agency: string; routeType: number }
+type LineGroup = SavedLine;
 
-export function LinesScreen() {
+const isSaved = (l: LineGroup) => getPrefs().savedLines.some(x => x.id === l.id);
+function toggleSaved(l: LineGroup) {
+  const saved = getPrefs().savedLines;
+  setPrefs({ savedLines: saved.some(x => x.id === l.id) ? saved.filter(x => x.id !== l.id) : [...saved, l] });
+}
+
+// The star that saves a line to the top of the Lines tab.
+function SaveLine({ line, plate }: { line: LineGroup; plate?: boolean }) {
+  usePrefs();
+  const on = isSaved(line);
+  return <button className={(plate ? "plate-btn" : "icon-btn") + " star-btn" + (on ? " on" : "")} onClick={e => { e.stopPropagation(); toggleSaved(line); }}
+    aria-label={on ? T("Remove from saved lines", "הסרה מהקווים השמורים") : T("Save this line", "שמירת הקו")}><StarGlyph size={plate ? 22 : 18} filled={on} /></button>;
+}
+
+function LineRow({ l, onOpen, grip }: { l: LineGroup; onOpen: () => void; grip?: React.HTMLAttributes<HTMLButtonElement> }) {
+  return (
+    <li className="row" data-row onClick={onOpen}>
+      <LineBadge number={l.number} type={l.routeType === 7 ? 715 : l.routeType} />
+      <div className="row-main"><div dir="auto">{l.cities || l.name}</div><div className="dim small" dir="auto">{l.agency}</div></div>
+      {grip ? <button {...grip}><GripGlyph /></button> : <SaveLine line={l} />}
+    </li>
+  );
+}
+
+export function LinesScreen({ head }: { head?: ReactNode }) {
+  const prefs = usePrefs();
   const [q, setQ] = useState("");
   const [open, setOpen] = useState<LineGroup | null>(null);
+  const [editing, setEditing] = useState(false);
+  const { list, grip } = useReorder((from, to) => setPrefs({ savedLines: moved(getPrefs().savedLines, from, to) }));
   const found = useLoad<{ lines: LineGroup[]; total: number }>(q.trim() ? `lines:${q.trim()}` : null,
     s => new Promise(r => setTimeout(r, 200)).then(() => api(`lines/search?q=${encodeURIComponent(q.trim())}`, undefined, s)));
   if (open) return <LineDetail group={open} onBack={() => setOpen(null)} />;
+  const saved = prefs.savedLines;
   return (
     <div className="screen">
-      <Header title={T("Lines", "קווים")} />
+      {head ?? <Header title={T("Lines", "קווים")} />}
       <div className="pad">
         <input className="field" value={q} onChange={e => setQ(e.target.value)} placeholder={T("Line number, operator or city", "מספר קו, מפעיל או עיר")} dir="auto" enterKeyHint="search" inputMode="search" />
       </div>
       <div className="scroll">
-        {!q.trim() && <div className="pad dim">{T("Search for a line by its number, such as 480, or by a city or operator.", "חפשו קו לפי המספר שלו, למשל 480, או לפי עיר או מפעיל.")}</div>}
+        {!q.trim() && <>
+          {saved.length > 0 && <div className="list-head saved-head"><span>{T("Saved lines", "קווים שמורים")}</span>
+            {saved.length > 1 && <button className="link" onClick={() => setEditing(!editing)}>{editing ? T("Done", "סיום") : T("Edit", "עריכה")}</button>}</div>}
+          <ul className="list" ref={list}>
+            {saved.map((l, i) => <LineRow key={l.id} l={l} onOpen={() => { if (!editing) setOpen(l); }} grip={editing ? grip(i) : undefined} />)}
+          </ul>
+          <div className="pad dim">{saved.length ? T("Search for another line by its number, or by a city or operator.", "חפשו קו נוסף לפי המספר שלו, או לפי עיר או מפעיל.")
+            : T("Search for a line by its number, such as 480, or by a city or operator. Tap the star to save it here.", "חפשו קו לפי המספר שלו, למשל 480, או לפי עיר או מפעיל. הקישו על הכוכב כדי לשמור אותו כאן.")}</div>
+        </>}
         {found.loading && !found.data && <div className="pad"><Spinner text={T("Loading Moovit's line list…", "טוענים את רשימת הקווים…")} /></div>}
         {found.error && <div className="pad"><Note tone="error">{found.error}</Note></div>}
-        <ul className="list">
-          {found.data?.lines.map(l => (
-            <li key={l.id} className="row" onClick={() => setOpen(l)}>
-              <LineBadge number={l.number} type={l.routeType === 7 ? 715 : l.routeType} />
-              <div className="row-main"><div dir="auto">{l.cities || l.name}</div><div className="dim small" dir="auto">{l.agency}</div></div>
-            </li>
-          ))}
+        {q.trim() && <ul className="list">
+          {found.data?.lines.map(l => <LineRow key={l.id} l={l} onOpen={() => setOpen(l)} />)}
           {found.data && found.data.total > found.data.lines.length && <li className="pad dim small">{T(`and ${found.data.total - found.data.lines.length} more: narrow the search`, `ועוד ${found.data.total - found.data.lines.length}: צמצמו את החיפוש`)}</li>}
           {found.data && !found.data.lines.length && <li className="pad dim">{T("No lines found", "לא נמצאו קווים")}</li>}
-        </ul>
+        </ul>}
       </div>
     </div>
   );
@@ -58,17 +89,6 @@ function LineDetail({ group, onBack }: { group: LineGroup; onBack: () => void })
     s => api<{ arrivals: Arrival[]; poll: number }>(`arrivals?stops=${stopIds.join(",")}`, undefined, s).then(r => { poll.current = Math.min(Math.max(r.poll, 10), 60); return r; }),
     () => poll.current * 1000);
   const alerts = useLoad<{ alerts: Alert[] }>(`alerts:${group.id}`, s => api(`alerts?groups=${group.id}`, undefined, s));
-  // A bell: a notification when a new alert comes up on this line.
-  const jobs = useJobs();
-  const following = followsLine(jobs, group.id);
-  const [bellNote, setBellNote] = useState<string | null>(null);
-  const bell = async () => {
-    setBellNote(null);
-    if (following) { await unfollowLine(group.id); return; }
-    if (!await followLine(group.id, `${modeName(type)} ${group.number}`).catch(() => false))
-      setBellNote(T("Notifications are off for Kav. Turn them on in Settings → Kav → Notifications.", "ההתראות כבויות עבור Kav. אפשר להפעיל אותן בהגדרות → Kav → עדכונים."));
-    else setBellNote(T("You'll get a notification when a new alert comes up on this line.", "תקבלו התראה כשתפורסם הודעה חדשה על הקו הזה."));
-  };
 
   const mine = (live.data?.arrivals ?? []).filter(a => a.lineId === d?.lineId);
   // One mark per vehicle, at its latest report.
@@ -103,10 +123,7 @@ function LineDetail({ group, onBack }: { group: LineGroup; onBack: () => void })
 
   return (
     <div className="screen">
-      <Header title={`${modeName(type)} ${group.number}`} sub={group.agency} back={onBack}
-        right={canNotify ? <button className={"plate-btn line-bell" + (following ? " on" : "")} onClick={bell}
-          aria-label={following ? T("Stop alerts for this line", "הפסקת התראות על הקו") : T("Alerts for this line", "התראות על הקו")}><BellGlyph size={20} /></button> : undefined} />
-      {bellNote && <div className="pad"><Note>{bellNote}</Note></div>}
+      <Header title={`${modeName(type)} ${group.number}`} sub={group.agency} back={onBack} right={<SaveLine line={group} plate />} />
       {d && <MapView className="map-half" lines={[{ coords: d.shape.length ? d.shape : pts, color, width: 5 }]}
         points={[
           ...d.stops.filter(s => s.lat != null).map(s => ({ id: `s${s.id}`, at: [s.lat!, s.lon!] as LatLon, color: "#ffffff", kind: "stop" as const, ring: color })),

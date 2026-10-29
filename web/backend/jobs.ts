@@ -1,5 +1,5 @@
-// What Kav keeps an eye on while it isn't open: trips you asked to be reminded of, and the lines whose
-// service alerts you follow. The same check runs in the app when it opens and, on iPhone, when iOS wakes
+// What Kav keeps an eye on while it isn't open: trips you asked to be reminded of, and the lines of the ride
+// you started, for their service alerts while you're on it (and never any other line's). The same check runs in the app when it opens and, on iPhone, when iOS wakes
 // Kav in the background (background.ts); it says which notifications to show, and when.
 import type { Arrival, ServiceAlert } from "./moovit.ts";
 
@@ -7,8 +7,6 @@ import type { Arrival, ServiceAlert } from "./moovit.ts";
 export const LEAD_MS = 5 * 60_000;
 // The live times are asked for once the ride is this close; before that the timetable stands.
 const LIVE_WITHIN_MS = 2 * 3600_000;
-// A line followed because you rode it is dropped after this long without riding it again.
-const AUTO_KEEP_MS = 30 * 86_400_000;
 
 export interface Reminder {
   id: string;
@@ -21,11 +19,11 @@ export interface Reminder {
   liveBoardMs?: number;         // the ride's live time, last seen
 }
 
+// A line of the ride you started with Start.
 export interface FollowedLine {
   groupId: number;
   label: string;                // "Bus 72", in the language it was followed in
-  manual: boolean;              // followed from the line's page, rather than by riding it
-  lastMs: number;               // followed or last ridden
+  until: number;                // the ride's end: its alerts aren't told after it
 }
 
 export interface Jobs {
@@ -51,7 +49,8 @@ export interface JobDeps {
 }
 
 export const reminderNoticeId = (r: Reminder) => `leave-${r.id}`;
-export const isActiveLine = (l: FollowedLine, now: number) => l.manual || now - l.lastMs < AUTO_KEEP_MS;
+// Lines kept from before (followed from a line's page, or for a month after a ride) have no end, so they're dropped.
+export const isActiveLine = (l: FollowedLine, now: number) => now < (l.until ?? 0);
 
 const hm = (ms: number) => { const d = new Date(ms); return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`; };
 const timeOf = (a: Arrival) => (a.rtUtc > 0 ? a.rtUtc : a.statisticalUtc > 0 ? a.statisticalUtc : a.staticUtc) * 1000;
@@ -99,7 +98,7 @@ export async function runJobs(jobs: Jobs, deps: JobDeps, now = Date.now()): Prom
     });
   }
 
-  // ---- service alerts on the lines you follow
+  // ---- service alerts on the lines of the ride you're on: only ones that come up during it
   const lines = jobs.lines.filter(l => isActiveLine(l, now));
   const seen: Record<string, string[]> = {};
   for (const l of lines) {

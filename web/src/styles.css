@@ -775,8 +775,17 @@ h2 { font-size: 19px; }
 @keyframes arriving { from { opacity: 1; } to { opacity: .45; } }
 @media (prefers-reduced-motion: reduce) { .eta.arriving b, .arriving b { animation: none; } }
 .too-soon { color: var(--warn, #F5B14C); font-size: .9em; }
-.line-bell.on { color: var(--accent); }
 .notif-row { padding: 6px 0; border-top: .5px solid var(--hairline); }
 .row-line { display: flex; align-items: center; gap: 10px; min-width: 0; }
 .ld-stops li.passed { opacity: .45; }
 .ld-stops li .ld-at { display: block; font-size: 12px; font-weight: 500; color: var(--dim); }
+
+/* ---- saved lines and stops, and putting them in order ----------------------------------------- */
+
+.star-btn.on { color: var(--accent-fg); }
+.saved-head { display: flex; justify-content: space-between; align-items: center; }
+.saved-head .link, .home-head-links .link { padding: 0; font-weight: 700; }
+.home-head-links { display: flex; gap: 18px; }
+.grip { min-width: 40px; height: 40px; display: grid; place-items: center; color: var(--dim); touch-action: none; cursor: grab; flex-shrink: 0; }
+[data-row].dragging { position: relative; z-index: 5; background: var(--bg); box-shadow: 0 8px 24px var(--shadow); }
+.hub-switch { flex: 1; }

@@ -15,8 +15,21 @@ export interface Prefs {
   onboarded: boolean; supportShown: boolean;
   // Trips planned, newest first, for the home screen.
   trips: RecentTrip[];
+  // The lines and the stops you starred, in the order you put them.
+  savedLines: SavedLine[]; savedStops: SavedStop[];
 }
 export interface RecentTrip { from: Place | null; to: Place; at: number }
+// A line group as the line search lists it, and a stop as the stop search lists it.
+export interface SavedLine { id: number; number: string; name: string; cities: string; agencyId: number; agency: string; routeType: number }
+export interface SavedStop { i: number; name: string; city: string; code: number; lat: number; lon: number; type: number }
+
+// A saved list with one item moved from one place to another, as a drag leaves it.
+export function moved<T>(list: T[], from: number, to: number): T[] {
+  const out = list.slice();
+  const [x] = out.splice(from, 1);
+  out.splice(Math.max(0, Math.min(out.length, to)), 0, x);
+  return out;
+}
 
 export function rememberTrip(from: Place | null, to: Place) {
   const same = (a: Place | null, b: Place | null) => (!a && !b) || (!!a && !!b && Math.abs(a.lat - b.lat) < 1e-4 && Math.abs(a.lon - b.lon) < 1e-4);
@@ -37,7 +50,7 @@ export function agoText(ms: number) {
 export const DEFAULT_ACCENT = "#9ABEFF";
 const DEFAULTS: Prefs = {
   lang: "he", look: "dark", privateSearch: true, recents: [], favourites: [], modes: [], accent: DEFAULT_ACCENT, liquid: true,
-  onboarded: false, supportShown: false, trips: [],
+  onboarded: false, supportShown: false, trips: [], savedLines: [], savedStops: [],
 };
 const KEY = "kav-prefs";
 

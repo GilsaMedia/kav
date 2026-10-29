@@ -1,10 +1,10 @@
-// Reminders to leave and the lines whose alerts you follow (backend/jobs.ts). Kept by the app, where its
+// Reminders to leave and the lines of the ride you're on (backend/jobs.ts). Kept by the app, where its
 // background check reads them too, and checked again each time Kav comes to the front. iPhone only: a web
 // page can't set a notification for later.
 import { useSyncExternalStore } from "react";
 import { isNative, KavNative } from "./native.ts";
 import { api, getPrefs } from "./core.ts";
-import { parseJobs, runJobs, emptyJobs, isActiveLine, reminderNoticeId, type Jobs, type Reminder, type FollowedLine, type Notice } from "../backend/jobs.ts";
+import { parseJobs, runJobs, emptyJobs, reminderNoticeId, type Jobs, type Reminder, type FollowedLine, type Notice } from "../backend/jobs.ts";
 import type { Arrival, ServiceAlert } from "../backend/moovit.ts";
 
 export type { Reminder, FollowedLine };
@@ -80,37 +80,23 @@ export function removeReminder(id: string) {
   });
 }
 
-// ---- lines whose alerts you follow
+// ---- the lines of the ride you started
 
-export const followsLine = (j: Jobs, groupId: number) => j.lines.some(l => l.groupId === groupId && isActiveLine(l, Date.now()));
-
-export async function followLine(groupId: number, label: string): Promise<boolean> {
-  if (!(granted = await allowed())) return false;
-  await queue(async () => {
-    await save({ ...jobs, lines: [...jobs.lines.filter(l => l.groupId !== groupId), { groupId, label, manual: true, lastMs: Date.now() }] });
-    await check();
-  });
-  return true;
-}
-
-export function unfollowLine(groupId: number) {
-  return queue(async () => {
-    const seen = { ...jobs.seen }; delete seen[String(groupId)];
-    await save({ ...jobs, lines: jobs.lines.filter(l => l.groupId !== groupId), seen });
-  });
-}
-
-// The lines of a trip you take with Live Directions, followed for a month after; never asks for notifications
-// by itself, so only once they're allowed.
-export function rodeLines(lines: { groupId: number; label: string }[]) {
-  if (!isNative || !granted || !lines.length) return;
+// Followed for their alerts while you're on the ride and no longer, never asking for notifications by itself,
+// so only once they're allowed. The alerts already up when you start are learned, not told: only a new one
+// during the ride is.
+export function rideLines(lines: { groupId: number; label: string }[], untilMs: number) {
+  if (!isNative || !granted) return;
   queue(async () => {
-    const now = Date.now();
-    const kept = jobs.lines.filter(l => !lines.some(x => x.groupId === l.groupId));
-    const ridden = lines.map(x => ({ ...x, manual: jobs.lines.find(l => l.groupId === x.groupId)?.manual ?? false, lastMs: now }));
-    await save({ ...jobs, lines: [...kept, ...ridden] });
-    await check();
+    await save({ ...jobs, lines: lines.map(l => ({ ...l, until: untilMs })), seen: {} });
+    if (lines.length) await check();
   }).catch(() => {});
+}
+
+// The ride stopped: nothing more about its lines.
+export function endRideLines() {
+  if (!isNative || !jobs.lines.length) return;
+  queue(() => save({ ...jobs, lines: [], seen: {} })).catch(() => {});
 }
 // Whether they're allowed, learned at start without asking.
 if (isNative) KavNative.notifyAllowed().then(r => { granted = r.granted; }, () => {});
