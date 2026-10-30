@@ -123,6 +123,7 @@ export function PlanScreen({ home, onPay }: { home: number; onPay: (at?: LatLon,
     onBack={() => setResuming(false)} onPay={onPay} />;
 
   if (opened) return <TripDetail trip={opened.it} resolved={opened.resolved} from={HERE_NAME()} to={nameOf(opened.to)}
+    tripEnds={here ? [here, [opened.to.lat, opened.to.lon]] : undefined}
     onBack={() => setOpened(null)} onPay={onPay} />;
 
   // No destination yet: the home screen, as Moovit opens.
@@ -135,7 +136,9 @@ export function PlanScreen({ home, onPay }: { home: number; onPay: (at?: LatLon,
   );
 
   if (chosen != null && its[chosen] && plan.data) {
+    const f = fromAt();
     return <TripDetail trip={its[chosen]} resolved={plan.data.resolved} from={from ? nameOf(from) : HERE_NAME()} to={to ? nameOf(to) : ""}
+      tripEnds={f ? [f, [to.lat, to.lon]] : undefined}
       onBack={() => setChosen(null)} onPay={onPay} />;
   }
 
@@ -213,9 +216,11 @@ export function PlanScreen({ home, onPay }: { home: number; onPay: (at?: LatLon,
 
 // The ways in the order the time asks for: leaving now, the one that leaves soonest first; leaving at a time,
 // the one leaving closest to it; arriving by a time, the one arriving closest to it without being late (late
-// ones last). The latest departure keeps Moovit's order. In one list, without Moovit's sections.
+// ones last). The latest departure keeps Moovit's order. In one list, without Moovit's sections. Ways with no
+// vehicle to ride (a bike, a taxi, walking all the way) come after every way that has one.
 function inOrder(its: Itinerary[], when: When): Itinerary[] {
-  if (when.kind === "last") return its;
+  const riding = (it: Itinerary) => it.legs.some(l => l.kind === "ride") ? 0 : 1;
+  if (when.kind === "last") return [...its].sort((a, b) => riding(a) - riding(b));
   const now = Date.now() / 1000;
   const at = when.kind === "now" ? now : when.ms / 1000;
   const away = (it: Itinerary) =>
@@ -223,7 +228,7 @@ function inOrder(its: Itinerary[], when: When): Itinerary[] {
     : when.kind === "depart" ? Math.abs(it.dep - at)
     // Now: one that has already left (you'd have had to leave earlier) goes after every one still to come.
     : it.dep >= now - 60 ? it.dep - now : 1e9 + now - it.dep;
-  return its.map(it => ({ ...it, section: "" })).sort((a, b) => away(a) - away(b) || a.arr - b.arr);
+  return its.map(it => ({ ...it, section: "" })).sort((a, b) => riding(a) - riding(b) || away(a) - away(b) || a.arr - b.arr);
 }
 
 // ---- one way there, at a glance --------------------------------------------------------------
@@ -414,10 +419,68 @@ const pickOf = (leg: Leg) => {
 };
 type PickLine = (legIndex: number, option: number) => void;
 
-export function TripDetail({ trip: planned, resolved: first, from, to, onBack, onPay, resume }: {
+// The same way, on the departure before or after this one (Moovit's Earlier and Later): the same rides one
+// after another, each on any of the lines that can do it. Later is looked for leaving just after this one's
+// first vehicle could be caught; earlier, arriving just before this one does. When Moovit's best ways don't
+// include it, it's asked again for ways by the modes of these rides alone.
+const ridesOf = (it: Itinerary) => it.legs.filter(l => l.kind === "ride");
+function sameWay(a: Itinerary, b: Itinerary) {
+  const x = ridesOf(a), y = ridesOf(b);
+  return x.length === y.length && x.every((l, i) => { const ids = new Set(options(y[i]).map(o => o.lineId)); return options(l).some(o => ids.has(o.lineId)); });
+}
+type Shifted = { trip: Itinerary; resolved: Resolved };
+async function otherDeparture(trip: Itinerary, r: Resolved, [from, to]: [LatLon, LatLon], later: boolean): Promise<Shifted | null> {
+  const ride = ridesOf(trip)[0];
+  if (!ride) return null;
+  // On foot to the first stop, before it.
+  const before = trip.legs.slice(0, trip.legs.indexOf(ride)).filter(l => l.kind !== "wait").reduce((s, l) => s + l.arr - l.dep, 0);
+  const boards = (it: Itinerary) => ridesOf(it)[0].dep;
+  for (const routeTypes of [undefined, [...new Set(ridesOf(trip).map(l => routeTypeOf(r, l.lineId)))]]) {
+    const res = await api<PlanResult>("plan", later
+      ? { from, to, routeTypes, when: (ride.dep - before + 60) * 1000, timeType: 2 }
+      : { from, to, routeTypes, when: (trip.arr - 60) * 1000, timeType: 1 });
+    const found = (res.itineraries ?? []).filter(it => sameWay(it, trip) && (later ? boards(it) > ride.dep + 30 : boards(it) < ride.dep - 30))
+      .sort((a, b) => later ? boards(a) - boards(b) : boards(b) - boards(a))[0];
+    if (found) return { trip: { ...found, section: "" }, resolved: res.resolved };
+  }
+  return null;
+}
+
+// Earlier · the way's times · Later, under its summary, as Moovit has it.
+function ShiftBar({ trip, r, ends, now, onShift }: { trip: Itinerary; r: Resolved; ends: [LatLon, LatLon]; now: number; onShift: (s: Shifted) => void }) {
+  const [busy, setBusy] = useState<"earlier" | "later" | null>(null);
+  const [note, setNote] = useState<string | null>(null);
+  const go = async (later: boolean) => {
+    setBusy(later ? "later" : "earlier"); setNote(null);
+    try {
+      const got = await otherDeparture(trip, r, ends, later);
+      if (!got) setNote(later ? T("There's no later one on this way.", "אין יציאה מאוחרת יותר בדרך הזו.") : T("There's no earlier one on this way.", "אין יציאה מוקדמת יותר בדרך הזו."));
+      // You'd have had to leave before now to catch it.
+      else if (!later && got.trip.dep < Date.now() / 1000 - 60) setNote(T("The one before has already left.", "הקודם כבר יצא."));
+      else onShift(got);
+    } catch (e) { setNote(failure(e)); }
+    finally { setBusy(null); }
+  };
+  // Leaving now (or it's time to leave already), the one before has gone.
+  const noEarlier = trip.dep < now + 60;
+  return <>
+    <div className="shift">
+      <button className="shift-btn" disabled={!!busy || noEarlier} onClick={() => go(false)}><BackGlyph size={14} />{T("Earlier", "מוקדם יותר")}</button>
+      <span className={"shift-time" + (busy ? " dim" : "")}>{busy ? T("Looking…", "מחפשים…") : `${clock(trip.dep)} – ${clock(trip.arr)}`}</span>
+      <button className="shift-btn" disabled={!!busy} onClick={() => go(true)}>{T("Later", "מאוחר יותר")}<ChevronGlyph size={14} /></button>
+    </div>
+    {note && <div className="pad"><Note>{note}</Note></div>}
+  </>;
+}
+
+export function TripDetail({ trip: given, resolved: givenR, from, to, tripEnds, onBack, onPay, resume }: {
   trip: Itinerary; resolved: Resolved; from: string; to: string; onBack: () => void; onPay: (at?: LatLon, routeType?: number, off?: LatLon) => void;
-  resume?: number;
+  resume?: number; tripEnds?: [LatLon, LatLon];
 }) {
+  // The departure before or after the one opened, chosen with Earlier and Later.
+  const [shifted, setShifted] = useState<Shifted | null>(null);
+  const planned = shifted?.trip ?? given;
+  const first = shifted ? mergeResolved(givenR, shifted.resolved) : givenR;
   // The way as planned, or from the stop you were at when you started, if that was further along it.
   const [fromHere, setFromHere] = useState<Itinerary | null>(null);
   const [navStart, setNavStart] = useState(resume ?? 0);
@@ -540,6 +603,8 @@ export function TripDetail({ trip: planned, resolved: first, from, to, onBack, o
           </div>
           <span className="eta it-total">{mins < 60 ? <><b>{mins}</b><small>{T("min", "דק׳")}</small></> : <><b>{Math.floor(mins / 60)}:{String(mins % 60).padStart(2, "0")}</b><small>{T("hours", "שעות")}</small></>}</span>
         </div>
+        {tripEnds && !fromHere && ridesOf(trip).length > 0 && <ShiftBar trip={trip} r={r} ends={tripEnds} now={now}
+          onShift={s => { setShifted(s); setFromHere(null); setPicks({}); }} />}
         {shareNote && <div className="pad"><Note>{shareNote}</Note></div>}
         {lockNote && <div className="pad"><Note tone="warn">{lockNote}</Note></div>}
         {remindNote && <div className="pad"><Note tone="warn">{remindNote}</Note></div>}

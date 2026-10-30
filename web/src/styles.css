@@ -540,6 +540,10 @@ h2 { font-size: 19px; }
 .trip-sum { display: flex; align-items: center; gap: 12px; padding: 10px 16px 16px; border-bottom: .5px solid var(--hairline); }
 .trip-sum .grow { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
 .trip-sum-time { font-size: 20px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.shift { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 4px 6px; background: var(--pane); border-bottom: .5px solid var(--hairline); }
+.shift-btn { display: inline-flex; align-items: center; gap: 4px; padding: 10px; color: var(--accent-fg); font-size: 15px; font-weight: 600; }
+.shift-btn:disabled { color: var(--dim); }
+.shift-time { font-size: 16px; font-weight: 700; font-variant-numeric: tabular-nums; }
 .trip-cta { position: absolute; z-index: 4; inset-inline: 16px; bottom: calc(var(--bar-space) + 6px); }
 .trip-cta .setup-btn { gap: 10px; font-size: 17px; font-weight: 700; box-shadow: 0 8px 24px var(--shadow); }
 .trip-cta:has(.remind-btn) { display: flex; gap: 10px; }
