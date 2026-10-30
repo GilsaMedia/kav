@@ -28,7 +28,7 @@ export function useReorder(onMove: (from: number, to: number) => void) {
       e.currentTarget.setPointerCapture(e.pointerId);
       const rects = rows.map(r => r.getBoundingClientRect());
       drag.current = { from: i, to: i, y: e.clientY, id: e.pointerId, rows, mids: rects.map(r => r.top + r.height / 2), h: rects[i].height };
-      rows.forEach((r, k) => { r.style.transition = k === i ? "none" : "transform .2s"; });
+      rows.forEach((r, k) => { r.style.transition = k === i ? "none" : "transform .45s var(--spring)"; });
       rows[i].classList.add("dragging");
     },
     onPointerMove: (e: React.PointerEvent<HTMLElement>) => {

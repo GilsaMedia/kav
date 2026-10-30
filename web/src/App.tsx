@@ -47,7 +47,9 @@ export function App() {
         <div hidden={tab !== "lines"} className="tab-page"><LinesTab /></div>
         {tab === "settings" && <div className="tab-page"><Settings /></div>}
       </main>
-      <nav className="tabbar">
+      <nav className="tabbar" style={{ "--n": TABS.length, "--i": TABS.findIndex(x => x.tab === tab) } as React.CSSProperties}>
+        {/* A lens of light that slides to the tab you're on, rather than one tab lighting and another going out. */}
+        <span className="tab-ind" aria-hidden="true" />
         {TABS.map(({ tab: t, Icon, label }) => (
           <button key={t} className={tab === t ? "on" : ""} onClick={() => go(t)} aria-current={tab === t ? "page" : undefined}>
             <Icon size={26} on={tab === t} /><span className="tab-label">{label()}</span>

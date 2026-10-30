@@ -82,6 +82,16 @@ jobs:
           path: Kav.ipa
           retention-days: 30
 
+      # What's new in this version comes from web/RELEASE_NOTES.md, so the Sunday rebuild keeps it.
+      - name: Release notes
+        run: |
+          {
+            echo "Kav for iPhone ${{ steps.version.outputs.name }}, with this week's timetable (build ${{ github.run_number }})."
+            echo
+            if [ -f web/RELEASE_NOTES.md ]; then cat web/RELEASE_NOTES.md; echo; fi
+            echo '**Installing:** download `Kav.ipa` below and install it with Sideloadly or AltStore using your Apple ID. See the README on the `ios` branch for the steps. With a free Apple ID the app has to be reinstalled or refreshed every 7 days.'
+          } > release-notes.md
+
       # Never marked latest: the Android app updates itself from the latest release.
       - name: Release
         if: github.ref == 'refs/heads/ios'
@@ -92,9 +102,4 @@ jobs:
           name: Kav for iPhone ${{ steps.version.outputs.name }}
           make_latest: false
           files: Kav.ipa
-          body: |
-            Kav for iPhone ${{ steps.version.outputs.name }}, with this week's timetable (build ${{ github.run_number }}).
-
-            The Android app's look, now on iPhone: its dark, OLED black and light palettes and your choice of accent colour, liquid glass bars and buttons (or solid ones), the floating tab bar, the drawn icons and line plates, and the motion: screens that slide in and fade back, lists that lift into place one after another, sheets that rise, the breathing live dot and the loading line.
-
-            **Installing:** download `Kav.ipa` below and install it with Sideloadly or AltStore using your Apple ID. See the README on the `ios` branch for the steps. With a free Apple ID the app has to be reinstalled or refreshed every 7 days.
+          body_path: release-notes.md

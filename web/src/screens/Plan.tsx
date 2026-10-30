@@ -9,6 +9,7 @@ import { Header, LineBadge, Spinner, Note, LiveDot, PlacePicker, SaveFavourite, 
 import { MapView, type MapLine, type MapPoint } from "../MapView.tsx";
 import { Home, Arrives, type Opened } from "./Home.tsx";
 import { DragSheet } from "../sheet.tsx";
+import { Spring, Velocity, FLING, SETTLE, project as coast, rubberband } from "../motion.ts";
 import { WhenButton, WhenSheet, type When } from "../when.tsx";
 import { DelayNote } from "../delays.tsx";
 import { saveRide, clearRide, setRideStep, useRide, GRACE_MS } from "../ride.ts";
@@ -593,7 +594,7 @@ export function TripDetail({ trip: given, resolved: givenR, from, to, tripEnds, 
         <button className="plate-btn trip-share" onClick={share} aria-label={T("Share", "שיתוף")}><ShareGlyph /></button>
       </div>
       {/* Dragged up for every step, down to see the map: three resting heights, from all up to the summary. */}
-      <DragSheet className="trip-sheet" start={1} detents={el => { const h = el.offsetHeight; return [0, Math.round(h * 0.42), Math.max(0, h - 200)]; }}>
+      <DragSheet className="trip-sheet" start={1} enter detents={el => { const h = el.offsetHeight; return [0, Math.round(h * 0.42), Math.max(0, h - 200)]; }}>
         <div className="trip-grip" data-grip data-toggle />
         <div className="trip-sum">
           <div className="grow">
@@ -1094,16 +1095,23 @@ function Navigate({ trip, r, live, here, lines, ends, vehicles, from, to, onPay,
   // way across turns it; a shorter one, as by accident, springs back. Past the first or the last step it gives
   // only a little.
   const touch = useRef<{ x: number; y: number; dx: number; sideways: boolean | null } | null>(null);
+  const swipeVel = useRef(new Velocity());
+  const back = useRef<Spring | null>(null);
   const swipe = {
     onTouchStart: (e: React.TouchEvent) => {
       if (turning.current) return;
-      touch.current = { x: e.touches[0].clientX, y: e.touches[0].clientY, dx: 0, sideways: null };
+      // Caught while springing back: it carries on from where it is.
+      const from = back.current?.moving ? back.current.value : 0;
+      back.current?.stop();
+      touch.current = { x: e.touches[0].clientX - from, y: e.touches[0].clientY, dx: from, sideways: from ? true : null };
+      swipeVel.current.reset(e.touches[0].clientX);
       if (slide.current) slide.current.style.transition = "none";
     },
     onTouchMove: (e: React.TouchEvent) => {
       const t = touch.current, el = slide.current;
       if (!t || !el) return;
       const dx = e.touches[0].clientX - t.x, dy = e.touches[0].clientY - t.y;
+      swipeVel.current.add(e.touches[0].clientX);
       if (t.sideways === null) {
         if (Math.abs(dx) < 10 && Math.abs(dy) < 10) return;
         t.sideways = Math.abs(dx) > Math.abs(dy) * 1.3;
@@ -1111,16 +1119,22 @@ function Navigate({ trip, r, live, here, lines, ends, vehicles, from, to, onPay,
       if (!t.sideways) return;
       const target = step + ((dx < 0) !== rtl ? 1 : -1);
       t.dx = dx;
-      el.style.transform = `translateX(${target < 0 || target >= cards.length ? dx / 4 : dx}px)`;
+      el.style.transform = `translateX(${target < 0 || target >= cards.length ? rubberband(dx, el.offsetWidth) : dx}px)`;
     },
     onTouchEnd: () => {
       const t = touch.current, el = slide.current;
       touch.current = null;
       if (!t?.sideways || !el) return;
       const target = step + ((t.dx < 0) !== rtl ? 1 : -1);
-      if (Math.abs(t.dx) > el.offsetWidth / 3 && target >= 0 && target < cards.length) { go(target); return; }
-      el.style.transition = "transform .35s cubic-bezier(.34,1.36,.64,1)";
-      el.style.transform = "";
+      // A flick turns it even when short, if it would have coasted a third of the way across.
+      const v = swipeVel.current.get();
+      const aim = t.dx + coast(v);
+      if (Math.abs(aim) > el.offsetWidth / 3 && Math.sign(aim) === Math.sign(t.dx) && target >= 0 && target < cards.length) { go(target); return; }
+      // Back into place, from where the finger left it and at its speed.
+      const node = el;
+      back.current = new Spring(node.style.transform ? new DOMMatrix(getComputedStyle(node).transform).m41 : 0,
+        x => { node.style.transform = x ? `translateX(${x}px)` : ""; });
+      back.current.to(0, Math.abs(v) > 400 ? FLING : SETTLE, v);
     },
   };
 
