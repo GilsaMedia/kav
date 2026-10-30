@@ -1,8 +1,8 @@
 // The gestures an iPhone hand expects: a swipe in from the leading edge goes back (an arrow follows the
 // finger and the back button under it is pressed on release), and a sheet pulled down by its top closes,
-// following the finger, dimming what's behind as it goes, and thrown away at the speed it was let go.
+// following the finger, dimming what's behind less as it goes, and thrown away at the speed it was let go.
 import { buzz } from "./native.ts";
-import { Spring, Velocity, FLING, SETTLE, project, rubberband } from "./motion.ts";
+import { Velocity, FLING, SETTLE, glide, gliding, hold, liveOffset, project, rubberband } from "./motion.ts";
 
 const EDGE = 28;      // how close to the edge a back swipe has to start, in px
 const COMMIT = 80;    // how far it has to travel to go back
@@ -27,18 +27,20 @@ export function installGestures() {
   let start: { x: number; y: number; rtl: boolean; target: HTMLElement } | null = null;
   let dx = 0, ready = false;
   const edgeVel = new Velocity();
-  // The arrow's progress, sprung, so it slides back out from wherever it is when the swipe is let go.
-  const arrowSpring = new Spring(0, p => {
+  // The arrow at a progress p (0 hidden, 1 ready): under the finger it follows at once; let go, it slides back
+  // out on a transition of its own.
+  const showArrow = (p: number, animate: boolean) => {
     const rtl = arrow.classList.contains("rtl");
+    arrow.style.transition = animate ? "transform .3s cubic-bezier(.25, 1, .5, 1), opacity .2s, background-color .2s, color .2s" : "background-color .2s, color .2s";
     arrow.style.opacity = String(Math.min(1, p * 1.4));
     arrow.style.transform = `translateY(-50%) translateX(${(rtl ? -1 : 1) * (Math.min(p, 1.4) * 46 - 46)}px) scale(${0.7 + 0.3 * Math.min(1, p)})`;
-  }, 0.004);
+  };
 
   const reset = () => {
-    if (!start && !arrowSpring.value) return;
+    if (!start && !dx) return;
     start = null; dx = 0; ready = false;
     arrow.classList.remove("ready");
-    arrowSpring.to(0, SETTLE);
+    showArrow(0, true);
   };
 
   document.addEventListener("touchstart", e => {
@@ -63,7 +65,7 @@ export function installGestures() {
     if (Math.abs(t.clientY - start.y) > Math.max(40, dx)) { reset(); return; }
     const p = Math.max(0, dx) / COMMIT;
     // Past the point of going back it gives only a little more, and says so once, with a tick.
-    arrowSpring.set(p <= 1 ? p : 1 + rubberband(p - 1, 1));
+    showArrow(p <= 1 ? p : 1 + rubberband(p - 1, 1), false);
     if ((p >= 1) !== ready) { ready = p >= 1; arrow.classList.toggle("ready", ready); if (ready) buzz("tap"); }
   }, { passive: true });
 
@@ -75,20 +77,12 @@ export function installGestures() {
   document.addEventListener("touchcancel", reset, { passive: true });
 
   // A sheet pulled down from its top (the grip or the first bit of it) closes.
-  let pull: { y: number; sheet: HTMLElement; backdrop: HTMLElement | null; spring: Spring; base: number } | null = null;
+  let pull: { y: number; sheet: HTMLElement; backdrop: HTMLElement | null; base: number; d: number } | null = null;
   const pullVel = new Velocity();
-  const springs = new WeakMap<HTMLElement, Spring>();
-  const springOf = (sheet: HTMLElement, backdrop: HTMLElement | null) => {
-    let s = springs.get(sheet);
-    if (!s) {
-      s = new Spring(0, y => {
-        sheet.style.transform = y ? `translate3d(0, ${y}px, 0)` : "";
-        // What's behind comes back into view as the sheet goes.
-        backdrop?.style.setProperty("--pull", String(Math.max(0, Math.min(1, y / Math.max(1, sheet.offsetHeight)))));
-      });
-      springs.set(sheet, s);
-    }
-    return s;
+  const dim = (backdrop: HTMLElement | null, d: number, h: number, animate: boolean) => {
+    if (!backdrop) return;
+    backdrop.classList.toggle("pulling", !animate);
+    backdrop.style.setProperty("--pull", String(Math.max(0, Math.min(1, d / Math.max(1, h)))));
   };
 
   document.addEventListener("touchstart", e => {
@@ -99,11 +93,10 @@ export function installGestures() {
     const top = sheet.getBoundingClientRect().top;
     const scroller = sheet.querySelector(".scroll") as HTMLElement | null;
     if (t.clientY - top > 90 && (scroller?.scrollTop ?? sheet.scrollTop) > 0) return;
-    const backdrop = sheet.parentElement;
-    const spring = springOf(sheet, backdrop);
     // Caught on its way back: it stays under the finger from where it is.
-    spring.stop();
-    pull = { y: t.clientY, sheet, backdrop, spring, base: spring.value };
+    const base = gliding(sheet) ? liveOffset(sheet) : 0;
+    if (base) hold(sheet, base);
+    pull = { y: t.clientY, sheet, backdrop: sheet.parentElement, base, d: base };
     pullVel.reset(t.clientY);
   }, { passive: true });
 
@@ -111,27 +104,29 @@ export function installGestures() {
     if (!pull) return;
     const y = e.touches[0].clientY;
     pullVel.add(y);
-    const d = pull.base + y - pull.y;
     // Down it follows the finger; up is the content's to scroll.
-    pull.spring.set(Math.max(0, d));
+    pull.d = Math.max(0, pull.base + y - pull.y);
+    hold(pull.sheet, pull.d);
+    dim(pull.backdrop, pull.d, pull.sheet.offsetHeight, false);
   }, { passive: true });
 
   const release = () => {
     if (!pull) return;
-    const { sheet, spring } = pull;
+    const { sheet, backdrop, d } = pull;
     pull = null;
-    const v = pullVel.get(), d = spring.value;
+    const v = pullVel.get();
     const h = sheet.offsetHeight;
     // Closed if pulled far enough, or flicked down hard enough that it would have coasted that far.
     if (d > 0 && (d > Math.min(160, h * 0.35) || (v > 300 && d + project(v) > h * 0.5))) {
       const close = sheet.querySelector<HTMLElement>("[data-back]");
       // It leaves at the speed it was thrown, down the way it was going, rather than playing its own exit.
       sheet.classList.add("flung");
-      spring.to(h + 40, { damping: 1, response: 0.32 }, Math.max(v, 600));
+      glide(sheet, d, h + 40, Math.max(v, 600), { response: 0.3 });
+      dim(backdrop, h, h, true);
       if (close) close.click(); else (sheet.parentElement as HTMLElement | null)?.click();
       return;
     }
-    if (d !== 0) spring.to(0, Math.abs(v) > 400 ? FLING : SETTLE, v);
+    if (d !== 0) { glide(sheet, d, 0, v, Math.abs(v) > 400 ? FLING : SETTLE); dim(backdrop, 0, h, true); }
   };
   document.addEventListener("touchend", release, { passive: true });
   document.addEventListener("touchcancel", release, { passive: true });

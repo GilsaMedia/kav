@@ -44,28 +44,16 @@
   --bar-h: 58px;
   --bar-space: calc(var(--bar-h) + env(safe-area-inset-bottom));
   --fwd: 1;
-  /* Fallback curves, for a WebKit too old for the springs below. */
+  /* Springs drawn as cubic Béziers: iOS hands these to Core Animation, off the main thread, so they stay smooth
+     while the app is busy (a linear() curve it would have to run itself, frame by frame). */
   --ease: cubic-bezier(.4, 0, .2, 1);
   --ease-out: cubic-bezier(.2, .8, .2, 1);
   --ease-in: cubic-bezier(.5, 0, .9, .4);
-  --spring: cubic-bezier(.22, 1, .36, 1);
-  --spring-snappy: cubic-bezier(.22, 1, .36, 1);
-  --spring-bounce: cubic-bezier(.3, 1.25, .5, 1);
-  --spring-pop: cubic-bezier(.34, 1.4, .64, 1);
-  --t-spring: .54s; --t-snappy: .4s; --t-bounce: .51s;
-}
-/* Springs, as Apple tunes them (damping ratio, response), sampled into curves CSS can play. */
-@supports (transition-timing-function: linear(0, 1)) {
-  :root {
-    /* damping 1, response .4: settles without overshooting */
-    --spring: linear(0, .0373, .1231, .2295, .34, .4452, .5404, .6236, .6947, .7543, .8035, .8438, .8764, .9027, .9236, .9402, .9534, .9638, .9719, .9782, .9832, .987, .99, .9923, .9941, .9955, .9965, .9974, 1);
-    /* damping 1, response .3 */
-    --spring-snappy: var(--spring);
-    /* damping .8, response .4: a little give, for things that were thrown */
-    --spring-bounce: linear(0, .0351, .1203, .2315, .3521, .4706, .5801, .6768, .7591, .8268, .881, .923, .9546, .9776, .9936, 1.0041, 1.0105, 1.0139, 1.0151, 1.0149, 1.0138, 1.0122, 1.0104, 1.0086, 1.0068, 1.0053, 1.004, 1.0029, 1);
-    /* damping .7, response .35: a pop, for something that lands */
-    --spring-pop: linear(0, .0458, .1558, .2973, .4465, .588, .7125, .8158, .8968, .9568, .9984, 1.0249, 1.0395, 1.0454, 1.0453, 1.0414, 1.0354, 1.0286, 1.0218, 1.0157, 1.0105, 1.0063, 1.0031, 1.0008, .9993, .9984, .998, .9979, 1);
-  }
+  --spring: cubic-bezier(.25, 1, .5, 1);           /* damping 1: settles without overshooting */
+  --spring-snappy: cubic-bezier(.25, 1, .5, 1);
+  --spring-bounce: cubic-bezier(.3, 1.25, .5, 1);  /* a little give, for things that were thrown */
+  --spring-pop: cubic-bezier(.34, 1.45, .64, 1);   /* a pop, for something that lands */
+  --t-spring: .5s; --t-snappy: .38s; --t-bounce: .5s;
 }
 [dir="rtl"] { --fwd: -1; }
 
@@ -784,7 +772,8 @@ h2 { font-size: 20px; }
 .pay-sheet-backdrop {
   position: fixed; inset: 0; z-index: 60; display: flex; align-items: flex-end; animation: fade-in .3s var(--ease) backwards;
 }
-:is(.sheet-backdrop, .pay-sheet-backdrop)::before { content: ""; position: absolute; inset: 0; z-index: -1; background: var(--scrim); opacity: calc(1 - var(--pull, 0)); pointer-events: none; }
+:is(.sheet-backdrop, .pay-sheet-backdrop)::before { content: ""; position: absolute; inset: 0; z-index: -1; background: var(--scrim); opacity: calc(1 - var(--pull, 0)); pointer-events: none; transition: opacity .35s var(--ease); }
+.pulling::before { transition: none; }
 :is(.sheet-backdrop, .pay-sheet-backdrop) { isolation: isolate; }
 .pay-sheet {
   position: relative; width: 100%; height: calc(100% - env(safe-area-inset-top) - 14px); background: var(--bg);

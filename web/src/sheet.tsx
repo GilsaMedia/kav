@@ -3,7 +3,7 @@
 // flick was heading for. It can be caught again while it's still moving. Only at its highest does its
 // content scroll, so there is never a box scrolling inside a box.
 import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
-import { Spring, Velocity, FLING, SETTLE, project, rubberband } from "./motion.ts";
+import { Velocity, FLING, SETTLE, glide, gliding, hold, liveOffset, project, rubberband, type GlideOpts } from "./motion.ts";
 import { buzz } from "./native.ts";
 
 export interface DragSheetProps {
@@ -26,8 +26,16 @@ export function DragSheet({ detents, start = 0, enter, className, style, childre
   const atRef = useRef(at); atRef.current = at;
   const stops = useRef<number[] | null>(null);
   const dragging = useRef(false);
-  const spring = useRef<Spring | null>(null);
-  if (!spring.current) spring.current = new Spring(0, y => { if (el.current) el.current.style.transform = `translate3d(0, ${y}px, 0)`; });
+  // Where the panel is (or is headed), in px down from fully up.
+  const y = useRef(0);
+
+  const moveTo = (to: number, velocity = 0, opts: GlideOpts = SETTLE) => {
+    const node = el.current;
+    if (!node) return;
+    const from = gliding(node) ? liveOffset(node) : y.current;
+    y.current = to;
+    glide(node, from, to, velocity, opts);
+  };
 
   // The resting heights depend on the panel's size and the screen's; measured again when either changes,
   // and the panel eases to where its height now is.
@@ -38,11 +46,11 @@ export function DragSheet({ detents, start = 0, enter, className, style, childre
     const prev = stops.current;
     if (prev && prev.length === next.length && prev.every((v, i) => Math.abs(v - next[i]) < 1)) return;
     stops.current = next;
-    const y = next[Math.min(atRef.current, next.length - 1)] ?? 0;
+    const target = next[Math.min(atRef.current, next.length - 1)] ?? 0;
     if (!prev) {
-      if (enter) { spring.current!.set(node.offsetHeight); spring.current!.to(y, SETTLE); }
-      else spring.current!.set(y);
-    } else if (!dragging.current) spring.current!.to(y, SETTLE);
+      if (enter) { y.current = node.offsetHeight; moveTo(target); }
+      else { y.current = target; hold(node, target); }
+    } else if (!dragging.current) moveTo(target);
   };
   // Once before it's first drawn; after that only when a size changes. Measuring on every render would force
   // a layout each time the trip's live times tick.
@@ -52,7 +60,7 @@ export function DragSheet({ detents, start = 0, enter, className, style, childre
     const ro = new ResizeObserver(measure);
     if (el.current) ro.observe(el.current);
     window.addEventListener("resize", measure);
-    return () => { ro.disconnect(); window.removeEventListener("resize", measure); spring.current?.stop(); };
+    return () => { ro.disconnect(); window.removeEventListener("resize", measure); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -60,7 +68,7 @@ export function DragSheet({ detents, start = 0, enter, className, style, childre
     const s = stops.current ?? [0];
     const n = Math.max(0, Math.min(s.length - 1, i));
     if (n !== atRef.current) { setAt(n); atRef.current = n; onDetent?.(n); }
-    spring.current!.to(s[n], opts, velocity);
+    moveTo(s[n], velocity, opts);
   };
 
   useEffect(() => {
@@ -73,14 +81,13 @@ export function DragSheet({ detents, start = 0, enter, className, style, childre
       if (e.touches.length !== 1) return;
       x0 = e.touches[0].clientX; y0 = e.touches[0].clientY; mode = null;
       vel.reset(y0);
-      // Caught while it's moving: it stops where it is, under the finger, rather than where it was going.
-      const sp = spring.current!;
-      if (sp.moving) { sp.stop(); mode = "drag"; dragging.current = true; }
-      base = sp.value;
+      // Caught while it's moving: it stops where it is on screen, under the finger, not where it was going.
+      if (gliding(node)) { y.current = liveOffset(node); hold(node, y.current); mode = "drag"; dragging.current = true; }
+      base = y.current;
     };
     const move = (e: TouchEvent) => {
-      const y = e.touches[0].clientY, dy = y - y0;
-      vel.add(y);
+      const cy = e.touches[0].clientY, dy = cy - y0;
+      vel.add(cy);
       if (mode === null) {
         if (Math.abs(dy) < 8) return;
         // Sideways is a swipe to another page (Live Directions' steps), not the panel's to move.
@@ -91,7 +98,7 @@ export function DragSheet({ detents, start = 0, enter, className, style, childre
         const scrolledToTop = node.scrollTop <= 0;
         const onGrip = !!(e.target as HTMLElement).closest?.("[data-grip]");
         mode = onGrip || !top || (dy > 0 && scrolledToTop) ? "drag" : "scroll";
-        if (mode === "drag") { dragging.current = true; y0 = y; base = spring.current!.value; }
+        if (mode === "drag") { dragging.current = true; y0 = cy; base = y.current; }
         return;
       }
       if (mode !== "drag") return;
@@ -101,15 +108,15 @@ export function DragSheet({ detents, start = 0, enter, className, style, childre
       // Past either end it gives, less the further it goes.
       if (pos < lo) pos = lo + rubberband(pos - lo, node.offsetHeight);
       if (pos > hi) pos = hi + rubberband(pos - hi, node.offsetHeight);
-      spring.current!.set(pos);
+      y.current = pos;
+      hold(node, pos);
     };
     const end = () => {
       if (mode === "drag") {
         const s = stops.current ?? [0];
         const v = vel.get();
-        const pos = spring.current!.value;
         // Where the flick was heading, as a scroll would coast there; the nearest height to that.
-        const aim = pos + project(v);
+        const aim = y.current + project(v);
         const i = s.reduce((best, d, k) => Math.abs(d - aim) < Math.abs(s[best] - aim) ? k : best, 0);
         if (i !== atRef.current) buzz("tap");
         // Thrown, it lands with a little give; set down slowly, it just settles.

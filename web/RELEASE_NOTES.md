@@ -1,3 +1,11 @@
+## 2.9.2: smooth, for real this time
+
+2.9.1 took out the heaviest blur, but the motion itself was still running the slow way on iPhone. Now it runs the way iOS runs its own:
+
+- Every animation (screens sliding in, lists settling, sheets rising, the tab highlight, switches, presses) is handed to iOS to play by itself, off the app's busy thread, as in 2.8. In 2.9 the new spring curves were of a kind iOS can't hand over, so it had to draw each frame alongside everything else the app was doing.
+- Letting go of the trip's panel, a sheet, or a Live Directions step is played by iOS too, rather than drawn frame by frame by the app. It still leaves at your finger's speed, still heads where you flicked it, and can still be caught mid-way: it stops right where it is on screen.
+- Pulling a sheet down dims what's behind it less as you go, then eases back if you let it stay.
+
 ## 2.9.1: smooth again
 
 2.9 could stutter, most of all over the map. This version keeps the new look and motion and takes the weight out:

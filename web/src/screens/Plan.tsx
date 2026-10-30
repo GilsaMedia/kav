@@ -9,7 +9,7 @@ import { Header, LineBadge, Spinner, Note, LiveDot, PlacePicker, SaveFavourite, 
 import { MapView, type MapLine, type MapPoint } from "../MapView.tsx";
 import { Home, Arrives, type Opened } from "./Home.tsx";
 import { DragSheet } from "../sheet.tsx";
-import { Spring, Velocity, FLING, SETTLE, project as coast, rubberband } from "../motion.ts";
+import { Velocity, FLING, SETTLE, glide, gliding, hold, liveOffset, project as coast, rubberband } from "../motion.ts";
 import { WhenButton, WhenSheet, type When } from "../when.tsx";
 import { DelayNote } from "../delays.tsx";
 import { saveRide, clearRide, setRideStep, useRide, GRACE_MS } from "../ride.ts";
@@ -1096,16 +1096,15 @@ function Navigate({ trip, r, live, here, lines, ends, vehicles, from, to, onPay,
   // only a little.
   const touch = useRef<{ x: number; y: number; dx: number; sideways: boolean | null } | null>(null);
   const swipeVel = useRef(new Velocity());
-  const back = useRef<Spring | null>(null);
   const swipe = {
     onTouchStart: (e: React.TouchEvent) => {
       if (turning.current) return;
-      // Caught while springing back: it carries on from where it is.
-      const from = back.current?.moving ? back.current.value : 0;
-      back.current?.stop();
+      // Caught while springing back: it carries on from where it is on screen.
+      const el = slide.current;
+      const from = el && gliding(el) ? liveOffset(el, "x") : 0;
+      if (el) hold(el, from, "x");
       touch.current = { x: e.touches[0].clientX - from, y: e.touches[0].clientY, dx: from, sideways: from ? true : null };
       swipeVel.current.reset(e.touches[0].clientX);
-      if (slide.current) slide.current.style.transition = "none";
     },
     onTouchMove: (e: React.TouchEvent) => {
       const t = touch.current, el = slide.current;
@@ -1119,7 +1118,7 @@ function Navigate({ trip, r, live, here, lines, ends, vehicles, from, to, onPay,
       if (!t.sideways) return;
       const target = step + ((dx < 0) !== rtl ? 1 : -1);
       t.dx = dx;
-      el.style.transform = `translateX(${target < 0 || target >= cards.length ? rubberband(dx, el.offsetWidth) : dx}px)`;
+      hold(el, target < 0 || target >= cards.length ? rubberband(dx, el.offsetWidth) : dx, "x");
     },
     onTouchEnd: () => {
       const t = touch.current, el = slide.current;
@@ -1131,10 +1130,7 @@ function Navigate({ trip, r, live, here, lines, ends, vehicles, from, to, onPay,
       const aim = t.dx + coast(v);
       if (Math.abs(aim) > el.offsetWidth / 3 && Math.sign(aim) === Math.sign(t.dx) && target >= 0 && target < cards.length) { go(target); return; }
       // Back into place, from where the finger left it and at its speed.
-      const node = el;
-      back.current = new Spring(node.style.transform ? new DOMMatrix(getComputedStyle(node).transform).m41 : 0,
-        x => { node.style.transform = x ? `translateX(${x}px)` : ""; });
-      back.current.to(0, Math.abs(v) > 400 ? FLING : SETTLE, v);
+      glide(el, liveOffset(el, "x"), 0, v, Math.abs(v) > 400 ? FLING : SETTLE, "x");
     },
   };
 

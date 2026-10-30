@@ -1,83 +1,61 @@
-// Motion as an iPhone moves things: springs that start from wherever a thing is on screen, at the speed the
-// finger left it, so a drag and the settle after it are one movement, and anything moving can be caught again.
-// Springs are described as Apple's are: a damping ratio (1 settles without overshooting, lower bounces) and a
-// response (about how long, in seconds, it takes to get there).
+// Motion as an iPhone moves things: a thing let go carries on at the speed the finger left it, toward where a
+// flick was heading, and can be caught again mid-flight. The movement after the finger is a CSS transition, so
+// iOS runs it off the main thread (Core Animation), smooth even while the app is busy; its curve is chosen so
+// it starts at the finger's speed, and catching it reads where it is on screen right now.
 
-export interface SpringOpts { damping?: number; response?: number }
+export interface GlideOpts { response?: number; bounce?: boolean }
 
 // Calm for things that just move; a little give only after a flick, when the hand threw it there.
-export const SETTLE: SpringOpts = { damping: 1, response: 0.4 };
-export const FLING: SpringOpts = { damping: 0.82, response: 0.36 };
+export const SETTLE: GlideOpts = { response: 0.42 };
+export const FLING: GlideOpts = { response: 0.4, bounce: true };
 
 const reduced = () => matchMedia("(prefers-reduced-motion: reduce)").matches;
 
-// One animated number. `to` re-aims it from where it is now, keeping its speed, so a change of mind mid-flight
-// bends the movement instead of stopping it dead.
-export class Spring {
-  value: number;
-  velocity = 0;
-  target: number;
-  private raf = 0;
-  private last = 0;
-  private k = 0;
-  private c = 0;
-  private done?: () => void;
-
-  // precision: how close counts as there, in the value's own units (px by default; less for a 0–1 progress).
-  constructor(value: number, private onUpdate: (v: number) => void, private precision = 0.25) {
-    this.value = this.target = value;
-  }
-
-  get moving() { return this.raf !== 0; }
-
-  to(target: number, opts: SpringOpts = SETTLE, velocity?: number, done?: () => void) {
-    this.target = target;
-    if (velocity != null) this.velocity = velocity;
-    this.done = done;
-    const { damping = 1, response = 0.4 } = opts;
-    const w = (2 * Math.PI) / Math.max(0.05, response);
-    this.k = w * w;
-    this.c = 2 * damping * w;
-    if (reduced()) { this.set(target); done?.(); return; }
-    if (!this.raf) { this.last = performance.now(); this.raf = requestAnimationFrame(this.tick); }
-  }
-
-  // Straight there, without moving: under the finger, or when nothing should animate.
-  set(v: number) {
-    this.stop();
-    this.value = this.target = v;
-    this.velocity = 0;
-    this.onUpdate(v);
-  }
-
-  stop() {
-    if (this.raf) cancelAnimationFrame(this.raf);
-    this.raf = 0;
-  }
-
-  private tick = (now: number) => {
-    // Small fixed steps, so a dropped frame doesn't change the path.
-    let dt = Math.min(0.064, (now - this.last) / 1000);
-    this.last = now;
-    while (dt > 0) {
-      const h = Math.min(dt, 1 / 240);
-      const a = -this.k * (this.value - this.target) - this.c * this.velocity;
-      this.velocity += a * h;
-      this.value += this.velocity * h;
-      dt -= h;
-    }
-    if (Math.abs(this.value - this.target) < this.precision && Math.abs(this.velocity) < this.precision * 16) {
-      this.raf = 0;
-      this.value = this.target;
-      this.velocity = 0;
-      this.onUpdate(this.value);
-      const done = this.done; this.done = undefined; done?.();
-      return;
-    }
-    this.onUpdate(this.value);
-    this.raf = requestAnimationFrame(this.tick);
-  };
+// Where a thing is on screen this instant, even halfway through a transition.
+export function liveOffset(el: HTMLElement, axis: "x" | "y" = "y"): number {
+  const t = getComputedStyle(el).transform;
+  if (!t || t === "none") return 0;
+  const m = new DOMMatrixReadOnly(t);
+  return axis === "x" ? m.m41 : m.m42;
 }
+
+const place = (axis: "x" | "y", v: number) => axis === "y" ? `translate3d(0, ${v}px, 0)` : `translate3d(${v}px, 0, 0)`;
+
+// Straight there, under the finger.
+export function hold(el: HTMLElement, v: number, axis: "x" | "y" = "y") {
+  el.style.transition = "none";
+  el.style.transform = v ? place(axis, v) : "";
+}
+
+// From where it is to `to`, starting at `velocity` (px/s). The curve's first handle is tilted so its starting
+// slope is that speed, so there's no seam between the drag and the glide. Calls done once it's there, unless
+// it's caught or re-aimed first.
+export function glide(el: HTMLElement, from: number, to: number, velocity = 0, opts: GlideOpts = SETTLE, axis: "x" | "y" = "y", done?: () => void) {
+  const dist = to - from;
+  if (reduced() || Math.abs(dist) < 0.5) { hold(el, to, axis); done?.(); return; }
+  const secs = Math.min(0.62, Math.max(0.24, (opts.response ?? 0.42) * (opts.bounce ? 1.25 : 1.1)));
+  // Speed relative to the whole trip, per unit of the curve's time: the slope the curve should start with.
+  const slope = Math.max(-2, Math.min(5, (velocity * secs) / dist));
+  const x1 = 0.3, y1 = slope > 0 ? Math.max(0.12, slope * x1) : slope * x1;
+  const curve = opts.bounce ? `cubic-bezier(${x1}, ${y1.toFixed(3)}, 0.32, 1.12)` : `cubic-bezier(${x1}, ${y1.toFixed(3)}, 0.25, 1)`;
+  // Start from exactly where it is (the finger's last place, or where it was caught), then let go.
+  hold(el, from, axis);
+  void el.offsetWidth;
+  el.style.transition = `transform ${secs.toFixed(3)}s ${curve}`;
+  el.style.transform = to ? place(axis, to) : "";
+  const token = Symbol();
+  (el as HTMLElement & { _glide?: symbol })._glide = token;
+  const end = () => {
+    el.removeEventListener("transitionend", end);
+    if ((el as HTMLElement & { _glide?: symbol })._glide !== token) return;
+    el.style.transition = "";
+    done?.();
+  };
+  el.addEventListener("transitionend", end);
+  setTimeout(end, secs * 1000 + 80);
+}
+
+export const gliding = (el: HTMLElement) => !!el.style.transition && el.style.transition !== "none";
 
 // Where a flick would come to rest if it were left to slow down as a scroll does (Apple's own projection).
 export function project(velocity: number, rate = 0.998) {
