@@ -32,7 +32,7 @@ export function installGestures() {
     const rtl = arrow.classList.contains("rtl");
     arrow.style.opacity = String(Math.min(1, p * 1.4));
     arrow.style.transform = `translateY(-50%) translateX(${(rtl ? -1 : 1) * (Math.min(p, 1.4) * 46 - 46)}px) scale(${0.7 + 0.3 * Math.min(1, p)})`;
-  });
+  }, 0.004);
 
   const reset = () => {
     if (!start && !arrowSpring.value) return;

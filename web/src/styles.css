@@ -38,7 +38,8 @@
   --tint: color-mix(in srgb, var(--accent) 16%, transparent);
   /* The material: what's behind, blurred, brightened, and showing through a veil of the page's colour. */
   --material: color-mix(in srgb, var(--bg) 70%, transparent);
-  --blur: blur(24px) saturate(1.8);
+  /* Kept light: a blur's cost grows with its radius, and over the map it's redone every frame. */
+  --blur: blur(14px) saturate(1.5);
   --r-card: 22px; --r-control: 14px; --r-pill: 999px;
   --bar-h: 58px;
   --bar-space: calc(var(--bar-h) + env(safe-area-inset-bottom));
@@ -107,12 +108,12 @@ h2 { font-size: 20px; }
   box-shadow: inset 0 1px 0 rgba(255,255,255,.9), 0 8px 28px -6px var(--shadow);
 }
 /* A big surface over the page reads as thicker glass than a small chip. */
-:root[data-glass="liquid"] .sheet { --blur: blur(40px) saturate(1.9); }
 :root[data-glass="liquid"] :is(.card, .note, .field, .btn, .segmented) { border: .5px solid var(--rim); }
+:root[data-glass="liquid"] .chip { background: var(--pane-solid); -webkit-backdrop-filter: none; backdrop-filter: none; box-shadow: var(--lift); }
 
 /* Everything pressable answers the moment it's touched: it sinks in fast, and springs back when let go. */
 .press, .btn, .chip, .plate-btn, .icon-btn, .card:is(button), .it-card, .row-card, .ticket, .tabbar button, .segmented button, .swatch, .setup-btn, .home-search, .ld-act, .when-btn, .shift-btn, .home-row {
-  transition: transform var(--t-bounce) var(--spring-bounce), background-color .25s var(--ease), color .25s var(--ease), opacity .25s, box-shadow .25s;
+  transition: transform var(--t-bounce) var(--spring-bounce), background-color .25s var(--ease), color .25s var(--ease), opacity .25s;
 }
 :is(.press, .btn, .chip, .plate-btn, .icon-btn, .card:is(button), .it-card, .row-card, .ticket, .segmented button, .swatch, .setup-btn, .home-search, .ld-act, .when-btn, .home-row):active:not(:disabled) {
   transform: scale(.965); transition: transform .1s var(--ease-out), background-color .1s, color .1s, opacity .1s;
@@ -125,9 +126,8 @@ h2 { font-size: 20px; }
 @keyframes lang-in { from { opacity: 0; transform: translateX(calc(18px * var(--fwd))); } }
 .main { position: absolute; inset: 0; }
 /* Tabs cross-dissolve where they stand, the new one settling up out of a slight recess. */
-.tab-page { position: absolute; inset: 0; overflow: hidden; animation: tab-in .42s var(--spring) backwards; }
+.tab-page { position: absolute; inset: 0; overflow: hidden; animation: fade-in .3s var(--ease) backwards; }
 .tab-page[hidden] { display: none; }
-@keyframes tab-in { from { opacity: 0; transform: scale(.985); } }
 @keyframes fade-in { from { opacity: 0; } }
 
 .screen, .overlay { height: 100%; overflow: hidden; display: flex; flex-direction: column; background: var(--bg); position: relative; }
@@ -161,16 +161,14 @@ h2 { font-size: 20px; }
 .header::after {
   content: ""; position: absolute; inset-inline: 0; top: 100%; height: 24px; pointer-events: none;
   background: linear-gradient(var(--bg), color-mix(in srgb, var(--bg) 0%, transparent));
-  -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px);
-  -webkit-mask-image: linear-gradient(#000, transparent); mask-image: linear-gradient(#000, transparent);
   opacity: 0; transition: opacity .25s var(--ease);
 }
 .scrolled > .header::after { opacity: 1; }
 .header-text { flex: 1; min-width: 0; padding-inline: 4px; }
 .header h1 { font-size: 22px; font-weight: 700; letter-spacing: -.02em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* A page at the top of its tab has a large title, as an iPhone's do. */
-.header:not(:has([data-back])) { padding-inline: 20px; }
-.header:not(:has([data-back])) h1 { font-size: 34px; letter-spacing: -.026em; line-height: 1.1; }
+.header.large { padding-inline: 20px; }
+.header.large h1 { font-size: 34px; letter-spacing: -.026em; line-height: 1.1; }
 .header .sub { color: var(--dim); font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 .plate-btn { width: 44px; height: 44px; border-radius: 22px; display: grid; place-items: center; color: var(--text); flex-shrink: 0; box-shadow: 0 4px 14px -4px var(--shadow); }
@@ -324,6 +322,7 @@ h2 { font-size: 20px; }
 :is(.list, .stack, .legs) > :nth-child(6) { animation-delay: 150ms; }
 :is(.list, .stack, .legs) > :nth-child(7) { animation-delay: 180ms; }
 :is(.list, .stack, .legs) > :nth-child(n+8) { animation-delay: 210ms; }
+:is(.list > li, .legs > li):nth-child(n+13) { animation: none; }
 
 /* A line's plate: the operator's colour for rail, light rail, taxis, the Carmelit and the cable car, glass for buses. */
 .badge {
@@ -361,7 +360,6 @@ h2 { font-size: 20px; }
 /* What's behind dims while a sheet is up, and comes back as the sheet is pulled away (--pull, set by hand). */
 .sheet-backdrop {
   position: fixed; inset: 0; z-index: 50; display: flex; align-items: flex-end;
-  background: color-mix(in srgb, var(--scrim) calc((1 - var(--pull, 0)) * 100%), transparent);
   padding: 8px 8px calc(env(safe-area-inset-bottom) + 8px); animation: fade-in .3s var(--ease) backwards;
 }
 .sheet {
@@ -588,10 +586,6 @@ h2 { font-size: 20px; }
   background: radial-gradient(120% 90% at 100% 0%, color-mix(in srgb, var(--accent) 20%, transparent), transparent 60%), var(--pane-solid);
 }
 [dir="rtl"] .frequent-card { background: radial-gradient(120% 90% at 0% 0%, color-mix(in srgb, var(--accent) 20%, transparent), transparent 60%), var(--pane-solid); }
-@supports (animation-timeline: view()) {
-  .frequent-card { animation: card-focus linear both; animation-timeline: view(inline); }
-  @keyframes card-focus { 0%, 100% { scale: .93; } 50% { scale: 1; } }
-}
 .frequent-head { padding: 14px 18px 0; font-size: 12px; font-weight: 700; color: var(--accent-fg); text-transform: uppercase; letter-spacing: .03em; }
 .frequent-to { padding: 4px 18px 2px; font-size: 26px; font-weight: 700; letter-spacing: -.026em; line-height: 1.15; }
 .frequent-wait { padding: 4px 18px 20px; min-height: 120px; }
@@ -615,14 +609,14 @@ h2 { font-size: 20px; }
 .home-row-icon.lit { color: var(--accent-fg); }
 .home-row > .home-row-icon { width: 40px; height: 40px; border-radius: 12px; background: var(--tint); }
 .home-ride { background: linear-gradient(120deg, color-mix(in srgb, var(--accent) 22%, var(--pane-solid)), var(--pane-solid)); }
-.home-ride .home-row-icon { animation: pulse-soft 2.4s var(--ease) infinite; }
-@keyframes pulse-soft { 50% { box-shadow: 0 0 0 6px color-mix(in srgb, var(--accent) 14%, transparent); } }
+.home-ride .home-row-icon { position: relative; }
+.home-ride .home-row-icon::after { content: ""; position: absolute; inset: 0; border-radius: inherit; background: var(--accent); opacity: 0; animation: pulse-soft 2.4s var(--ease) infinite; }
+@keyframes pulse-soft { 0% { transform: scale(1); opacity: .22; } 70%, 100% { transform: scale(1.35); opacity: 0; } }
 .home-pill { background: var(--accent); color: var(--on-accent); border-radius: 999px; padding: 7px 16px; font-size: 15px; font-weight: 700; letter-spacing: -.01em; }
 /* Section titles, bold and in the page's colour, with their actions at the end. */
 .home-head { display: flex; justify-content: space-between; align-items: baseline; padding: 26px 20px 8px; color: var(--text); font-size: 22px; font-weight: 700; letter-spacing: -.024em; }
 .home-head .link { font-weight: 600; padding: 0; font-size: 16px; letter-spacing: -.01em; }
 .home-list { margin: 0 16px; border-radius: 20px; background: var(--pane-solid); box-shadow: var(--lift); overflow: hidden; }
-.home-list:not(:has(> li)) { display: none; }
 .home-list > li { display: flex; align-items: center; gap: 14px; padding: 13px 14px 13px 16px; position: relative; cursor: pointer; transition: background-color .35s var(--ease); }
 [dir="rtl"] .home-list > li { padding: 13px 16px 13px 14px; }
 .home-list > li + li::before { content: ""; position: absolute; top: 0; inset-inline: 60px 0; height: .5px; background: var(--hairline); }
@@ -672,7 +666,7 @@ h2 { font-size: 20px; }
 .trip-cta:has(.remind-btn) { display: flex; gap: 10px; }
 .trip-cta .setup-btn.lit { flex: 1; }
 .trip-cta .remind-btn { width: auto; flex-shrink: 0; padding: 0 18px; gap: 7px; font-size: 15px; font-weight: 600; font-variant-numeric: tabular-nums;
-  background: var(--material); -webkit-backdrop-filter: var(--blur); backdrop-filter: var(--blur); border: .5px solid var(--rim-float); }
+  background: var(--pane-solid); border: .5px solid var(--rim-float); }
 .trip-cta .remind-btn.on { color: var(--accent-fg); }
 
 .timeline { padding: 18px 16px 8px 8px; }
@@ -705,8 +699,7 @@ h2 { font-size: 20px; }
 
 /* ---- live directions, laid out as Moovit's -------------------------------------------------- */
 
-.live-dir { position: fixed; inset: 0; z-index: 40; animation: ld-in var(--t-spring) var(--spring) backwards; }
-@keyframes ld-in { from { opacity: 0; transform: scale(.97); } }
+.live-dir { position: fixed; inset: 0; z-index: 40; animation: fade-in .3s backwards; }
 .ld-head {
   display: flex; align-items: center; gap: 8px; color: var(--on-accent);
   background: linear-gradient(180deg, color-mix(in srgb, var(--accent) 88%, #fff), var(--accent));
@@ -790,8 +783,9 @@ h2 { font-size: 20px; }
 /* Paying from a trip: a sheet that rises over it with the payment alone, the trip dimmed behind. */
 .pay-sheet-backdrop {
   position: fixed; inset: 0; z-index: 60; display: flex; align-items: flex-end; animation: fade-in .3s var(--ease) backwards;
-  background: color-mix(in srgb, var(--scrim) calc((1 - var(--pull, 0)) * 100%), transparent);
 }
+:is(.sheet-backdrop, .pay-sheet-backdrop)::before { content: ""; position: absolute; inset: 0; z-index: -1; background: var(--scrim); opacity: calc(1 - var(--pull, 0)); pointer-events: none; }
+:is(.sheet-backdrop, .pay-sheet-backdrop) { isolation: isolate; }
 .pay-sheet {
   position: relative; width: 100%; height: calc(100% - env(safe-area-inset-top) - 14px); background: var(--bg);
   border-radius: 34px 34px 0 0; overflow: hidden; box-shadow: 0 -10px 50px -10px var(--shadow), inset 0 .5px 0 var(--rim-float);
@@ -810,7 +804,7 @@ h2 { font-size: 20px; }
 .edge-back {
   position: fixed; z-index: 100; inset-inline-start: 8px; width: 42px; height: 42px; border-radius: 21px; pointer-events: none;
   display: grid; place-items: center; opacity: 0; color: var(--text); box-shadow: 0 6px 20px -4px var(--shadow);
-  background: color-mix(in srgb, var(--s3) 80%, transparent); -webkit-backdrop-filter: var(--blur); backdrop-filter: var(--blur);
+  background: var(--s3);
   transform: translateY(-50%) translateX(-46px);
   transition: background-color .2s, color .2s;
 }

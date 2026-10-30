@@ -68,7 +68,7 @@ export const goBack = (back: () => void) => () => { stayPut(); back(); };
 
 export function Header({ title, sub, back, right }: { title: string; sub?: string; back?: () => void; right?: ReactNode }) {
   return (
-    <header className="header">
+    <header className={"header" + (back ? "" : " large")}>
       {back && <button className="plate-btn" data-back onClick={goBack(back)} aria-label={T("Back", "חזרה")}><BackGlyph /></button>}
       <div className="header-text">
         <h1>{title}</h1>

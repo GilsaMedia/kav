@@ -44,7 +44,10 @@ export function DragSheet({ detents, start = 0, enter, className, style, childre
       else spring.current!.set(y);
     } else if (!dragging.current) spring.current!.to(y, SETTLE);
   };
-  useLayoutEffect(measure);
+  // Once before it's first drawn; after that only when a size changes. Measuring on every render would force
+  // a layout each time the trip's live times tick.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useLayoutEffect(measure, []);
   useEffect(() => {
     const ro = new ResizeObserver(measure);
     if (el.current) ro.observe(el.current);

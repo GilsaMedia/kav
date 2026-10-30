@@ -1,4 +1,15 @@
-## A new look, and motion that moves the way your iPhone does
+## 2.9.1: smooth again
+
+2.9 could stutter, most of all over the map. This version keeps the new look and motion and takes the weight out:
+
+- Frosted surfaces blur less, and only the few that need it do: the tab bar, sheets, round buttons and Live Directions' card. Chips, the reminder button, the swipe-back arrow and page headers are solid now, so nothing is re-blurred under the map or while you scroll.
+- Nothing repaints forever: the ring around your ride on the home screen breathes on its own layer instead of redrawing a shadow every frame.
+- Tabs and Live Directions fade in rather than scaling the whole page, and the frequent destination cards no longer resize as you swipe.
+- A long list (search results, a line's stops) brings in only its first rows one by one; the rest just appear.
+- The trip's panel measures itself only when its size changes, not every time the live times tick.
+- Pulling a sheet down dims what's behind it without repainting the screen, and the swipe-back arrow no longer snaps away at the end.
+
+## 2.9: a new look, and motion that moves the way your iPhone does
 
 Kav keeps every screen, tab and button where it was. What changed is how it looks and, above all, how it moves under your finger.
 

@@ -23,7 +23,8 @@ export class Spring {
   private c = 0;
   private done?: () => void;
 
-  constructor(value: number, private onUpdate: (v: number) => void) {
+  // precision: how close counts as there, in the value's own units (px by default; less for a 0–1 progress).
+  constructor(value: number, private onUpdate: (v: number) => void, private precision = 0.25) {
     this.value = this.target = value;
   }
 
@@ -65,7 +66,7 @@ export class Spring {
       this.value += this.velocity * h;
       dt -= h;
     }
-    if (Math.abs(this.value - this.target) < 0.25 && Math.abs(this.velocity) < 4) {
+    if (Math.abs(this.value - this.target) < this.precision && Math.abs(this.velocity) < this.precision * 16) {
       this.raf = 0;
       this.value = this.target;
       this.velocity = 0;
