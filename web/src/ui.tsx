@@ -90,6 +90,13 @@ function plateFor(type: number) {
     : m === "funicular" ? PLATES.carmelit : m === "cable" || m === "gondola" ? PLATES.rakavlit : null;
 }
 
+// Some lines Moovit names with a note after the number ("390 - בהזמנה מראש", by advance booking only): the number
+// goes on the plate and on the map, the note is said on the trip.
+// The note is set off by a dash, a colon, a bracket or a space, so a lettered number ("33א") stays whole.
+const NOTED = /^\s*(\d{1,4}[א-תA-Za-z]?)(?:\s*[-–—:(]\s*|\s+)([^\d\s/].*?)\)?\s*$/;
+export const lineNum = (n: string) => n ? n.split(" / ").map(p => p.match(NOTED)?.[1] ?? p).join(" / ") : "";
+export const lineNote = (n: string) => n ? n.split(" / ")[0].match(NOTED)?.[2] ?? "" : "";
+
 // agency: the operator's name, for a bus line's plate in its colour (or, with Moovit's look chosen in Settings, a
 // grey plate over a strip of it).
 export function LineBadge({ number, type, small, agency }: { number: string; type: number; small?: boolean; agency?: string | null }) {
@@ -100,7 +107,8 @@ export function LineBadge({ number, type, small, agency }: { number: string; typ
   const strip = colour && prefs.moovitBadges ? onScreen(colour, light) : null;
   // Trains are named for their whole route ("Herzliya - Jerusalem/Yitzhak Navon"): the mode reads better on a badge.
   // Several numbers on one plate ("72 / 27 / 282") stay numbers, however long.
-  const text = !number || (number.length > 8 && !number.includes(" / ")) ? modeName(type) : number;
+  const num = lineNum(number);
+  const text = !num || (num.length > 8 && !num.includes(" / ")) ? modeName(type) : num;
   const style = plate ? { "--plate-fill": plate[0], "--plate-edge": plate[1], "--plate-ink": plate[2], "--plate-glyph": plate[2] } as CSSProperties
     : strip ? { "--strip": strip } as CSSProperties : undefined;
   return <span className={"badge" + (small ? " small" : "") + (strip ? " strip" : "")} style={style} dir="auto" title={number}>

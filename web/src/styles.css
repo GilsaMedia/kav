@@ -680,6 +680,8 @@ h2 { font-size: 20px; }
 .tl-line .badge { height: 32px; font-size: 16px; min-width: 50px; }
 .tl-line .badge-btn:disabled { opacity: 1; }
 .tl-dest { font-weight: 600; color: var(--text); }
+/* What Moovit adds to a line's name, such as "by advance booking": worth noticing before you go. */
+.tl-note { font-size: 14px; font-weight: 600; color: var(--problem); }
 .tl-stops { font-size: 14px; }
 .tl-stops:disabled { color: var(--dim); opacity: 1; }
 .tl-mini { margin: 0; padding-inline-start: 4px; list-style: none; display: flex; flex-direction: column; gap: 6px; color: var(--muted); font-size: 14px; animation: fade-in .3s backwards; }

@@ -5,7 +5,7 @@ import {
   timeOf, isLive, isCancelled, isSeen, inTraffic, distinctDeps, routeTypeOf, options, modeColor, modeName, MODE_FILTERS, mergeResolved, emptyResolved,
   type Place, type Favourite, type Itinerary, type Leg, type Resolved, type Arrival, type LatLon, type Departure, agencyOf,
 } from "../core.ts";
-import { Header, LineBadge, Spinner, Note, LiveDot, PlacePicker, SaveFavourite, HERE_NAME, Sheet, Eta, NextTimes, isLate, goBack, stayPut, liveWhy } from "../ui.tsx";
+import { lineNum, lineNote, Header, LineBadge, Spinner, Note, LiveDot, PlacePicker, SaveFavourite, HERE_NAME, Sheet, Eta, NextTimes, isLate, goBack, stayPut, liveWhy } from "../ui.tsx";
 import { MapView, type MapLine, type MapPoint } from "../MapView.tsx";
 import { Home, Arrives, type Opened } from "./Home.tsx";
 import { DragSheet } from "../sheet.tsx";
@@ -515,7 +515,7 @@ export function TripDetail({ trip: given, resolved: givenR, from, to, tripEnds, 
     return [];
   });
   const vehicles: MapPoint[] = (live.data?.arrivals ?? []).filter(a => a.tracked && a.lat && legs.some(l => l.kind === "ride" && l.lineId === a.lineId && a.stopId === l.fromStop))
-    .map(a => ({ id: `v${a.tripId}`, at: [a.lat, a.lon] as LatLon, color: modeColor(routeTypeOf(r, a.lineId)), kind: "vehicle" as const, label: r.lines[a.lineId]?.number ?? "" }));
+    .map(a => ({ id: `v${a.tripId}`, at: [a.lat, a.lon] as LatLon, color: modeColor(routeTypeOf(r, a.lineId)), kind: "vehicle" as const, label: lineNum(r.lines[a.lineId]?.number ?? "") }));
   // The stops each ride passes and stops at, small in the line's colour (their names close up), then the
   // stops you get on and off at.
   const passing: MapPoint[] = legs.filter(l => l.kind === "ride").flatMap(l => l.stops.slice(1, -1).map(id => ({ id, at: stopAt(id), ring: modeColor(routeTypeOf(r, l.lineId)) })))
@@ -727,6 +727,7 @@ function RideSteps({ leg, wait, r, live, now, onPay, stopAt, prev, below, onPick
         ))}
       </div>
       {line?.destination && <div className="tl-dest" dir="auto">{T("towards ", "לכיוון ")}{line.destination}</div>}
+      {(() => { const o = opts[pick] ?? leg, note = lineNote(r.lines[o.lineId]?.number || o.shortName); return note && <div className="tl-note" dir="auto">{note}</div>; })()}
       {opts.length > 1 && <div className="dim small">{T("Any of these lines will do: tap one to see its times and its route on the map.", "כל אחד מהקווים האלה מתאים: הקישו על אחד כדי לראות את הזמנים והמסלול שלו במפה.")}</div>}
       {wait?.alertText && <Note tone="warn">{wait.alertText}</Note>}
       <button className="link tl-stops" onClick={() => setOpen(!open)} disabled={!between.length}>
@@ -795,7 +796,7 @@ function tripLiveOf(trip: Itinerary, r: Resolved, live: Arrival[] | undefined, n
       label: T("Arrive in", "הגעה בעוד"), stop: to, line: "", mode: "walk", color: "#9C9CA5", target: trip.arr * 1000, live: false,
     };
     const type = routeTypeOf(r, nextRide.lineId);
-    const numbers = [...new Set(options(nextRide).map(o => r.lines[o.lineId]?.number || o.shortName).filter(Boolean))].slice(0, 2);
+    const numbers = [...new Set(options(nextRide).map(o => lineNum(r.lines[o.lineId]?.number || o.shortName)).filter(Boolean))].slice(0, 2);
     const deps = departuresFor(nextRide, waitBefore(nextRide), live, now);
     const mine = deps.find(d => String(d.tripId) === String(nextRide.tripId)) ?? deps[0];
     const common = { ...base, line: numbers.join(" / "), mode: modeOf(type), color: modeColor(type), live: !!mine && isLive(mine) };
@@ -832,7 +833,7 @@ function stepNoticesOf(trip: Itinerary, r: Resolved, live: Arrival[] | undefined
     const mine = deps.find(d => String(d.tripId) === String(ride.tripId)) ?? deps[0];
     const board = mine ? timeOf(mine) : ride.dep;
     const off = ride.arr + lateOf(ride);
-    const numbers = [...new Set(options(ride).map(o => r.lines[o.lineId]?.number || o.shortName).filter(Boolean))].slice(0, 2).join(" / ");
+    const numbers = [...new Set(options(ride).map(o => lineNum(r.lines[o.lineId]?.number || o.shortName)).filter(Boolean))].slice(0, 2).join(" / ");
     const from = r.stops[ride.fromStop]?.name ?? "", to = r.stops[ride.toStop]?.name ?? "";
     if (onIt !== progress && board - STEP_LEAD > now + 20) out.push({ id: `nav-board-${i}`, at: (board - STEP_LEAD) * 1000,
       title: T(`${numbers} at your stop in 2 min`, `${numbers} בתחנה בעוד 2 דק׳`), body: from });

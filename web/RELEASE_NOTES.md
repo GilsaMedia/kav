@@ -1,3 +1,8 @@
+## 2.9.3: every bus shows its number
+
+- Some lines carry a note in their name, such as "390 - בהזמנה מראש" (by advance booking only). Their plate showed just "Bus"; now it shows the number, 390, on the trip, the map and the lock screen.
+- The note itself is shown under the line on the trip, so you know before you go that the ride has to be booked.
+
 ## 2.9.2: smooth, for real this time
 
 2.9.1 took out the heaviest blur, but the motion itself was still running the slow way on iPhone. Now it runs the way iOS runs its own:
