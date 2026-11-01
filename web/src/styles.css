@@ -937,3 +937,12 @@ a.btn { text-decoration: none; }
 /* A way's page, before Start: the countdown to the line at your stop. */
 .trip-count { margin: 4px 16px 8px; border-radius: 16px; border-top: 0; }
 .trip-count .leave-now { color: var(--problem); font-weight: 600; }
+
+/* Choosing a place on the map: the map under a pin that stays in the middle, and a card to set it. */
+.pick-map { position: relative; flex: 1; min-height: 0; }
+.pick-pin { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -100%); color: var(--accent); pointer-events: none; z-index: 2;
+  filter: drop-shadow(0 3px 4px rgba(0, 0, 0, .45)); }
+.pick-pin .glyph { fill: var(--bg); }
+.pick-card { position: absolute; inset-inline: 12px; bottom: calc(var(--bar-space) + 20px); z-index: 3; display: flex; align-items: center; gap: 12px; padding: 14px 16px; }
+.pick-card .grow { min-width: 0; }
+.pick-card b { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

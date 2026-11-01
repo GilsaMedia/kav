@@ -1,3 +1,7 @@
+## 3.1: go anywhere on the map
+
+- Where to (and From, and saving a favourite) has Choose on the map: move the map under the pin and tap Set. The spot under the pin is where you go, no address needed. It's named after the stop nearest it, so it reads well in your recent trips.
+
 ## 3.0: pay from the lock screen, and more ways to go
 
 - While a trip is open and the ride ahead isn't paid for yet, the lock screen and the Dynamic Island show a Pay button. It opens Kav straight on paying for that ride, and goes away once you've paid. It's only there while Kav is running, and only if you pay with Kav.

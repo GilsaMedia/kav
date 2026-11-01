@@ -3,6 +3,7 @@ import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNod
 import { BackGlyph, ModeGlyph, modeOf, StationMark, StarGlyph, RecentGlyph, PinGlyph, LocateGlyph, SearchGlyph, CloseGlyph } from "./icons.tsx";
 import qrcode from "qrcode-generator";
 import { operatorColour, operatorPlate, onScreen } from "./operators.ts";
+import { MapPicker } from "./mappick.tsx";
 import {
   T, api, usePrefs, getPrefs, setPrefs, remember, useHere, modeName, distanceText, metres, currentHere, locateOnce, failure,
   clock, timeOf, isLive, isCancelled, isSeen, type Place, type Departure,
@@ -283,6 +284,9 @@ export function PlacePicker({ title, onPick, onClose, allowHere = true }: {
   };
   const far = (p: { lat: number; lon: number }) => here ? distanceText(metres(here, [p.lat, p.lon])) : "";
   const [leaving, leave] = useLeaving(onClose, 240);
+  // Choosing the spot on the map instead of searching for it.
+  const [onMap, setOnMap] = useState(false);
+  if (onMap) return <MapPicker onPick={pick} onClose={() => setOnMap(false)} />;
 
   return (
     <div className={"overlay" + (leaving ? " leaving" : "")}>
@@ -300,6 +304,8 @@ export function PlacePicker({ title, onPick, onClose, allowHere = true }: {
         {!results && !coords && (
           <ul className="list">
             {allowHere && <li className="row" onClick={pickHere}><span className="row-icon lit"><LocateGlyph size={18} /></span><div className="row-main"><div>{HERE_NAME()}</div></div></li>}
+            <li className="row" onClick={() => setOnMap(true)}><span className="row-icon lit"><PinGlyph size={18} /></span>
+              <div className="row-main"><div>{T("Choose on the map", "בחירה במפה")}</div><div className="dim small">{T("Put a pin anywhere, no address needed", "שימו סיכה בכל מקום, בלי כתובת")}</div></div></li>
             {prefs.favourites.map(f => (
               <li key={"f" + f.label + f.lat} className="row" onClick={() => pick(f)}>
                 <span className="row-icon lit"><StarGlyph size={18} filled /></span>
