@@ -6,6 +6,7 @@ import { T, api, useLoad, useNow, clock, shekels, failure, locateOnce, ApiError,
 import { Header, Spinner, Note, Qr, Sheet, LineBadge } from "../ui.tsx";
 import { ModeGlyph, QrGlyph, MinusGlyph, PlusGlyph, BackGlyph } from "../icons.tsx";
 import { isNative, scanQr, CameraDenied } from "../native.ts";
+import { setPaySignedIn } from "../payride.ts";
 
 interface Price { agorot: number; code: string }
 interface Cost { price: Price; full: Price; reasons: string[] }
@@ -52,8 +53,11 @@ function forgetBus() { try { localStorage.removeItem(LAST_BUS); } catch { /* not
 
 async function payAt(): Promise<LatLon | null> { try { return await locateOnce(); } catch { return null; } }
 
-export function PayScreen({ start, onStarted }: { start: { at?: LatLon; routeType?: number; off?: LatLon } | null; onStarted: () => void }) {
+// onPaid: a ride was paid for (so the lock screen's Pay goes).
+export function PayScreen({ start, onStarted, onPaid }: { start: { at?: LatLon; routeType?: number; off?: LatLon } | null; onStarted: () => void; onPaid?: () => void }) {
   const state = useLoad<{ signedIn: boolean; unfinished?: boolean; account?: { name: string; phone: string; connected: boolean } | null }>("pay", s => api("pay/state", undefined, s));
+  // Remembered, so a trip's lock screen card offers Pay only to someone who pays in Kav.
+  useEffect(() => { if (state.data) setPaySignedIn(state.data.signedIn && !state.data.unfinished); }, [state.data]);
   // Moovit wants a step finished before it takes payments: back to signing in, at that step.
   useEffect(() => {
     const unfinished = () => { setFlow(null); state.reload(); };
@@ -76,7 +80,7 @@ export function PayScreen({ start, onStarted }: { start: { at?: LatLon; routeTyp
   if (state.error) return <div className="screen"><Header title={T("Pay", "תשלום")} /><div className="pad"><Note tone="error">{state.error}</Note><button className="btn" onClick={state.reload}>{T("Try again", "נסו שוב")}</button></div></div>;
   if (!state.data?.signedIn || state.data.unfinished) return <SignIn onDone={state.reload} />;
 
-  const done = (t: Ticket[]) => { setFlow(null); setBought(t); setWalletKey(k => k + 1); };
+  const done = (t: Ticket[]) => { setFlow(null); setBought(t); setWalletKey(k => k + 1); if (t.length) onPaid?.(); };
   if (flow?.kind === "bus") return <BusPurchase qr={flow.qr} off={flow.off} onBack={() => setFlow(null)} onBought={done} />;
   if (flow?.kind === "station") return <StationPurchase routeType={flow.routeType} at={flow.at} onBack={() => setFlow(null)} onBought={done} />;
   if (flow?.kind === "exit") return <TrainExit ticket={flow.ticket} onBack={() => setFlow(null)} onDone={done} />;
@@ -460,6 +464,12 @@ function FareFinder({ offer, at, off, onFare }: { offer: Offer; at: LatLon | nul
     }
     if (!at) { setManual(true); return; }
     api<{ buses: Bus[]; resolved: Resolved }>("pay/buses", { at }).then(r => {
+      // The same line to the same place once, however many of its trips or ids Moovit lists.
+      const shown = new Set<string>();
+      r = { ...r, buses: r.buses.filter(b => {
+        const l = r.resolved.lines[b.lineId], k = l ? `${l.number}|${l.destination}` : `#${b.lineId}`;
+        return !shown.has(k) && !!shown.add(k);
+      }) };
       setFound(r);
       const [a, b] = r.buses;
       if (!a) setManual(true);

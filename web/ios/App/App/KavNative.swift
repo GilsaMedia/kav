@@ -148,7 +148,35 @@ public class KavNativePlugin: CAPPlugin, CAPBridgedPlugin, URLSessionDownloadDel
             label: call.getString("label") ?? "", stop: call.getString("stop") ?? "",
             line: call.getString("line") ?? "", mode: call.getString("mode") ?? "bus", color: call.getString("color") ?? "#3E9B5C",
             accent: call.getString("accent") ?? "#9ABEFF", target: date("target"), depart: date("depart"), arrive: date("arrive"),
-            live: call.getBool("live") ?? false, step: call.getInt("step") ?? 0, steps: call.getInt("steps") ?? 1, minutes: 0)
+            live: call.getBool("live") ?? false, step: call.getInt("step") ?? 0, steps: call.getInt("steps") ?? 1, minutes: 0,
+            pay: call.getString("pay") ?? "")
+    }
+
+    // Kav quitting: the trip's card loses its Pay button, which only Kav running can answer.
+    static func dropPay() {
+        guard #available(iOS 16.2, *) else { return }
+        let done = DispatchSemaphore(value: 0)
+        Task.detached {
+            for a in Activity<KavTripAttributes>.activities where !a.content.state.pay.isEmpty {
+                var s = a.content.state
+                s.pay = ""
+                await a.update(ActivityContent(state: s, staleDate: a.content.staleDate))
+            }
+            done.signal()
+        }
+        _ = done.wait(timeout: .now() + 1.5)
+    }
+
+    // A kav:// link (Pay on the trip's card), told to the web app; one that opened Kav waits until it listens.
+    public override func load() { takeLinks() }
+
+    func takeLinks() {
+        KavLinks.plugin = self
+        if let url = KavLinks.pending { KavLinks.pending = nil; openUrl(url) }
+    }
+
+    func openUrl(_ url: URL) {
+        notifyListeners("openUrl", data: ["url": url.absoluteString], retainUntilConsumed: true)
     }
 
     // Kav run by another app rather than installed: its bundle lies in the host's data (LiveContainer keeps
@@ -313,11 +341,25 @@ public class KavNativePlugin: CAPPlugin, CAPBridgedPlugin, URLSessionDownloadDel
     }
 }
 
+// kav:// links Kav is opened with, passed to the plugin once it's there.
+enum KavLinks {
+    static weak var plugin: KavNativePlugin?
+    static var pending: URL?
+
+    static func open(_ url: URL) {
+        guard url.scheme?.lowercased() == "kav" else { return }
+        DispatchQueue.main.async {
+            if let p = plugin { p.openUrl(url) } else { pending = url }
+        }
+    }
+}
+
 // Capacitor's view controller, with Kav's plugin registered on it, and given Kav's notifications.
 class KavViewController: CAPBridgeViewController {
     override open func capacitorDidLoad() {
         let plugin = KavNativePlugin()
         bridge?.registerPluginInstance(plugin)
+        plugin.takeLinks()
         bridge?.notificationRouter.localNotificationHandler = plugin
     }
 }

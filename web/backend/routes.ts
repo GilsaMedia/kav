@@ -144,9 +144,23 @@ route("plan", async (_q, b) => {
   if (!from || !to) throw new HttpError(400, "from and to are needed");
   const s = await St.browse(from);
   try {
-    const plan = await M.planItineraries(s, from, to, Number(b.when) || 0, Number(b.timeType) || M.TIME_DEPARTURE,
-      Array.isArray(b.routeTypes) && b.routeTypes.length ? b.routeTypes : M.ALL_ROUTE_TYPES, !!b.skipTaxi);
-    const itineraries = M.laidOut(plan);
+    const timeType = Number(b.timeType) || M.TIME_DEPARTURE, types = Array.isArray(b.routeTypes) && b.routeTypes.length ? b.routeTypes : M.ALL_ROUTE_TYPES;
+    const search = (whenMs: number, type = timeType) => M.planItineraries(s, from, to, whenMs, type, types, !!b.skipTaxi);
+    const plan = await search(Number(b.when) || 0);
+    let itineraries = M.laidOut(plan, !b.more);
+    // More ways when there are many good ones: every way Moovit found rather than its first few, and Moovit asked
+    // once more for the ones leaving after the last of them (arriving by a time: arriving before the first).
+    if (b.more && timeType !== M.TIME_LAST) {
+      const riding = itineraries.filter(it => it.legs.some(l => l.kind === "ride"));
+      const next = !riding.length ? 0 : timeType === M.TIME_ARRIVAL
+        ? (Math.min(...riding.map(it => it.arr)) - 60) * 1000 : (Math.max(...riding.map(it => it.dep)) + 60) * 1000;
+      const again = next > 0 ? await search(next, timeType === M.TIME_ARRIVAL ? M.TIME_ARRIVAL : M.TIME_DEPARTURE).catch(() => null) : null;
+      if (again) {
+        const key = (it: M.Itinerary) => `${it.dep}:${it.arr}:${it.legs.filter(l => l.kind === "ride").map(l => `${l.lineId}@${l.fromStop}`).join()}`;
+        const seen = new Set(itineraries.map(key));
+        itineraries = [...itineraries, ...M.laidOut(again, false).filter(it => !seen.has(key(it)) && seen.add(key(it)))];
+      }
+    }
     return { itineraries, resolved: await M.resolveNames(s, itineraries) };
   } catch (e) {
     if (e instanceof M.PlannerRefusal) return { itineraries: [], refusal: { code: e.code, title: e.title, detail: e.detail } };
@@ -321,11 +335,14 @@ route("pay/buses", async (_q, b) => {
     const atStop = stop < 120 && dt > -180 && dt < 240;
     if (!byVehicle && !atStop) continue;
     const score = byVehicle ? vehicle! : 150 + Math.abs(dt) / 2 + stop;
-    const key = String(a.tripId);
+    const key = a.tracked && a.vehicleId ? `v${a.vehicleId}` : String(a.tripId);
     if ((best.get(key)?.score ?? Infinity) > score) best.set(key, { lineId: a.lineId, patternId: a.patternId, stopId: a.stopId, tripId: a.tripId, metres: vehicle == null ? null : Math.round(vehicle), inSecs: Math.round(dt), score });
   }
   // Buses only: a train or light rail line through a stop next door isn't the bus whose code was scanned.
-  const all = [...best.values()].sort((x, y) => x.score - y.score).slice(0, 12);
+  // One entry per bus: Moovit lists a vehicle again under another trip, and a line again at the stop across the
+  // road or the next one along, so the line (its direction) is listed once, where it's closest.
+  const lines = new Set<number>();
+  const all = [...best.values()].sort((x, y) => x.score - y.score).filter(x => !lines.has(x.lineId) && !!lines.add(x.lineId)).slice(0, 12);
   const resolved = await M.resolveIds(s, [...new Set(all.map(x => x.lineId))], []);
   const isBus = (lineId: number) => { const l = resolved.lines[lineId]; return !l || (resolved.routeTypes[l.agencyId] ?? 3) === 3; };
   return { buses: all.filter(x => isBus(x.lineId)).slice(0, 8), resolved };

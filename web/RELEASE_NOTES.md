@@ -1,3 +1,11 @@
+## 2.10: pay from the lock screen, and more ways to go
+
+- While a trip is open and the ride ahead isn't paid for yet, the lock screen and the Dynamic Island show a Pay button. It opens Kav straight on paying for that ride, and goes away once you've paid. It's only there while Kav is running, and only if you pay with Kav.
+- A way's page counts down to the line you chose before you press Start too: "282 at your stop in 7 min", live when Moovit tracks it, and when to leave for it if there's a walk first.
+- Searching for a way shows many more of them: every way Moovit finds instead of its first few, and the ones leaving after them (arriving by a time: arriving before them).
+- Paying for a bus lists each bus once. The same line used to show up several times, once for each of its stops nearby.
+- The lock screen's countdown names the line you chose, not the first of the lines that can do the ride.
+
 ## 2.9.3: every bus shows its number
 
 - Some lines carry a note in their name, such as "390 - בהזמנה מראש" (by advance booking only). Their plate showed just "Bus"; now it shows the number, 390, on the trip, the map and the lock screen.

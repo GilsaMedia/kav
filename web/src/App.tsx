@@ -4,7 +4,8 @@ import { AccentPicker } from "./Accent.tsx";
 import { Onboarding, SupportPrompt } from "./Onboarding.tsx";
 import { Header, stayPut, useLeaving, liveWhy } from "./ui.tsx";
 import { DirectionsGlyph, LinesTabGlyph, GearGlyph, CloseGlyph } from "./icons.tsx";
-import { isNative, removeMap, getMapState, tryTripLive, say, type LiveResult } from "./native.ts";
+import { isNative, removeMap, getMapState, tryTripLive, say, onOpenUrl, type LiveResult } from "./native.ts";
+import { markPaid, payTarget, type PayStart } from "./payride.ts";
 import { canNotify, useJobs, removeReminder } from "./remind.ts";
 import { PlanScreen } from "./screens/Plan.tsx";
 import { StationsScreen } from "./screens/Stations.tsx";
@@ -26,7 +27,9 @@ export function App() {
   const prefs = usePrefs();
   const [tab, setTab] = useState<Tab>(() => tabOf(sessionStorage.getItem("kav-tab")));
   // Paying from a trip: a sheet over it with only the payment, the trip still underneath.
-  const [paySheet, setPaySheet] = useState<{ at?: LatLon; routeType?: number; off?: LatLon } | null>(null);
+  const [paySheet, setPaySheet] = useState<PayStart | null>(null);
+  // Pay on the lock screen or in the Dynamic Island: paying for the ride ahead on the trip that's open.
+  useEffect(() => onOpenUrl(url => { if (/^kav:\/\/pay\b/.test(url)) setPaySheet(payTarget() ?? {}); }), []);
   // Tabs crossfade, as on Android: the screen inside doesn't slide.
   // Directions tapped again while it's open goes back to its home screen, as an iPhone tab does.
   const [planHome, setPlanHome] = useState(0);
@@ -219,14 +222,14 @@ function Notifications() {
   </>;
 }
 
-function PaySheet({ start, onClose }: { start: { at?: LatLon; routeType?: number; off?: LatLon }; onClose: () => void }) {
+function PaySheet({ start, onClose }: { start: PayStart; onClose: () => void }) {
   const [leaving, leave] = useLeaving(onClose, 260);
   return (
     <div className={"pay-sheet-backdrop" + (leaving ? " leaving" : "")} onClick={leave}>
       <div className="pay-sheet" onClick={e => e.stopPropagation()} role="dialog" aria-label={T("Pay", "תשלום")}>
         <div className="trip-grip" />
         <button className="plate-btn pay-sheet-close" data-back onClick={leave} aria-label={T("Close", "סגירה")}><CloseGlyph size={18} /></button>
-        <PayScreen start={start} onStarted={() => {}} />
+        <PayScreen start={start} onStarted={() => {}} onPaid={() => markPaid(start)} />
       </div>
     </div>
   );

@@ -23,8 +23,17 @@ interface KavNativePlugin {
   notifyAllowed(): Promise<{ granted: boolean }>;
   notifySet(o: { json: string }): Promise<void>;
   addListener(event: "downloadProgress", f: (e: { done: number; total: number }) => void): Promise<PluginListenerHandle>;
+  addListener(event: "openUrl", f: (e: { url: string }) => void): Promise<PluginListenerHandle>;
 }
 export const KavNative = registerPlugin<KavNativePlugin>("KavNative");
+
+// A kav:// link Kav was opened with, such as Pay on the lock screen's trip; one that opened Kav from closed is
+// kept by the app until this listens. Gives back how to stop listening.
+export function onOpenUrl(f: (url: string) => void): () => void {
+  if (!isNative) return () => {};
+  const handle = KavNative.addListener("openUrl", e => f(e.url));
+  return () => { handle.then(h => h.remove(), () => {}); };
+}
 
 export function toBase64(b: Uint8Array): string {
   let s = "";
@@ -220,6 +229,8 @@ export function keepAwake(on: boolean) {
 export interface TripLive {
   phase: "wait" | "ride" | "walk" | "arrive"; title: string; detail: string; label: string; stop: string; line: string; mode: string;
   color: string; accent: string; target: number; depart: number; arrive: number; live: boolean; step: number; steps: number;
+  // A Pay button on the card, with this word on it, while the ride ahead isn't paid for; empty for none.
+  pay?: string;
 }
 
 // Why the lock screen did not take the trip, if it didn't: "disabled" (Live Activities are off for Kav in

@@ -30,6 +30,8 @@ struct KavTripAttributes: ActivityAttributes {
         var steps: Int
         // Whole minutes left, counted again by the app every 20 seconds while it runs.
         var minutes: Int
+        // The word on a Pay button (it opens kav://pay) while the ride ahead isn't paid for; empty for none.
+        var pay: String = ""
     }
 
     var destination: String

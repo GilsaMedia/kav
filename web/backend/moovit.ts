@@ -804,8 +804,8 @@ export async function planItineraries(s: MoovitSession, from: LatLon, to: LatLon
   return { itineraries, sections };
 }
 
-// Itineraries in Moovit's own sections, each capped as Moovit caps it.
-export function laidOut(plan: { itineraries: Itinerary[]; sections: Section[] }): Itinerary[] {
+// Itineraries in Moovit's own sections, each capped as Moovit caps it (or, uncapped, every way it found).
+export function laidOut(plan: { itineraries: Itinerary[]; sections: Section[] }, capped = true): Itinerary[] {
   if (!plan.sections.length) return plan.itineraries;
   const byId = new Map(plan.sections.map(x => [x.id, x]));
   const seen = new Map<number, number>();
@@ -813,7 +813,7 @@ export function laidOut(plan: { itineraries: Itinerary[]; sections: Section[] })
     .sort((a, b) => (byId.get(a.sectionId)?.index ?? 1e9) - (byId.get(b.sectionId)?.index ?? 1e9))
     .filter(it => {
       const n = (seen.get(it.sectionId) ?? 0) + 1; seen.set(it.sectionId, n);
-      return n <= (byId.get(it.sectionId)?.maxItems ?? Infinity);
+      return !capped || n <= (byId.get(it.sectionId)?.maxItems ?? Infinity);
     })
     .map(it => ({ ...it, section: byId.get(it.sectionId)?.name || it.section }));
 }

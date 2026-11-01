@@ -13,10 +13,13 @@ class SceneDelegate: UIResponder, UIWindowSceneDelegate {
         window?.makeKeyAndVisible()
 
         SceneDelegateProxy.shared.scene(scene, willConnectTo: session, options: connectionOptions)
+        // Opened by a kav:// link (Pay on the trip's card) from closed.
+        connectionOptions.urlContexts.forEach { KavLinks.open($0.url) }
     }
 
     func scene(_ scene: UIScene, openURLContexts URLContexts: Set<UIOpenURLContext>) {
         SceneDelegateProxy.shared.scene(scene, openURLContexts: URLContexts)
+        URLContexts.forEach { KavLinks.open($0.url) }
     }
 
     func scene(_ scene: UIScene, continue userActivity: NSUserActivity) {

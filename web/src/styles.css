@@ -934,3 +934,6 @@ a.btn { text-decoration: none; }
   :root:not([data-look="light"]) { --dim: #AEAEB2; }
   :root[data-look="light"] { --dim: #48484A; }
 }
+/* A way's page, before Start: the countdown to the line at your stop. */
+.trip-count { margin: 4px 16px 8px; border-radius: 16px; border-top: 0; }
+.trip-count .leave-now { color: var(--problem); font-weight: 600; }

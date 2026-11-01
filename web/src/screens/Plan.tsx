@@ -16,6 +16,7 @@ import { saveRide, clearRide, setRideStep, useRide, GRACE_MS } from "../ride.ts"
 import { canNotify, useJobs, addReminder, removeReminder, rideLines, setStepNotices, clearStepNotices } from "../remind.ts";
 import type { Notice } from "../../backend/jobs.ts";
 import { isNative, keepAwake, showTrip, endTrip, buzz, say, type TripLive } from "../native.ts";
+import { setPayTarget, isPaid, paySignedIn, usePaid, type PayStart } from "../payride.ts";
 import { SwapGlyph, StarGlyph, CloseGlyph, RecentGlyph, WalkGlyph, BikeGlyph, TaxiGlyph, DotGlyph, ShareGlyph, PlayGlyph, ChevronGlyph, BackGlyph, PayGlyph, LocateGlyph, PinGlyph, StationMark, BellGlyph, FlagGlyph, modeOf } from "../icons.tsx";
 
 
@@ -65,8 +66,9 @@ export function PlanScreen({ home, onPay }: { home: number; onPay: (at?: LatLon,
   const plan = useLoad<PlanResult>(searchKey, async signal => {
     const f = fromAt();
     if (!f || !to) throw new Error(T("Waiting for your location…", "ממתינים למיקום שלכם…"));
+    // more: every way Moovit finds, and the ones leaving after them too, not only its first few.
     const ask = (types?: number[]) => api<PlanResult>("plan", {
-      from: f, to: [to.lat, to.lon], routeTypes: types,
+      from: f, to: [to.lat, to.lon], routeTypes: types, more: true,
       when: when.kind === "depart" || when.kind === "arrive" ? when.ms : 0, timeType: when.kind === "arrive" ? 1 : when.kind === "last" ? 3 : 2,
     }, signal);
     const want = prefs.modes;
@@ -534,7 +536,17 @@ export function TripDetail({ trip: given, resolved: givenR, from, to, tripEnds, 
 
   // On the lock screen and in the Dynamic Island from the moment a way is open; Start takes it on from there.
   const allCards = useMemo(() => cardsOf(trip), [trip]);
+  usePaid(); // the lock screen's Pay goes once the ride is paid for
   const preview = tripLiveOf(trip, r, live.data?.arrivals, now, to, allCards, 0);
+  // Pay on the lock screen opens paying for the way's first ride, until Start takes it on.
+  const firstPay = (() => { const f = trip.legs.find(l => l.kind === "ride"); return f ? payStartOf(f, r) : null; })();
+  const firstPayKey = JSON.stringify(firstPay);
+  useEffect(() => {
+    if (navigating) return;
+    setPayTarget(firstPay);
+    return () => setPayTarget(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [firstPayKey, navigating]);
   const previewKey = JSON.stringify(preview);
   const [lockNote, setLockNote] = useState<string | null>(null);
   useEffect(() => {
@@ -604,6 +616,20 @@ export function TripDetail({ trip: given, resolved: givenR, from, to, tripEnds, 
           </div>
           <span className="eta it-total">{mins < 60 ? <><b>{mins}</b><small>{T("min", "דק׳")}</small></> : <><b>{Math.floor(mins / 60)}:{String(mins % 60).padStart(2, "0")}</b><small>{T("hours", "שעות")}</small></>}</span>
         </div>
+        {/* Before Start too: how long until the line you chose is at your stop, live when Moovit tracks it, and when to
+            leave for it when there's a walk first. */}
+        {b && preview.phase !== "arrive" && (() => {
+          const count = minutesTo(Math.floor(preview.target / 1000), now);
+          const leave = minutesTo(Math.floor(preview.target / 1000) - b.walkMin * 60, now);
+          return <div className="ld-count trip-count">
+            <div>
+              <span className="ld-count-label">{preview.live && <LiveDot />}{preview.label}</span>
+              {b.walkMin > 0 && <div className={"small" + (leave === 0 ? " leave-now" : " dim")}>{leave === 0 ? T("Leave now to make it", "צאו עכשיו כדי להספיק")
+                : T(`Leave in ${minutesText(leave)} (${b.walkMin} min walk)`, `יוצאים בעוד ${minutesText(leave)} (${b.walkMin} דק׳ הליכה)`)}</div>}
+            </div>
+            <b className="ld-count-big">{count === 0 ? T("Now", "עכשיו") : count >= 60 ? clock(Math.floor(preview.target / 1000)) : <>{count}<small>{T("min", "דק׳")}</small></>}</b>
+          </div>;
+        })()}
         {tripEnds && !fromHere && ridesOf(trip).length > 0 && <ShiftBar trip={trip} r={r} ends={tripEnds} now={now}
           onShift={s => { setShifted(s); setFromHere(null); setPicks({}); }} />}
         {shareNote && <div className="pad"><Note>{shareNote}</Note></div>}
@@ -774,6 +800,26 @@ function cardsOf(trip: Itinerary): Card[] {
   return out;
 }
 
+// The ride ahead at a step: the one waited for or ridden, the one a walk leads to, or from the start the first.
+function rideAhead(trip: Itinerary, cards: Card[], step: number): Leg | undefined {
+  const card = cards[step] ?? cards[0];
+  return card.kind === "wait" || card.kind === "ride" ? card.ride : card.kind === "walk" ? card.next
+    : card.kind === "start" ? trip.legs.find(l => l.kind === "ride") : undefined;
+}
+
+// Paying for a ride, as the Pay sheet starts it: from its stop, by its mode, to where you get off. None for a mode
+// Kav can't pay for.
+function payStartOf(ride: Leg, r: Resolved): PayStart | null {
+  const point = (id: number): LatLon | undefined => { const s = r.stops[id]; return s && s.lat != null && s.lon != null ? [s.lat, s.lon] : undefined; };
+  const mode = PAYABLE[routeTypeOf(r, ride.lineId)], at = point(ride.fromStop);
+  return mode != null && at ? { at, routeType: mode, off: point(ride.toStop) } : null;
+}
+// The same, only while it's still to pay for and paying in Kav is set up: the lock screen's Pay button.
+function unpaidOf(ride: Leg, r: Resolved): PayStart | null {
+  const p = payStartOf(ride, r);
+  return p && paySignedIn() && !isPaid(p.at!, p.routeType!) ? p : null;
+}
+
 // What the lock screen and the Dynamic Island show for a step of the trip: the next thing to wait for,
 // counted down. Before boarding, the vehicle at your stop; on it, getting off (moved by its delay); after
 // the last ride, arriving.
@@ -783,12 +829,13 @@ function tripLiveOf(trip: Itinerary, r: Resolved, live: Arrival[] | undefined, n
   lateOf?: (ride: Leg) => number): TripLive {
   const card = cards[step] ?? cards[0];
   const waitBefore = (l: Leg) => { const k = trip.legs.indexOf(l); return trip.legs[k - 1]?.kind === "wait" ? trip.legs[k - 1] : undefined; };
-  const firstRide = trip.legs.find(l => l.kind === "ride");
-  const nextRide = card.kind === "wait" || card.kind === "ride" ? card.ride : card.kind === "walk" ? card.next : card.kind === "start" ? firstRide : undefined;
+  const nextRide = rideAhead(trip, cards, step);
   // Setting off with a walk first reads as the walk.
   const walking = card.kind === "walk" || (card.kind === "start" && trip.legs[0]?.kind === "walk");
   return (() => {
-    const base = { accent: getPrefs().accent, depart: trip.dep * 1000, arrive: trip.arr * 1000, step, steps: cards.length };
+    // A Pay button on the lock screen and in the Dynamic Island while the ride ahead isn't paid for.
+    const base = { accent: getPrefs().accent, depart: trip.dep * 1000, arrive: trip.arr * 1000, step, steps: cards.length,
+      pay: nextRide && card.kind !== "arrive" && unpaidOf(nextRide, r) ? T("Pay", "תשלום") : "" };
     if (!nextRide) return {
       ...base, phase: card.kind === "arrive" ? "arrive" : "walk",
       title: card.kind === "arrive" ? T("You've arrived", "הגעתם") : T(`Walk to ${to}`, `הליכה אל ${to}`),
@@ -796,7 +843,8 @@ function tripLiveOf(trip: Itinerary, r: Resolved, live: Arrival[] | undefined, n
       label: T("Arrive in", "הגעה בעוד"), stop: to, line: "", mode: "walk", color: "#9C9CA5", target: trip.arr * 1000, live: false,
     };
     const type = routeTypeOf(r, nextRide.lineId);
-    const numbers = [...new Set(options(nextRide).map(o => lineNum(r.lines[o.lineId]?.number || o.shortName)).filter(Boolean))].slice(0, 2);
+    // The line chosen for the ride first, so "282 at your stop in" names the one counted down to.
+    const numbers = [...new Set([nextRide, ...options(nextRide)].map(o => lineNum(r.lines[o.lineId]?.number || o.shortName)).filter(Boolean))].slice(0, 2);
     const deps = departuresFor(nextRide, waitBefore(nextRide), live, now);
     const mine = deps.find(d => String(d.tripId) === String(nextRide.tripId)) ?? deps[0];
     const common = { ...base, line: numbers.join(" / "), mode: modeOf(type), color: modeColor(type), live: !!mine && isLive(mine) };
@@ -1059,7 +1107,15 @@ function Navigate({ trip, r, live, here, lines, ends, vehicles, from, to, onPay,
   // runs on with Kav in the background. Before boarding, the vehicle at your stop; on it, getting off
   // (moved by its delay); after the last ride, arriving.
   // Of where you are, not of a step you're looking at.
+  usePaid();
   const tripLive = tripLiveOf(trip, r, live, now, to, cards, progress, lateOf);
+  // Pay on the lock screen opens paying for the ride you're at or heading for.
+  const ahead = rideAhead(trip, cards, progress);
+  const aheadPay = JSON.stringify(ahead ? payStartOf(ahead, r) : null);
+  useEffect(() => {
+    setPayTarget(JSON.parse(aheadPay));
+    return () => setPayTarget(null);
+  }, [aheadPay]);
   const atCard = cards[progress];
   const shown = JSON.stringify(tripLive);
   useEffect(() => { showTrip(to, tripLive); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [shown]);

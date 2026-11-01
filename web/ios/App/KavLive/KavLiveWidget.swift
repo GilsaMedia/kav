@@ -36,7 +36,11 @@ struct KavTripLive: Widget {
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
                 DynamicIslandExpandedRegion(.bottom) {
-                    Track(s: s).padding(.horizontal, 6).padding(.top, 4)
+                    HStack(spacing: 10) {
+                        Track(s: s)
+                        if !stale && !s.pay.isEmpty { PayButton(s: s, small: true) }
+                    }
+                    .padding(.horizontal, 6).padding(.top, 4)
                 }
             } compactLeading: {
                 PhaseBadge(s: s, size: 26)
@@ -70,10 +74,32 @@ private struct LockScreen: View {
                     Text(s.detail).font(.subheadline).foregroundColor(.white.opacity(0.7)).lineLimit(1)
                 }
                 Spacer(minLength: 6)
-                When(s: s, size: 22, stale: stale)
+                VStack(alignment: .trailing, spacing: 8) {
+                    When(s: s, size: 22, stale: stale)
+                    // Only while Kav is running: a card gone stale has lost it, and the button with it.
+                    if !stale && !s.pay.isEmpty { PayButton(s: s) }
+                }
             }
         }
         .padding(16)
+    }
+}
+
+// Pay for the ride ahead straight from here: opens Kav on paying for it. Shown while it isn't paid for yet.
+private struct PayButton: View {
+    let s: KavTripAttributes.ContentState
+    var small = false
+
+    var body: some View {
+        Link(destination: URL(string: "kav://pay")!) {
+            HStack(spacing: 5) {
+                Image(systemName: "creditcard.fill").font(.system(size: small ? 12 : 14, weight: .bold))
+                Text(s.pay).font(.system(size: small ? 14 : 16, weight: .bold, design: .rounded)).lineLimit(1)
+            }
+            .foregroundColor(Color(white: 0.08))
+            .padding(.horizontal, small ? 10 : 14).padding(.vertical, small ? 5 : 7)
+            .background(Capsule().fill(Color(hex: s.accent)))
+        }
     }
 }
 
