@@ -1,4 +1,4 @@
-## 2.10: pay from the lock screen, and more ways to go
+## 3.0: pay from the lock screen, and more ways to go
 
 - While a trip is open and the ride ahead isn't paid for yet, the lock screen and the Dynamic Island show a Pay button. It opens Kav straight on paying for that ride, and goes away once you've paid. It's only there while Kav is running, and only if you pay with Kav.
 - A way's page counts down to the line you chose before you press Start too: "282 at your stop in 7 min", live when Moovit tracks it, and when to leave for it if there's a walk first.
