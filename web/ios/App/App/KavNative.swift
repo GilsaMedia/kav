@@ -187,6 +187,26 @@ public class KavNativePlugin: CAPPlugin, CAPBridgedPlugin, URLSessionDownloadDel
             || ProcessInfo.processInfo.environment["LC_HOME_PATH"] != nil
     }
 
+    // What's wrong with KavLive as installed, if anything: "noext" when the installer left it out (SideStore
+    // drops an extension the copy it updates didn't have, so a Kav first installed before 1.6 loses it on every
+    // update), "profile" when it was signed with a profile for another App ID (SideStore's "Use Main Profile"),
+    // which iOS won't run it under.
+    static var liveExtensionProblem: String? {
+        guard let dir = Bundle.main.builtInPlugInsURL,
+              let ext = Bundle(url: dir.appendingPathComponent("KavLive.appex")),
+              let id = ext.bundleIdentifier else { return "noext" }
+        // A sideloader embeds the profile it signed with; with none there's nothing to check.
+        guard let data = try? Data(contentsOf: ext.bundleURL.appendingPathComponent("embedded.mobileprovision")),
+              let start = data.range(of: Data("<?xml".utf8)),
+              let end = data.range(of: Data("</plist>".utf8), in: start.lowerBound..<data.endIndex),
+              let profile = try? PropertyListSerialization.propertyList(from: Data(data[start.lowerBound..<end.upperBound]), format: nil) as? [String: Any],
+              let appID = (profile["Entitlements"] as? [String: Any])?["application-identifier"] as? String else { return nil }
+        // "TEAMID.<bundle id>", or a wildcard: "TEAMID.*", "TEAMID.com.example.*".
+        let allowed = appID.split(separator: ".", maxSplits: 1).last.map(String.init) ?? appID
+        if allowed == id || allowed == "*" || (allowed.hasSuffix(".*") && id.hasPrefix(String(allowed.dropLast()))) { return nil }
+        return "profile"
+    }
+
     // Keeps the card in whole minutes, as Moovit's: Kav stays awake in the background on location, as
     // navigation does, and counts the minutes again every 20 seconds.
     private var keeper: AnyObject?
@@ -198,6 +218,8 @@ public class KavNativePlugin: CAPPlugin, CAPBridgedPlugin, URLSessionDownloadDel
         // Run inside LiveContainer (or another app that hosts apps), Kav isn't installed as itself: iOS
         // never sees its lock screen extension, so there's nothing it could show.
         if Self.hosted { return call.resolve(["ok": false, "why": "container"]) }
+        // iOS takes the card even when nothing can draw it, and shows a black island and an empty lock screen.
+        if let why = Self.liveExtensionProblem { return call.resolve(["ok": false, "why": why]) }
         guard ActivityAuthorizationInfo().areActivitiesEnabled else { return call.resolve(["ok": false, "why": "disabled"]) }
         let state = Self.tripState(call)
         let attributes = KavTripAttributes(destination: call.getString("destination") ?? "")

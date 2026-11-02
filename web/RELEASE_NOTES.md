@@ -1,3 +1,8 @@
+## 3.1.2: Kav says why the Dynamic Island is black
+
+- If Kav was installed without its lock screen part, or with that part signed wrongly, iOS still makes room for the trip in the Dynamic Island but has nothing to draw: it stays black, and the lock screen stays empty. Kav now checks before it starts a trip. If that part is missing or can't run, the way's page and Settings → Lock screen and Dynamic Island → Try it say so, and what to do.
+- With SideStore, this happens when SideStore updates a Kav that was first installed without that part: it leaves the part out of every update. The fix is to set App Extensions to "Keep All" in SideStore's settings, then install Kav.ipa again over the one you have. Your places and settings stay.
+
 ## 3.1.1: the lock screen and the Dynamic Island show the trip again
 
 - A trip's card on the lock screen and in the Dynamic Island was there but empty: a black island and nothing on the lock screen. The part of Kav that draws them was being stopped by iOS as it started, because of how the app was signed when you installed it. It's signed so that it starts now, and the card shows the trip, the countdown and Pay again.

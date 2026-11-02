@@ -375,6 +375,12 @@ export function liveWhy(r: { ok: boolean; why?: string }): string {
   if (r.why === "container") return T("Kav is running inside LiveContainer, so iOS never sees its lock screen part and can't show the trip there. Install Kav.ipa directly with Sideloadly, AltStore or SideStore, not inside LiveContainer, to get it.", "Kav רצה בתוך LiveContainer, ולכן iOS לא רואה את החלק של מסך הנעילה ולא יכולה להציג שם את הנסיעה. כדי לקבל אותו, התקינו את Kav.ipa ישירות עם Sideloadly, AltStore או SideStore, לא בתוך LiveContainer.");
   if (r.why === "ios") return T("The lock screen trip needs iOS 16.2 or newer.", "הנסיעה במסך הנעילה דורשת iOS 16.2 ומעלה.");
   if (r.why === "missing") return T("This copy of Kav has no lock screen part. Install the newest Kav.ipa.", "בעותק הזה של Kav אין את החלק של מסך הנעילה. התקינו את Kav.ipa החדש.");
+  if (r.why === "noext") return T(
+    "This copy of Kav was installed without its lock screen part, so the Dynamic Island stays black. SideStore leaves it out when it updates a Kav that didn't have it. In SideStore's settings, set App Extensions to \"Keep All\", then install Kav.ipa again over this one. Your places and settings stay.",
+    "העותק הזה של Kav הותקן בלי החלק של מסך הנעילה, ולכן ה-Dynamic Island נשאר שחור. SideStore משמיטה אותו כשהיא מעדכנת Kav שלא היה בו. בהגדרות של SideStore, קבעו את App Extensions ל-\"Keep All\", ואז התקינו שוב את Kav.ipa מעל העותק הזה. המקומות וההגדרות שלכם נשמרים.");
+  if (r.why === "profile") return T(
+    "Kav's lock screen part was signed with the app's own profile, so iOS won't run it and the Dynamic Island stays black. In SideStore's settings, set App Extensions to \"Keep All\" (not \"Use Main Profile\"), then install Kav.ipa again over this one.",
+    "החלק של מסך הנעילה של Kav נחתם עם הפרופיל של האפליקציה עצמה, ולכן iOS לא מריצה אותו וה-Dynamic Island נשאר שחור. בהגדרות של SideStore, קבעו את App Extensions ל-\"Keep All\" (לא \"Use Main Profile\"), ואז התקינו שוב את Kav.ipa מעל העותק הזה.");
   if (r.why === "browser") return T("Only in the iPhone app.", "רק באפליקציה לאייפון.");
   return T(`iOS didn't put the trip on the lock screen: ${r.why}. If you installed with Sideloadly, make sure "Remove app extensions" is off.`, `iOS לא הציגה את הנסיעה במסך הנעילה: ${r.why}. אם התקנתם עם Sideloadly, ודאו ש-"Remove app extensions" כבוי.`);
 }
