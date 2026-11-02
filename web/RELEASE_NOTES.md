@@ -1,3 +1,8 @@
+## 3.1.1: the lock screen and the Dynamic Island show the trip again
+
+- A trip's card on the lock screen and in the Dynamic Island was there but empty: a black island and nothing on the lock screen. The part of Kav that draws them was being stopped by iOS as it started, because of how the app was signed when you installed it. It's signed so that it starts now, and the card shows the trip, the countdown and Pay again.
+- Install this version over the one you have, the same way as before. Your places and settings stay.
+
 ## 3.1: go anywhere on the map
 
 - Where to (and From, and saving a favourite) has Choose on the map: move the map under the pin and tap Set. The spot under the pin is where you go, no address needed. It's named after the stop nearest it, so it reads well in your recent trips.

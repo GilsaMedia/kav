@@ -69,6 +69,20 @@ jobs:
           tail -n 5 build.log
           test -d build/Build/Products/Release-iphoneos/App.app
 
+      # Built without signing, nothing in the app has a signature, and Sideloadly has to add one to each
+      # binary from scratch. KavLive then gets killed by iOS as it starts (CODESIGNING, "Invalid Page"), so
+      # the lock screen and the Dynamic Island stay black. Signed ad hoc here, inside out, every binary
+      # already has its signature, and Sideloadly only replaces it, as it does for any other app.
+      - name: Sign the app ad hoc
+        run: |
+          APP=build/Build/Products/Release-iphoneos/App.app
+          for f in "$APP"/Frameworks/* "$APP"/PlugIns/*.appex; do
+            codesign --force --sign - --timestamp=none "$f"
+          done
+          codesign --force --sign - --timestamp=none "$APP"
+          codesign --verify --deep --strict --verbose=2 "$APP"
+          test -d "$APP/PlugIns/KavLive.appex/_CodeSignature"
+
       - name: Package the IPA
         run: |
           mkdir -p Payload
