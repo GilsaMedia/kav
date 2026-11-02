@@ -584,6 +584,8 @@ final class TripKeeper: NSObject, CLLocationManagerDelegate {
     // the card falls back to the clock iOS runs by itself instead of showing old minutes.
     static func content(_ s: KavTripAttributes.ContentState) -> ActivityContent<KavTripAttributes.ContentState> {
         var s = s
+        // Quick pay counts down to nothing, so it never goes stale: its button works with Kav asleep.
+        if s.phase == "pay" { s.minutes = 0; return ActivityContent(state: s, staleDate: nil) }
         // Under a minute away is "Now": the vehicle is pulling in.
         let left = s.target.timeIntervalSinceNow
         s.minutes = left < 60 ? 0 : Int((left / 60).rounded(.up))
@@ -602,7 +604,15 @@ final class TripKeeper: NSObject, CLLocationManagerDelegate {
         timer = Timer.scheduledTimer(withTimeInterval: 20, repeats: true) { [weak self] _ in
             Task { @MainActor in await self?.push() }
         }
-        // Location in the background is what keeps a navigating app running, and the timer with it.
+        locate()
+    }
+
+    // Location in the background is what keeps a navigating app running, and the timer with it. Not for Quick pay,
+    // which has no minutes to keep: only once the card shows a trip.
+    private var locating = false
+    private func locate() {
+        guard running, !locating, state.phase != "pay" else { return }
+        locating = true
         location.delegate = self
         location.desiredAccuracy = kCLLocationAccuracyHundredMeters
         location.distanceFilter = 50
@@ -615,6 +625,7 @@ final class TripKeeper: NSObject, CLLocationManagerDelegate {
     }
 
     func push() async {
+        locate()
         await activity.update(Self.content(state))
     }
 
@@ -625,6 +636,7 @@ final class TripKeeper: NSObject, CLLocationManagerDelegate {
         timer?.invalidate()
         timer = nil
         location.stopUpdatingLocation()
+        locating = false
     }
 
     nonisolated func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {}

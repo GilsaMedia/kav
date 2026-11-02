@@ -14,42 +14,53 @@ struct KavLiveBundle: WidgetBundle {
 struct KavTripLive: Widget {
     var body: some WidgetConfiguration {
         ActivityConfiguration(for: KavTripAttributes.self) { ctx in
-            LockScreen(s: ctx.state, destination: ctx.attributes.destination, stale: ctx.isStale)
+            Group {
+                if ctx.state.phase == "pay" { QuickPayLockScreen(s: ctx.state) }
+                else { LockScreen(s: ctx.state, destination: ctx.attributes.destination, stale: ctx.isStale) }
+            }
                 .activityBackgroundTint(Color(white: 0.12).opacity(0.86))
                 .activitySystemActionForegroundColor(.white)
         } dynamicIsland: { ctx in
             let s = ctx.state
             let stale = ctx.isStale
             let accent = Color(hex: s.accent)
+            let quickPay = s.phase == "pay"
             return DynamicIsland {
                 DynamicIslandExpandedRegion(.leading) {
                     PhaseBadge(s: s, size: 44).padding(.leading, 4)
                 }
                 DynamicIslandExpandedRegion(.trailing) {
-                    When(s: s, size: 24, stale: stale).padding(.trailing, 4)
+                    if !quickPay { When(s: s, size: 24, stale: stale).padding(.trailing, 4) }
                 }
                 DynamicIslandExpandedRegion(.center) {
                     VStack(alignment: .leading, spacing: 2) {
                         Text(s.title).font(.subheadline.weight(.semibold)).lineLimit(2)
-                        Text(s.detail).font(.caption).foregroundColor(.secondary).lineLimit(1)
+                        Text(s.detail).font(.caption).foregroundColor(.secondary).lineLimit(quickPay ? 2 : 1)
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
                 DynamicIslandExpandedRegion(.bottom) {
                     HStack(spacing: 10) {
-                        Track(s: s)
-                        if !stale && !s.pay.isEmpty { PayButton(s: s, small: true) }
+                        if quickPay {
+                            Spacer()
+                            PayButton(s: s)
+                        } else {
+                            Track(s: s)
+                            if !stale && !s.pay.isEmpty { PayButton(s: s, small: true) }
+                        }
                     }
                     .padding(.horizontal, 6).padding(.top, 4)
                 }
             } compactLeading: {
                 PhaseBadge(s: s, size: 26)
             } compactTrailing: {
-                When(s: s, size: 15, stale: stale, compact: true)
+                if quickPay { Text(s.pay).font(.system(size: 14, weight: .bold, design: .rounded)).foregroundColor(accent).lineLimit(1) }
+                else { When(s: s, size: 15, stale: stale, compact: true) }
             } minimal: {
                 Image(systemName: phaseSymbol(s)).font(.system(size: 12, weight: .bold)).foregroundColor(accent)
             }
             .keylineTint(accent)
+            .widgetURL(quickPay ? quickPayURL : nil)
         }
     }
 }
@@ -85,13 +96,42 @@ private struct LockScreen: View {
     }
 }
 
+// A bus scanned and not paid for, in place of the trip: one big Pay that opens Kav on paying for that bus, no
+// scanning again; so does a tap anywhere on it.
+private let quickPayURL = URL(string: "kav://pay/bus")!
+
+private struct QuickPayLockScreen: View {
+    let s: KavTripAttributes.ContentState
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 6) {
+                Circle().fill(Color(hex: s.accent)).frame(width: 9, height: 9)
+                Text("Kav").font(.subheadline.weight(.bold)).foregroundColor(.white)
+                Spacer()
+                Image(systemName: "qrcode").font(.system(size: 17, weight: .semibold)).foregroundColor(.white)
+            }
+            HStack(alignment: .center, spacing: 12) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(s.title).font(.headline).foregroundColor(.white).lineLimit(1)
+                    Text(s.detail).font(.subheadline).foregroundColor(.white.opacity(0.7)).lineLimit(2)
+                }
+                Spacer(minLength: 6)
+                PayButton(s: s)
+            }
+        }
+        .padding(16)
+        .widgetURL(quickPayURL)
+    }
+}
+
 // Pay for the ride ahead straight from here: opens Kav on paying for it. Shown while it isn't paid for yet.
 private struct PayButton: View {
     let s: KavTripAttributes.ContentState
     var small = false
 
     var body: some View {
-        Link(destination: URL(string: "kav://pay")!) {
+        Link(destination: s.phase == "pay" ? quickPayURL : URL(string: "kav://pay")!) {
             HStack(spacing: 5) {
                 Image(systemName: "creditcard.fill").font(.system(size: small ? 12 : 14, weight: .bold))
                 Text(s.pay).font(.system(size: small ? 14 : 16, weight: .bold, design: .rounded)).lineLimit(1)
@@ -185,6 +225,7 @@ private struct Plate: View {
 
 private func phaseSymbol(_ s: KavTripAttributes.ContentState) -> String {
     switch s.phase {
+    case "pay": return "creditcard.fill"
     case "wait": return "hourglass"
     case "walk": return "figure.walk"
     case "arrive": return "flag.checkered"

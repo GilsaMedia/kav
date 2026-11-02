@@ -6,7 +6,8 @@ import Foundation
 @available(iOS 16.1, *)
 struct KavTripAttributes: ActivityAttributes {
     public struct ContentState: Codable, Hashable {
-        // "wait" (for the vehicle at your stop), "ride" (to the stop you get off at), "walk" or "arrive".
+        // "wait" (for the vehicle at your stop), "ride" (to the stop you get off at), "walk" or "arrive"; or "pay",
+        // Quick pay for a bus scanned and not paid for, in place of the trip.
         var phase: String
         // What to do now, as Moovit words it: "Wait for one of these options", "Ride 5 stops to …".
         var title: String

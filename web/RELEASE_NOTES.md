@@ -1,3 +1,9 @@
+## 3.3: Quick pay on the lock screen
+
+- Scanned a bus's QR code and didn't pay? The lock screen and the Dynamic Island turn to Quick pay: "You scanned a bus at 14:05 and haven't paid yet", with a Pay now button. Tap it, or anywhere on the card, and Kav opens straight on paying for that bus, without scanning again. If no trip was showing there, Quick pay shows on its own.
+- Once you pay, or tap Forget it under "Forgot to pay?", Quick pay goes: the trip you had open comes back, or the card is taken off. It also goes 3 hours after the scan, and when Kav is closed.
+- Paying from Quick pay while a way is open counts as paying for that way's bus ride, so the fare knows where you get off and the way's own Pay goes too.
+
 ## 3.2.1: 3.2 again
 
 - The same app as 3.2, released again. Install it over the Kav you have; your places and settings stay.

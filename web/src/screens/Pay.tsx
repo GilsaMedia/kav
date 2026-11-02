@@ -6,7 +6,7 @@ import { T, api, useLoad, useNow, clock, shekels, failure, locateOnce, ApiError,
 import { Header, Spinner, Note, Qr, Sheet, LineBadge } from "../ui.tsx";
 import { ModeGlyph, QrGlyph, MinusGlyph, PlusGlyph, BackGlyph } from "../icons.tsx";
 import { isNative, scanQr, CameraDenied } from "../native.ts";
-import { setPaySignedIn } from "../payride.ts";
+import { setPaySignedIn, useLastBus, keepBus, forgetBus, type PayStart } from "../payride.ts";
 
 interface Price { agorot: number; code: string }
 interface Cost { price: Price; full: Price; reasons: string[] }
@@ -38,23 +38,10 @@ const MODES = [
   { routeType: 5, label: () => T("Carmelit", "כרמלית"), },
 ];
 
-// The last bus scanned, kept on this phone for a few hours: forgot to pay when getting on, pay for it from
-// your seat without scanning again. The fare is asked for and paid from where you are when you pay.
-const LAST_BUS = "kav-last-bus", KEEP_BUS_MS = 3 * 3600_000;
-type ScannedBus = { qr: string; atMs: number };
-function lastBus(): ScannedBus | null {
-  try {
-    const b = JSON.parse(localStorage.getItem(LAST_BUS) ?? "null") as ScannedBus | null;
-    return b?.qr && Date.now() - b.atMs < KEEP_BUS_MS ? b : null;
-  } catch { return null; }
-}
-function keepBus(qr: string) { try { localStorage.setItem(LAST_BUS, JSON.stringify({ qr, atMs: Date.now() })); } catch { /* not kept */ } }
-function forgetBus() { try { localStorage.removeItem(LAST_BUS); } catch { /* nothing kept */ } }
-
 async function payAt(): Promise<LatLon | null> { try { return await locateOnce(); } catch { return null; } }
 
 // onPaid: a ride was paid for (so the lock screen's Pay goes).
-export function PayScreen({ start, onStarted, onPaid }: { start: { at?: LatLon; routeType?: number; off?: LatLon } | null; onStarted: () => void; onPaid?: () => void }) {
+export function PayScreen({ start, onStarted, onPaid }: { start: PayStart | null; onStarted: () => void; onPaid?: () => void }) {
   const state = useLoad<{ signedIn: boolean; unfinished?: boolean; account?: { name: string; phone: string; connected: boolean } | null }>("pay", s => api("pay/state", undefined, s));
   // Remembered, so a trip's lock screen card offers Pay only to someone who pays in Kav.
   useEffect(() => { if (state.data) setPaySignedIn(state.data.signedIn && !state.data.unfinished); }, [state.data]);
@@ -69,10 +56,10 @@ export function PayScreen({ start, onStarted, onPaid }: { start: { at?: LatLon; 
   const [bought, setBought] = useState<Ticket[] | null>(null);
   const [walletKey, setWalletKey] = useState(0);
 
-  // A ride paid from a trip's card: a bus is scanned, a station is the trip's own.
+  // A ride paid from a trip's card: a bus is scanned (or was, for Quick pay), a station is the trip's own.
   useEffect(() => {
     if (!start || !state.data?.signedIn) return;
-    setFlow(start.routeType === 3 || start.routeType == null ? { kind: "bus", off: start.off } : { kind: "station", routeType: start.routeType, at: start.at });
+    setFlow(start.qr || start.routeType === 3 || start.routeType == null ? { kind: "bus", qr: start.qr, off: start.off } : { kind: "station", routeType: start.routeType, at: start.at });
     onStarted();
   }, [start, state.data?.signedIn]);
 
@@ -96,7 +83,7 @@ export function PayScreen({ start, onStarted, onPaid }: { start: { at?: LatLon; 
             "חשבון התשלום עבר לאפליקציה של Moovit. התחברו כאן שוב כדי להחזיר אותו ל-Kav.")}
             <button className="link" onClick={async () => { await api("pay/signout", {}); state.reload(); }}>{T("Sign in again", "התחברות מחדש")}</button></Note>}
           <button className="btn primary big" onClick={() => setFlow({ kind: "bus" })}><QrGlyph size={20} />{T("Scan the QR code on the bus", "סריקת הברקוד באוטובוס")}</button>
-          <LastBus key={walletKey} onPay={qr => setFlow({ kind: "bus", qr })} />
+          <LastBus onPay={qr => setFlow({ kind: "bus", qr })} />
           <div className="grid3">
             {MODES.map(m => <button key={m.routeType} className="btn tile" onClick={() => setFlow({ kind: "station", routeType: m.routeType })}><ModeGlyph type={m.routeType} size={26} />{m.label()}</button>)}
           </div>
@@ -347,7 +334,7 @@ function usePurchase(onBought: (t: Ticket[]) => void) {
 
 // The bus scanned earlier and not paid for yet, ready to pay without standing up to scan it again.
 function LastBus({ onPay }: { onPay: (qr: string) => void }) {
-  const [bus, setBus] = useState(lastBus);
+  const bus = useLastBus();
   if (!bus) return null;
   return (
     <div className="card pad stack">
@@ -355,7 +342,7 @@ function LastBus({ onPay }: { onPay: (qr: string) => void }) {
         <div className="dim small">{T(`You scanned a bus at ${clock(Math.floor(bus.atMs / 1000))}. Pay for it from here, no need to scan again.`,
           `סרקתם אוטובוס ב-${clock(Math.floor(bus.atMs / 1000))}. אפשר לשלם עליו מכאן, בלי לסרוק שוב.`)}</div></div>
       <button className="btn primary" onClick={() => onPay(bus.qr)}>{T("Pay for this bus", "תשלום על האוטובוס הזה")}</button>
-      <button className="link center" onClick={() => { forgetBus(); setBus(null); }}>{T("Forget it", "לא צריך")}</button>
+      <button className="link center" onClick={forgetBus}>{T("Forget it", "לא צריך")}</button>
     </div>
   );
 }

@@ -227,7 +227,8 @@ export function keepAwake(on: boolean) {
 // ---- the trip on the lock screen and in the Dynamic Island ------------------------------------
 
 export interface TripLive {
-  phase: "wait" | "ride" | "walk" | "arrive"; title: string; detail: string; label: string; stop: string; line: string; mode: string;
+  // "pay": Quick pay for a bus scanned and not paid for, instead of a trip.
+  phase: "wait" | "ride" | "walk" | "arrive" | "pay"; title: string; detail: string; label: string; stop: string; line: string; mode: string;
   color: string; accent: string; target: number; depart: number; arrive: number; live: boolean; step: number; steps: number;
   // A Pay button on the card, with this word on it, while the ride ahead isn't paid for; empty for none.
   pay?: string;
@@ -242,8 +243,7 @@ export const liveResult = () => lastResult;
 // Started once per trip, then updated; a phone without Live Activities just says no. Each start counts, so a
 // sample from Settings only ends itself, never a trip started after it.
 let started = false, starts = 0;
-export function showTrip(destination: string, t: TripLive): Promise<LiveResult | null> {
-  if (!isNative) return Promise.resolve(null);
+function putCard(destination: string, t: TripLive): Promise<LiveResult | null> {
   // The card gone (swiped away, or ended by iOS): the next update starts it again.
   if (started) { KavNative.liveUpdate(t).then(r => { if (!r.ok) started = false; }, () => {}); return Promise.resolve(lastResult); }
   started = true; starts++;
@@ -254,10 +254,33 @@ export function showTrip(destination: string, t: TripLive): Promise<LiveResult |
       return lastResult = { ok: false, why: /not implemented/i.test(String(e?.message)) ? "missing" : String(e?.message ?? e) };
     });
 }
-export function endTrip() {
-  if (!isNative || !started) return;
+function takeCardOff() {
+  if (!started) return;
   started = false;
   KavNative.liveEnd().catch(() => {});
+}
+
+// The trip the open way's page last asked for, and Quick pay, which takes its place on the card while a bus you
+// scanned isn't paid for (and is the card when no way is open). The trip comes back once it's paid or forgotten.
+let trip: { destination: string; t: TripLive } | null = null;
+let quickPay: TripLive | null = null;
+
+export function showTrip(destination: string, t: TripLive): Promise<LiveResult | null> {
+  if (!isNative) return Promise.resolve(null);
+  trip = { destination, t };
+  return quickPay ? Promise.resolve(lastResult) : putCard(destination, t);
+}
+export function endTrip() {
+  if (!isNative) return;
+  trip = null;
+  if (!quickPay) takeCardOff();
+}
+export function showQuickPay(t: TripLive | null) {
+  if (!isNative) return;
+  quickPay = t;
+  if (t) putCard(t.stop, t);
+  else if (trip) putCard(trip.destination, trip.t);
+  else takeCardOff();
 }
 
 // From Settings: a two-minute sample trip, to see it on the lock screen and to learn why if it can't be.

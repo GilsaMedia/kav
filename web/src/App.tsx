@@ -4,8 +4,8 @@ import { AccentPicker } from "./Accent.tsx";
 import { Onboarding, SupportPrompt } from "./Onboarding.tsx";
 import { Header, stayPut, useLeaving, liveWhy, TabShown } from "./ui.tsx";
 import { DirectionsGlyph, LinesTabGlyph, GearGlyph, CloseGlyph } from "./icons.tsx";
-import { isNative, removeMap, getMapState, tryTripLive, say, onOpenUrl, type LiveResult } from "./native.ts";
-import { markPaid, payTarget, learnPaySignedIn, type PayStart } from "./payride.ts";
+import { isNative, removeMap, getMapState, tryTripLive, say, onOpenUrl, showQuickPay, type LiveResult } from "./native.ts";
+import { markPaid, payTarget, learnPaySignedIn, lastBus, useLastBus, forgetBus, busExpires, type PayStart } from "./payride.ts";
 import { canNotify, useJobs, removeReminder } from "./remind.ts";
 import { PlanScreen } from "./screens/Plan.tsx";
 import { StationsScreen } from "./screens/Stations.tsx";
@@ -29,8 +29,15 @@ export function App() {
   // Paying from a trip: a sheet over it with only the payment, the trip still underneath.
   const [paySheet, setPaySheet] = useState<PayStart | null>(null);
   // Pay on the lock screen or in the Dynamic Island: paying for the ride ahead on the trip that's open.
-  useEffect(() => onOpenUrl(url => { if (/^kav:\/\/pay\b/.test(url)) setPaySheet(payTarget() ?? {}); }), []);
+  // Quick pay: the bus you scanned, without scanning again. On a way, its bus ride is taken for that bus, so the
+  // fare knows where you get off and the way's Pay goes once it's paid.
+  useEffect(() => onOpenUrl(url => {
+    const bus = lastBus(), target = payTarget();
+    if (/^kav:\/\/pay\/bus\b/.test(url) && bus) setPaySheet({ ...(target?.routeType === 3 ? target : {}), qr: bus.qr });
+    else if (/^kav:\/\/pay\b/.test(url)) setPaySheet(target ?? {});
+  }), []);
   useEffect(() => { learnPaySignedIn(); }, []);
+  useQuickPayCard();
   // Tabs crossfade, as on Android: the screen inside doesn't slide.
   // Directions tapped again while it's open goes back to its home screen, as an iPhone tab does.
   const [planHome, setPlanHome] = useState(0);
@@ -221,6 +228,27 @@ function Notifications() {
       ))}
     </div>
   </>;
+}
+
+// A bus scanned and not paid for: the lock screen and the Dynamic Island turn to Quick pay (started, when no
+// way is open), until it's paid, forgotten, or kept too long to be the ride you're on. It starts at the scan,
+// with Kav open, as iOS lets only an app on screen start one.
+function useQuickPayCard() {
+  const prefs = usePrefs();
+  const bus = useLastBus();
+  useEffect(() => {
+    if (!bus) { showQuickPay(null); return; }
+    const ends = busExpires(bus);
+    showQuickPay({
+      phase: "pay", title: T("Quick pay", "תשלום מהיר"),
+      detail: T(`You scanned a bus at ${clock(Math.floor(bus.atMs / 1000))} and haven't paid yet`, `סרקתם אוטובוס ב-${clock(Math.floor(bus.atMs / 1000))} ועדיין לא שילמתם`),
+      label: "", stop: T("Pay for the bus", "תשלום באוטובוס"), line: "", mode: "bus", color: "#3E9B5C", accent: prefs.accent,
+      target: ends, depart: bus.atMs, arrive: ends, live: false, step: 0, steps: 1, pay: T("Pay now", "לתשלום"),
+    });
+    const t = setTimeout(forgetBus, ends - Date.now());
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [bus?.qr, bus?.atMs, prefs.accent, prefs.lang]);
 }
 
 function PaySheet({ start, onClose }: { start: PayStart; onClose: () => void }) {

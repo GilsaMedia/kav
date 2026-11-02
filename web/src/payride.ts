@@ -4,7 +4,8 @@
 import { useSyncExternalStore } from "react";
 import { api, type LatLon } from "./core.ts";
 
-export interface PayStart { at?: LatLon; routeType?: number; off?: LatLon }
+// qr: a bus already scanned, paid for without scanning it again.
+export interface PayStart { at?: LatLon; routeType?: number; off?: LatLon; qr?: string }
 
 const PAID = "kav-paid", SIGNED = "kav-pay-signed-in";
 // A payment covers the ride it was for, and that ride is over within a few hours.
@@ -34,6 +35,31 @@ export function markPaid(start: PayStart | null) {
 export const isPaid = (at: LatLon, routeType: number) => rideKey(at, routeType) in paid;
 export function usePaid() {
   return useSyncExternalStore(f => { listeners.add(f); return () => { listeners.delete(f); }; }, () => paid);
+}
+
+// The last bus scanned and not paid for yet, kept on this phone for a few hours: forgot to pay when getting on,
+// pay for it from your seat (or from the lock screen's Quick pay) without scanning again.
+const LAST_BUS = "kav-last-bus", KEEP_BUS_MS = 3 * 3600_000;
+export type ScannedBus = { qr: string; atMs: number };
+let bus: ScannedBus | null = (() => {
+  try {
+    const b = JSON.parse(localStorage.getItem(LAST_BUS) ?? "null") as ScannedBus | null;
+    return b?.qr && Date.now() - b.atMs < KEEP_BUS_MS ? b : null;
+  } catch { return null; }
+})();
+const busListeners = new Set<() => void>();
+function setBus(b: ScannedBus | null) {
+  bus = b;
+  try { if (b) localStorage.setItem(LAST_BUS, JSON.stringify(b)); else localStorage.removeItem(LAST_BUS); } catch { /* not kept */ }
+  busListeners.forEach(l => l());
+}
+export const busExpires = (b: ScannedBus) => b.atMs + KEEP_BUS_MS;
+export const lastBus = () => bus && Date.now() < busExpires(bus) ? bus : null;
+export const keepBus = (qr: string) => setBus({ qr, atMs: Date.now() });
+export const forgetBus = () => setBus(null);
+export function useLastBus() {
+  const b = useSyncExternalStore(f => { busListeners.add(f); return () => { busListeners.delete(f); }; }, () => bus);
+  return b && Date.now() < busExpires(b) ? b : null;
 }
 
 // Whether paying in Kav is set up on this phone: without it, the lock screen has no Pay to offer.
