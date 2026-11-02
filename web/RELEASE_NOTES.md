@@ -1,3 +1,7 @@
+## 3.2.1: 3.2 again
+
+- The same app as 3.2, released again. Install it over the Kav you have; your places and settings stay.
+
 ## 3.2: the lock screen and the Dynamic Island only while Kav is in use
 
 - A way you open still counts down to its line on the lock screen and in the Dynamic Island, and Start keeps it there for the ride. It's taken off as soon as you stop using it: leaving the way's page, switching to Lines or Settings, pressing Stop, or closing Kav. Nothing is left there once Kav is closed, and a card left over from an earlier run is cleared when Kav opens.
