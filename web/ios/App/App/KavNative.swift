@@ -25,7 +25,6 @@ public class KavNativePlugin: CAPPlugin, CAPBridgedPlugin, URLSessionDownloadDel
         CAPPluginMethod(name: "liveStart", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "liveUpdate", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "liveEnd", returnType: CAPPluginReturnPromise),
-        CAPPluginMethod(name: "liveCheck", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "scanQr", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "stateRead", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "stateWrite", returnType: CAPPluginReturnPromise),
@@ -217,11 +216,6 @@ public class KavNativePlugin: CAPPlugin, CAPBridgedPlugin, URLSessionDownloadDel
         // iOS takes the card even when nothing can draw it, and shows a black island and an empty lock screen.
         if let why = liveExtensionProblem { return why }
         return ActivityAuthorizationInfo().areActivitiesEnabled ? nil : "disabled"
-    }
-
-    // liveCheck() -> { ok, why }: what liveStart would say, without starting anything; for a way not yet started.
-    @objc func liveCheck(_ call: CAPPluginCall) {
-        if let why = Self.liveBlocked { call.resolve(["ok": false, "why": why]) } else { call.resolve(["ok": true]) }
     }
 
     // liveStart({ destination, ...state }): one trip at a time, so any earlier one ends first. Says why not

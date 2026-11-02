@@ -1,7 +1,7 @@
-## 3.2: the lock screen and the Dynamic Island only while you ride
+## 3.2: the lock screen and the Dynamic Island only while Kav is in use
 
-- The trip is on the lock screen and in the Dynamic Island only once you press Start, and only until the ride ends: Stop, leaving Live Directions, or closing Kav takes it off. Opening a way to look at it doesn't put anything there any more, and a card left over from an earlier run is cleared when Kav opens.
-- Before Start, a way's page still says if the ride couldn't be shown there, and why.
+- A way you open still counts down to its line on the lock screen and in the Dynamic Island, and Start keeps it there for the ride. It's taken off as soon as you stop using it: leaving the way's page, switching to Lines or Settings, pressing Stop, or closing Kav. Nothing is left there once Kav is closed, and a card left over from an earlier run is cleared when Kav opens.
+- Pay shows on the lock screen and in the Dynamic Island while the ride ahead isn't paid for, for everyone who pays with Kav. Before, someone who signed in to paying before 3.0 didn't get it until they opened the Pay screen again.
 - With SideStore, Kav is told apart from a copy signed with SideStore's "Use Main Profile" more carefully, so it no longer mistakes a working copy for a broken one.
 
 ## 3.1.2: Kav says why the Dynamic Island is black

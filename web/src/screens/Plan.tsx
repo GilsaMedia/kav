@@ -1,11 +1,11 @@
 // Planning a trip: where from and to, the ways there, one of them in detail, and walking through it.
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useContext, useEffect, useMemo, useRef, useState } from "react";
 import {
   T, api, usePrefs, getPrefs, setPrefs, usePlanAsk, rememberTrip, boardingOf, useHere, currentAccuracy, useLoad, useNow, clock, minutesText, minutesTo, distanceText, metres, shekels, failure,
   timeOf, isLive, isCancelled, isSeen, inTraffic, distinctDeps, routeTypeOf, options, modeColor, modeName, MODE_FILTERS, mergeResolved, emptyResolved,
   type Place, type Favourite, type Itinerary, type Leg, type Resolved, type Arrival, type LatLon, type Departure, agencyOf,
 } from "../core.ts";
-import { lineNum, lineNote, Header, LineBadge, Spinner, Note, LiveDot, PlacePicker, SaveFavourite, HERE_NAME, Sheet, Eta, NextTimes, isLate, goBack, stayPut, liveWhy } from "../ui.tsx";
+import { lineNum, lineNote, Header, LineBadge, Spinner, Note, LiveDot, PlacePicker, SaveFavourite, HERE_NAME, Sheet, Eta, NextTimes, isLate, goBack, stayPut, liveWhy, TabShown } from "../ui.tsx";
 import { MapView, type MapLine, type MapPoint } from "../MapView.tsx";
 import { Home, Arrives, type Opened } from "./Home.tsx";
 import { DragSheet } from "../sheet.tsx";
@@ -15,7 +15,7 @@ import { DelayNote } from "../delays.tsx";
 import { saveRide, clearRide, setRideStep, useRide, GRACE_MS } from "../ride.ts";
 import { canNotify, useJobs, addReminder, removeReminder, rideLines, setStepNotices, clearStepNotices } from "../remind.ts";
 import type { Notice } from "../../backend/jobs.ts";
-import { isNative, keepAwake, showTrip, endTrip, checkTripLive, buzz, say, type TripLive } from "../native.ts";
+import { isNative, keepAwake, showTrip, endTrip, buzz, say, type TripLive } from "../native.ts";
 import { setPayTarget, isPaid, paySignedIn, usePaid, type PayStart } from "../payride.ts";
 import { SwapGlyph, StarGlyph, CloseGlyph, RecentGlyph, WalkGlyph, BikeGlyph, TaxiGlyph, DotGlyph, ShareGlyph, PlayGlyph, ChevronGlyph, BackGlyph, PayGlyph, LocateGlyph, PinGlyph, StationMark, BellGlyph, FlagGlyph, modeOf } from "../icons.tsx";
 
@@ -534,11 +534,11 @@ export function TripDetail({ trip: given, resolved: givenR, from, to, tripEnds, 
     } catch (e) { if ((e as Error).name !== "AbortError") setShareNote(failure(e)); }
   };
 
-  // The lock screen and the Dynamic Island are only for a ride under way: nothing goes there until Start.
+  // On the lock screen and in the Dynamic Island while this way is open, counting down to its line; Start takes
+  // it on from there. Leaving the page or its tab, or closing Kav, takes it off.
   const allCards = useMemo(() => cardsOf(trip), [trip]);
-  // The countdown this page shows before Start, worked out as the ride's own card would be.
-  const preview = tripLiveOf(trip, r, live.data?.arrivals, now, to, allCards, 0);
   usePaid(); // the lock screen's Pay goes once the ride is paid for
+  const preview = tripLiveOf(trip, r, live.data?.arrivals, now, to, allCards, 0);
   // Pay on the lock screen opens paying for the way's first ride, until Start takes it on.
   const firstPay = (() => { const f = trip.legs.find(l => l.kind === "ride"); return f ? payStartOf(f, r) : null; })();
   const firstPayKey = JSON.stringify(firstPay);
@@ -548,13 +548,17 @@ export function TripDetail({ trip: given, resolved: givenR, from, to, tripEnds, 
     return () => setPayTarget(null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [firstPayKey, navigating]);
-  // Said here, before Start, if the ride couldn't be on the lock screen. Inside LiveContainer there's never a
-  // lock screen card; Live Directions' notifications stand in for it.
+  const previewKey = JSON.stringify(preview);
   const [lockNote, setLockNote] = useState<string | null>(null);
+  const shown = useContext(TabShown);
   useEffect(() => {
     if (navigating) return;
-    checkTripLive().then(res => setLockNote(res && !res.ok && res.why !== "container" ? liveWhy(res) : null));
-  }, [navigating]);
+    if (!shown) { endTrip(); return; }
+    // Inside LiveContainer there's never a lock screen card; Live Directions' notifications stand in for it.
+    showTrip(to, preview).then(res => setLockNote(res && !res.ok && res.why !== "container" ? liveWhy(res) : null));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [previewKey, navigating, shown]);
+  useEffect(() => () => endTrip(), []);
 
   // A reminder to leave, for a way that starts a while from now: its first ride, followed by its live time.
   const jobs = useJobs();

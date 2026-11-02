@@ -2,10 +2,10 @@ import { useEffect, useState, type ComponentType } from "react";
 import { T, usePrefs, getPrefs, setPrefs, usePlanAsk, clock, type LatLon, type Look } from "./core.ts";
 import { AccentPicker } from "./Accent.tsx";
 import { Onboarding, SupportPrompt } from "./Onboarding.tsx";
-import { Header, stayPut, useLeaving, liveWhy } from "./ui.tsx";
+import { Header, stayPut, useLeaving, liveWhy, TabShown } from "./ui.tsx";
 import { DirectionsGlyph, LinesTabGlyph, GearGlyph, CloseGlyph } from "./icons.tsx";
 import { isNative, removeMap, getMapState, tryTripLive, say, onOpenUrl, type LiveResult } from "./native.ts";
-import { markPaid, payTarget, type PayStart } from "./payride.ts";
+import { markPaid, payTarget, learnPaySignedIn, type PayStart } from "./payride.ts";
 import { canNotify, useJobs, removeReminder } from "./remind.ts";
 import { PlanScreen } from "./screens/Plan.tsx";
 import { StationsScreen } from "./screens/Stations.tsx";
@@ -30,6 +30,7 @@ export function App() {
   const [paySheet, setPaySheet] = useState<PayStart | null>(null);
   // Pay on the lock screen or in the Dynamic Island: paying for the ride ahead on the trip that's open.
   useEffect(() => onOpenUrl(url => { if (/^kav:\/\/pay\b/.test(url)) setPaySheet(payTarget() ?? {}); }), []);
+  useEffect(() => { learnPaySignedIn(); }, []);
   // Tabs crossfade, as on Android: the screen inside doesn't slide.
   // Directions tapped again while it's open goes back to its home screen, as an iPhone tab does.
   const [planHome, setPlanHome] = useState(0);
@@ -46,7 +47,7 @@ export function App() {
     <div className="app" key={prefs.lang}>
       <main className="main">
         {/* Screens stay mounted, so a trip or a board is still there after a look at another tab. */}
-        <div hidden={tab !== "plan"} className="tab-page"><PlanScreen home={planHome} onPay={(at, routeType, off) => setPaySheet({ at, routeType, off })} /></div>
+        <div hidden={tab !== "plan"} className="tab-page"><TabShown.Provider value={tab === "plan"}><PlanScreen home={planHome} onPay={(at, routeType, off) => setPaySheet({ at, routeType, off })} /></TabShown.Provider></div>
         <div hidden={tab !== "lines"} className="tab-page"><LinesTab /></div>
         {tab === "settings" && <div className="tab-page"><Settings /></div>}
       </main>

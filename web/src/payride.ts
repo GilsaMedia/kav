@@ -2,7 +2,7 @@
 // paying for it; and the rides you've paid for, so the button goes once you have. A ride is known by the stop
 // you get on at and its mode, the same however the payment was started.
 import { useSyncExternalStore } from "react";
-import type { LatLon } from "./core.ts";
+import { api, type LatLon } from "./core.ts";
 
 export interface PayStart { at?: LatLon; routeType?: number; off?: LatLon }
 
@@ -39,3 +39,15 @@ export function usePaid() {
 // Whether paying in Kav is set up on this phone: without it, the lock screen has no Pay to offer.
 export function setPaySignedIn(on: boolean) { try { localStorage.setItem(SIGNED, on ? "1" : "0"); } catch { /* not kept */ } }
 export const paySignedIn = () => { try { return localStorage.getItem(SIGNED) === "1"; } catch { return false; } };
+
+// Kav learns it on the Pay screen, so someone signed in before 3.0 who hasn't opened it since had no Pay on the
+// lock screen. Asked at launch too: signed out always counts; signed in counts unless the Pay screen found a step
+// Moovit still wants.
+export function learnPaySignedIn() {
+  api<{ pay: boolean }>("status").then(s => {
+    let known: string | null = null;
+    try { known = localStorage.getItem(SIGNED); } catch { /* not kept */ }
+    if (!s.pay) setPaySignedIn(false);
+    else if (known === null) setPaySignedIn(true);
+  }, () => {});
+}

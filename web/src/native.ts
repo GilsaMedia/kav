@@ -15,7 +15,6 @@ interface KavNativePlugin {
   liveStart(o: TripLive & { destination: string }): Promise<{ ok: boolean; why?: string }>;
   liveUpdate(o: TripLive): Promise<{ ok: boolean }>;
   liveEnd(): Promise<void>;
-  liveCheck(): Promise<{ ok: boolean; why?: string }>;
   scanQr(o: { title: string; cancel: string; torch: string }): Promise<{ code?: string; cancelled?: boolean }>;
   stateRead(o: { key: string }): Promise<{ value: string | null }>;
   haptic(o: { kind: "tap" | "alert" }): Promise<void>;
@@ -254,11 +253,6 @@ export function showTrip(destination: string, t: TripLive): Promise<LiveResult |
       started = false;
       return lastResult = { ok: false, why: /not implemented/i.test(String(e?.message)) ? "missing" : String(e?.message ?? e) };
     });
-}
-// Whether a ride could be on the lock screen, without putting anything there: for a way before Start.
-export function checkTripLive(): Promise<LiveResult | null> {
-  if (!isNative) return Promise.resolve(null);
-  return KavNative.liveCheck().catch(e => ({ ok: false, why: /not implemented/i.test(String(e?.message)) ? "missing" : String(e?.message ?? e) }));
 }
 export function endTrip() {
   if (!isNative || !started) return;

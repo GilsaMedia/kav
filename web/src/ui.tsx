@@ -1,5 +1,5 @@
 // Small pieces every screen uses.
-import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { createContext, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { BackGlyph, ModeGlyph, modeOf, StationMark, StarGlyph, RecentGlyph, PinGlyph, LocateGlyph, SearchGlyph, CloseGlyph } from "./icons.tsx";
 import qrcode from "qrcode-generator";
 import { operatorColour, operatorPlate, onScreen } from "./operators.ts";
@@ -367,6 +367,9 @@ export function SaveFavourite({ place, onDone }: { place: Place; onDone: () => v
     </Sheet>
   );
 }
+
+// Whether the tab a screen is on is the one showing: Directions stays mounted behind Lines and Settings.
+export const TabShown = createContext(true);
 
 // Why the trip isn't on the lock screen, in words a person can act on.
 export function liveWhy(r: { ok: boolean; why?: string }): string {
