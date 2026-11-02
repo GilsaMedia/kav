@@ -1,4 +1,5 @@
 import UIKit
+import ActivityKit
 import Capacitor
 
 @UIApplicationMain
@@ -9,6 +10,11 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
     func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?) -> Bool {
         // Reminders and line alerts are checked while Kav is closed too (KavBackground, in KavNative.swift).
         KavBackground.register()
+        // A card left from a run iOS ended without telling Kav: no ride is running now. One Kav resumes comes back.
+        if #available(iOS 16.2, *) {
+            let left = Activity<KavTripAttributes>.activities
+            Task { for a in left { await a.end(nil, dismissalPolicy: .immediate) } }
+        }
         NotificationCenter.default.addObserver(forName: UIApplication.didEnterBackgroundNotification, object: nil, queue: .main) { _ in
             KavBackground.schedule()
         }
@@ -34,8 +40,8 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
     }
 
     func applicationWillTerminate(_ application: UIApplication) {
-        // A trip's card can't offer Pay once Kav is gone.
-        KavNativePlugin.dropPay()
+        // No ride runs with Kav gone, so its card goes too.
+        KavNativePlugin.endAllTrips()
     }
 
     func application(_ application: UIApplication,

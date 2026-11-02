@@ -25,6 +25,7 @@ public class KavNativePlugin: CAPPlugin, CAPBridgedPlugin, URLSessionDownloadDel
         CAPPluginMethod(name: "liveStart", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "liveUpdate", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "liveEnd", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "liveCheck", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "scanQr", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "stateRead", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "stateWrite", returnType: CAPPluginReturnPromise),
@@ -152,16 +153,13 @@ public class KavNativePlugin: CAPPlugin, CAPBridgedPlugin, URLSessionDownloadDel
             pay: call.getString("pay") ?? "")
     }
 
-    // Kav quitting: the trip's card loses its Pay button, which only Kav running can answer.
-    static func dropPay() {
+    // The card is there only while a ride runs in Kav: Kav quitting takes it off, and Kav starting takes off one
+    // left from a run that ended without saying (the ride it resumes, if any, puts its own back).
+    static func endAllTrips() {
         guard #available(iOS 16.2, *) else { return }
         let done = DispatchSemaphore(value: 0)
         Task.detached {
-            for a in Activity<KavTripAttributes>.activities where !a.content.state.pay.isEmpty {
-                var s = a.content.state
-                s.pay = ""
-                await a.update(ActivityContent(state: s, staleDate: a.content.staleDate))
-            }
+            for a in Activity<KavTripAttributes>.activities { await a.end(nil, dismissalPolicy: .immediate) }
             done.signal()
         }
         _ = done.wait(timeout: .now() + 1.5)
@@ -189,8 +187,8 @@ public class KavNativePlugin: CAPPlugin, CAPBridgedPlugin, URLSessionDownloadDel
 
     // What's wrong with KavLive as installed, if anything: "noext" when the installer left it out (SideStore
     // drops an extension the copy it updates didn't have, so a Kav first installed before 1.6 loses it on every
-    // update), "profile" when it was signed with a profile for another App ID (SideStore's "Use Main Profile"),
-    // which iOS won't run it under.
+    // update), "profile" when it was signed with the app's own profile (SideStore's "Use Main Profile"), whose
+    // App ID isn't the extension's, so iOS won't run it.
     static var liveExtensionProblem: String? {
         guard let dir = Bundle.main.builtInPlugInsURL,
               let ext = Bundle(url: dir.appendingPathComponent("KavLive.appex")),
@@ -203,24 +201,34 @@ public class KavNativePlugin: CAPPlugin, CAPBridgedPlugin, URLSessionDownloadDel
               let appID = (profile["Entitlements"] as? [String: Any])?["application-identifier"] as? String else { return nil }
         // "TEAMID.<bundle id>", or a wildcard: "TEAMID.*", "TEAMID.com.example.*".
         let allowed = appID.split(separator: ".", maxSplits: 1).last.map(String.init) ?? appID
-        if allowed == id || allowed == "*" || (allowed.hasSuffix(".*") && id.hasPrefix(String(allowed.dropLast()))) { return nil }
-        return "profile"
+        return allowed == Bundle.main.bundleIdentifier && allowed != id ? "profile" : nil
     }
 
     // Keeps the card in whole minutes, as Moovit's: Kav stays awake in the background on location, as
     // navigation does, and counts the minutes again every 20 seconds.
     private var keeper: AnyObject?
 
+    // Why a ride couldn't be on the lock screen and in the Dynamic Island, or nil when it can.
+    static var liveBlocked: String? {
+        guard #available(iOS 16.2, *) else { return "ios" }
+        // Run inside LiveContainer (or another app that hosts apps), Kav isn't installed as itself: iOS
+        // never sees its lock screen extension, so there's nothing it could show.
+        if hosted { return "container" }
+        // iOS takes the card even when nothing can draw it, and shows a black island and an empty lock screen.
+        if let why = liveExtensionProblem { return why }
+        return ActivityAuthorizationInfo().areActivitiesEnabled ? nil : "disabled"
+    }
+
+    // liveCheck() -> { ok, why }: what liveStart would say, without starting anything; for a way not yet started.
+    @objc func liveCheck(_ call: CAPPluginCall) {
+        if let why = Self.liveBlocked { call.resolve(["ok": false, "why": why]) } else { call.resolve(["ok": true]) }
+    }
+
     // liveStart({ destination, ...state }): one trip at a time, so any earlier one ends first. Says why not
     // when it can't, so the app can tell the person.
     @objc func liveStart(_ call: CAPPluginCall) {
         guard #available(iOS 16.2, *) else { return call.resolve(["ok": false, "why": "ios"]) }
-        // Run inside LiveContainer (or another app that hosts apps), Kav isn't installed as itself: iOS
-        // never sees its lock screen extension, so there's nothing it could show.
-        if Self.hosted { return call.resolve(["ok": false, "why": "container"]) }
-        // iOS takes the card even when nothing can draw it, and shows a black island and an empty lock screen.
-        if let why = Self.liveExtensionProblem { return call.resolve(["ok": false, "why": why]) }
-        guard ActivityAuthorizationInfo().areActivitiesEnabled else { return call.resolve(["ok": false, "why": "disabled"]) }
+        if let why = Self.liveBlocked { return call.resolve(["ok": false, "why": why]) }
         let state = Self.tripState(call)
         let attributes = KavTripAttributes(destination: call.getString("destination") ?? "")
         Task { @MainActor in

@@ -1,3 +1,9 @@
+## 3.2: the lock screen and the Dynamic Island only while you ride
+
+- The trip is on the lock screen and in the Dynamic Island only once you press Start, and only until the ride ends: Stop, leaving Live Directions, or closing Kav takes it off. Opening a way to look at it doesn't put anything there any more, and a card left over from an earlier run is cleared when Kav opens.
+- Before Start, a way's page still says if the ride couldn't be shown there, and why.
+- With SideStore, Kav is told apart from a copy signed with SideStore's "Use Main Profile" more carefully, so it no longer mistakes a working copy for a broken one.
+
 ## 3.1.2: Kav says why the Dynamic Island is black
 
 - If Kav was installed without its lock screen part, or with that part signed wrongly, iOS still makes room for the trip in the Dynamic Island but has nothing to draw: it stays black, and the lock screen stays empty. Kav now checks before it starts a trip. If that part is missing or can't run, the way's page and Settings → Lock screen and Dynamic Island → Try it say so, and what to do.
