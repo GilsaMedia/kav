@@ -1,3 +1,9 @@
+## 3.3.1: Quick pay pays
+
+- Tapping Pay now on Quick pay, or anywhere on its card, now pays for the bus you scanned, not only opens Kav on paying for it. Kav finds the fare and pays straight away, and the ticket shows when it's done.
+- If Kav can't tell your fare (which bus you're on, or where you get off), it asks, and pays as soon as you choose. If it couldn't find where you are, it shows the fare first and waits for you to tap Pay.
+- Pay for this bus under "Forgot to pay?" on the Pay screen pays straight away too.
+
 ## 3.3: Quick pay on the lock screen
 
 - Scanned a bus's QR code and didn't pay? The lock screen and the Dynamic Island turn to Quick pay: "You scanned a bus at 14:05 and haven't paid yet", with a Pay now button. Tap it, or anywhere on the card, and Kav opens straight on paying for that bus, without scanning again. If no trip was showing there, Quick pay shows on its own.

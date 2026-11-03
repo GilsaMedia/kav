@@ -29,11 +29,11 @@ export function App() {
   // Paying from a trip: a sheet over it with only the payment, the trip still underneath.
   const [paySheet, setPaySheet] = useState<PayStart | null>(null);
   // Pay on the lock screen or in the Dynamic Island: paying for the ride ahead on the trip that's open.
-  // Quick pay: the bus you scanned, without scanning again. On a way, its bus ride is taken for that bus, so the
-  // fare knows where you get off and the way's Pay goes once it's paid.
+  // Quick pay: pays for the bus you scanned, without scanning again or tapping Pay. On a way, its bus ride is
+  // taken for that bus, so the fare knows where you get off and the way's Pay goes once it's paid.
   useEffect(() => onOpenUrl(url => {
     const bus = lastBus(), target = payTarget();
-    if (/^kav:\/\/pay\/bus\b/.test(url) && bus) setPaySheet({ ...(target?.routeType === 3 ? target : {}), qr: bus.qr });
+    if (/^kav:\/\/pay\/bus\b/.test(url) && bus) setPaySheet({ ...(target?.routeType === 3 ? target : {}), qr: bus.qr, pay: true });
     else if (/^kav:\/\/pay\b/.test(url)) setPaySheet(target ?? {});
   }), []);
   useEffect(() => { learnPaySignedIn(); }, []);

@@ -4,8 +4,9 @@
 import { useSyncExternalStore } from "react";
 import { api, type LatLon } from "./core.ts";
 
-// qr: a bus already scanned, paid for without scanning it again.
-export interface PayStart { at?: LatLon; routeType?: number; off?: LatLon; qr?: string }
+// qr: a bus already scanned, paid for without scanning it again. pay: paid right away once the fare is
+// known (Quick pay), without a second tap on Pay.
+export interface PayStart { at?: LatLon; routeType?: number; off?: LatLon; qr?: string; pay?: boolean }
 
 const PAID = "kav-paid", SIGNED = "kav-pay-signed-in";
 // A payment covers the ride it was for, and that ride is over within a few hours.

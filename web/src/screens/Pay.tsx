@@ -52,14 +52,14 @@ export function PayScreen({ start, onStarted, onPaid }: { start: PayStart | null
     return () => window.removeEventListener(UNFINISHED, unfinished);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-  const [flow, setFlow] = useState<null | { kind: "bus"; qr?: string; off?: LatLon } | { kind: "station"; routeType: number; at?: LatLon } | { kind: "exit"; ticket: Ticket } | { kind: "history" }>(null);
+  const [flow, setFlow] = useState<null | { kind: "bus"; qr?: string; off?: LatLon; pay?: boolean } | { kind: "station"; routeType: number; at?: LatLon } | { kind: "exit"; ticket: Ticket } | { kind: "history" }>(null);
   const [bought, setBought] = useState<Ticket[] | null>(null);
   const [walletKey, setWalletKey] = useState(0);
 
   // A ride paid from a trip's card: a bus is scanned (or was, for Quick pay), a station is the trip's own.
   useEffect(() => {
     if (!start || !state.data?.signedIn) return;
-    setFlow(start.qr || start.routeType === 3 || start.routeType == null ? { kind: "bus", qr: start.qr, off: start.off } : { kind: "station", routeType: start.routeType, at: start.at });
+    setFlow(start.qr || start.routeType === 3 || start.routeType == null ? { kind: "bus", qr: start.qr, off: start.off, pay: start.pay } : { kind: "station", routeType: start.routeType, at: start.at });
     onStarted();
   }, [start, state.data?.signedIn]);
 
@@ -68,7 +68,7 @@ export function PayScreen({ start, onStarted, onPaid }: { start: PayStart | null
   if (!state.data?.signedIn || state.data.unfinished) return <SignIn onDone={state.reload} />;
 
   const done = (t: Ticket[]) => { setFlow(null); setBought(t); setWalletKey(k => k + 1); if (t.length) onPaid?.(); };
-  if (flow?.kind === "bus") return <BusPurchase qr={flow.qr} off={flow.off} onBack={() => setFlow(null)} onBought={done} />;
+  if (flow?.kind === "bus") return <BusPurchase qr={flow.qr} off={flow.off} pay={flow.pay} onBack={() => setFlow(null)} onBought={done} />;
   if (flow?.kind === "station") return <StationPurchase routeType={flow.routeType} at={flow.at} onBack={() => setFlow(null)} onBought={done} />;
   if (flow?.kind === "exit") return <TrainExit ticket={flow.ticket} onBack={() => setFlow(null)} onDone={done} />;
   if (flow?.kind === "history") return <History onBack={() => setFlow(null)} />;
@@ -83,7 +83,7 @@ export function PayScreen({ start, onStarted, onPaid }: { start: PayStart | null
             "חשבון התשלום עבר לאפליקציה של Moovit. התחברו כאן שוב כדי להחזיר אותו ל-Kav.")}
             <button className="link" onClick={async () => { await api("pay/signout", {}); state.reload(); }}>{T("Sign in again", "התחברות מחדש")}</button></Note>}
           <button className="btn primary big" onClick={() => setFlow({ kind: "bus" })}><QrGlyph size={20} />{T("Scan the QR code on the bus", "סריקת הברקוד באוטובוס")}</button>
-          <LastBus onPay={qr => setFlow({ kind: "bus", qr })} />
+          <LastBus onPay={qr => setFlow({ kind: "bus", qr, pay: true })} />
           <div className="grid3">
             {MODES.map(m => <button key={m.routeType} className="btn tile" onClick={() => setFlow({ kind: "station", routeType: m.routeType })}><ModeGlyph type={m.routeType} size={26} />{m.label()}</button>)}
           </div>
@@ -332,7 +332,7 @@ function usePurchase(onBought: (t: Ticket[]) => void) {
 
 // ---- a bus, from its QR code -----------------------------------------------------------------
 
-// The bus scanned earlier and not paid for yet, ready to pay without standing up to scan it again.
+// The bus scanned earlier and not paid for yet, paid for without standing up to scan it again.
 function LastBus({ onPay }: { onPay: (qr: string) => void }) {
   const bus = useLastBus();
   if (!bus) return null;
@@ -347,7 +347,9 @@ function LastBus({ onPay }: { onPay: (qr: string) => void }) {
   );
 }
 
-function BusPurchase({ qr: kept, off, onBack, onBought }: { qr?: string; off?: LatLon; onBack: () => void; onBought: (t: Ticket[]) => void }) {
+// pay: Quick pay, paid as soon as the fare is known: found by Kav, or picked when it can't tell. Not when
+// Moovit priced it from the city centre on its own, or once a payment was tried; then Pay is tapped as usual.
+function BusPurchase({ qr: kept, off, pay: auto, onBack, onBought }: { qr?: string; off?: LatLon; pay?: boolean; onBack: () => void; onBought: (t: Ticket[]) => void }) {
   const [qr, setQrState] = useState<string | null>(kept ?? null);
   const setQr = (code: string | null) => { if (code) keepBus(code); setQrState(code); };
   const offerAt = useRef(0);
@@ -362,6 +364,7 @@ function BusPurchase({ qr: kept, off, onBack, onBought }: { qr?: string; off?: L
   const [noFix, setNoFix] = useState(false);
   const p = usePurchase(t => { forgetBus(); onBought(t); });
   const at = useRef<LatLon | null>(null);
+  const autoPay = useRef(!!auto);
 
   useEffect(() => {
     if (!qr) return;
@@ -372,7 +375,7 @@ function BusPurchase({ qr: kept, off, onBack, onBought }: { qr?: string; off?: L
       const o = await api<Offer>("pay/price", { qr, at: at.current });
       offerAt.current = Date.now();
       setOffer(o);
-      if (o.fares.length === 1) setFare(o.fares[0]);
+      if (o.fares.length === 1) { if (!at.current) autoPay.current = false; setFare(o.fares[0]); }
     })().catch(e => p.setError(payError(e))).finally(() => setLoading(false));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [qr]);
@@ -381,7 +384,24 @@ function BusPurchase({ qr: kept, off, onBack, onBought }: { qr?: string; off?: L
     if (!offer || !fare) return;
     setQuote(null);
     api<Quote>("pay/quote", { offer, fare, at: at.current }).then(setQuote, () => setQuote(null));
+    if (autoPay.current) { autoPay.current = false; pay(offer, fare); }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [offer, fare]);
+
+  const pay = (offer: Offer, fare: Fare) => p.buy(async () => {
+    // Moovit's offer goes stale after a while: a fresh one, from where you are now, for the same fare.
+    let o: Offer = offer, f: Fare | null = fare;
+    if (Date.now() - offerAt.current > 60_000) {
+      at.current = await payAt() ?? at.current;
+      o = await api<Offer>("pay/price", { qr, at: at.current });
+      offerAt.current = Date.now();
+      f = o.fares.find(x => x.code === fare.code && x.regionId === fare.regionId) ?? (o.fares.length === 1 ? o.fares[0] : null);
+      setOffer(o); setFare(f);
+      if (!f) throw new Error(T("The fares changed since you scanned. Choose yours again.", "המחירים השתנו מאז הסריקה. בחרו שוב את המחיר שלכם."));
+      if (f.price.agorot !== fare.price.agorot) throw new Error(T(`The fare is now ${money(f.price)}. Check it and tap Pay again.`, `המחיר עכשיו ${money(f.price)}. בדקו ולחצו שוב על תשלום.`));
+    }
+    return api("pay/buy", { offer: o, fare: f, at: at.current, count: guests + 1 });
+  });
 
   const fallback = fare ? { price: fare.price, full: fare.full ?? fare.price, reasons: fare.reasons } : null;
   return (
@@ -399,24 +419,11 @@ function BusPurchase({ qr: kept, off, onBack, onBought }: { qr?: string; off?: L
             {fareWhy && <div className="dim small" dir="auto">{fareWhy}</div>}
             <Summary quote={quote} fallback={fallback} guests={guests} setGuests={setGuests} />
             <PayButton busy={p.busy} quote={quote} fallback={fallback} guests={guests}
-              onPay={() => p.buy(async () => {
-                // Moovit's offer goes stale after a while: a fresh one, from where you are now, for the same fare.
-                let o: Offer = offer, f: Fare | null = fare;
-                if (Date.now() - offerAt.current > 60_000) {
-                  at.current = await payAt() ?? at.current;
-                  o = await api<Offer>("pay/price", { qr, at: at.current });
-                  offerAt.current = Date.now();
-                  f = o.fares.find(x => x.code === fare.code && x.regionId === fare.regionId) ?? (o.fares.length === 1 ? o.fares[0] : null);
-                  setOffer(o); setFare(f);
-                  if (!f) throw new Error(T("The fares changed since you scanned. Choose yours again.", "המחירים השתנו מאז הסריקה. בחרו שוב את המחיר שלכם."));
-                  if (f.price.agorot !== fare.price.agorot) throw new Error(T(`The fare is now ${money(f.price)}. Check it and tap Pay again.`, `המחיר עכשיו ${money(f.price)}. בדקו ולחצו שוב על תשלום.`));
-                }
-                return api("pay/buy", { offer: o, fare: f, at: at.current, count: guests + 1 });
-              })} />
+              onPay={() => pay(offer, fare)} />
             {offer.fares.length > 1 && <button className="link" onClick={() => { setFare(null); setQuote(null); setFareWhy(null); setFinding(n => n + 1); }}>{T("Not right? Find it again", "לא נכון? חיפוש מחדש")}</button>}
           </>}
           {p.error && <Note tone="error">{p.error}</Note>}
-          {qr && !p.busy && <button className="link" onClick={() => { setQr(null); setOffer(null); setFare(null); setQuote(null); setNoFix(false); p.setError(null); }}>{T("Scan again", "סריקה מחדש")}</button>}
+          {qr && !p.busy && <button className="link" onClick={() => { autoPay.current = false; setQr(null); setOffer(null); setFare(null); setQuote(null); setNoFix(false); p.setError(null); }}>{T("Scan again", "סריקה מחדש")}</button>}
         </div>
       </div>
     </div>
