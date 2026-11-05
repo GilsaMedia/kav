@@ -4,9 +4,9 @@ import { useRef, useState } from "react";
 import {
   T, api, usePrefs, getPrefs, setPrefs, moved, useHere, useLoad, useNow, clock, agoText, routeTypeOf, soonest,
   type Place, type Favourite, type Itinerary, type Resolved, type RecentTrip, type LatLon, type Boarding,
-  minutesTo, timeOf, isLive, inTraffic, agencyOf,
+  minutesTo, timeOf, isLive, isSeen, inTraffic, agencyOf,
 } from "../core.ts";
-import { LineBadge, LiveWaves, NextTimes } from "../ui.tsx";
+import { LineBadge, LiveWaves, NextTimes, toneOf } from "../ui.tsx";
 import { SearchGlyph, TripGlyph, BriefcaseGlyph, PinGlyph, MoreGlyph, FromToGlyph, PayGlyph, PlayGlyph, ClockGlyph } from "../icons.tsx";
 import type { SavedRide } from "../ride.ts";
 import { useReorder, GripGlyph } from "../reorder.tsx";
@@ -173,7 +173,7 @@ export function Arrives({ b, now, short }: { b: Boarding; now: number; short?: b
   const soon = tooSoon && <span className="too-soon"> · {T("probably too soon", "כנראה מוקדם מדי")}</span>;
   const traffic = inTraffic(first) && <span className={"traffic" + (first!.traffic === 3 ? " heavy" : "")}>{T("Delay due to traffic", "עיכוב בגלל עומסי תנועה")}</span>;
   // In the list of ways, as Moovit lists them: every coming time in its own colour, live or by the timetable.
-  if (short) return <span className="arrives short">{lead} <span className={"lead-mark" + (live ? " live" : "")}>{live ? <LiveWaves /> : <ClockGlyph size={14} />}</span>
+  if (short) return <span className="arrives short">{lead} <span className={"lead-mark" + (first ? toneOf(first) : "")}>{first && isSeen(first) ? <LiveWaves /> : <ClockGlyph size={14} />}</span>
     {first ? <NextTimes ds={[first, ...after]} now={now} lead /> : when}{soon}<span className="dim"> · {T(`ride ${b.rideMin} min`, `נסיעה ${b.rideMin} דק׳`)}{b.stops > 0 && ` · ${stopsText(b.stops)}`}</span>{traffic && <> · {traffic}</>}</span>;
   return (
     <div className="arrives">

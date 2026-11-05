@@ -21,6 +21,8 @@ export function useStatuses(groups: number[]) {
 
 // What the status says, for a line with nothing more than its mark: "Detour", or "2 alerts".
 export const statusText = (st: LineStatus) => st.label || (st.n === 1 ? T("Service alert", "התראת שירות") : T(`${st.n} service alerts`, `${st.n} התראות שירות`));
+// A detour ("עיקוף"): the ways there don't show it.
+export const isDetour = (st: LineStatus) => /עיקוף|detour/i.test(st.label);
 // Moovit's kind 3 is a detour or long delays: it changes your ride. The rest are notices.
 export const isSerious = (st: LineStatus) => st.category >= 3;
 

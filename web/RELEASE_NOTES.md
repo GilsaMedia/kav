@@ -9,12 +9,17 @@
 - The stop nearest you is open: when the line is next there, live or by the timetable, the times after it, how late it usually is there, and Stop details (the stop's board), Full schedule and Delays. Tap another stop to open it instead.
 - Along the bottom: Live location, Delays (for the open stop and the whole line) and Favorite, which saves the line to ★.
 
+### More colour
+
+- Each bus line is drawn in its operator's colour, as Moovit draws it: Dan's navy, Egged's green, Metropoline's orange, on the route on the map and the rail of its stops, on a way and on the line's page. Trains and light rail keep their own colours.
+- Start is green.
+
 ### Ways there
 
-- Each way lists its next three times at your stop, every one in its own colour, as Moovit does: "Here in 19, 29, 17:35". Live times have the live mark; once the bus is on the map they're green on time, amber late, red very late and blue early, and times from the timetable stay white. The list asks Moovit for the live times at your stops and keeps them fresh while it's open.
+- Each way lists its next three times at your stop, as Moovit does: "Here in 19, 29, 17:35". A bus whose location is live (it's on the map) is green on time, yellow late and red very late; a time with no live location is grey. The list asks Moovit for the live times at your stops and keeps them fresh while it's open, and a way's page shows the same times at the top as on its steps.
 - The same way at another time is no longer shown again as a card of its own. The list has each way once, at the time that suits best, and the other times are its "then 26, 56 min".
 - Every way says how many stops you ride: "ride 11 min · 8 stops".
-- A way whose lines have alerts says so on its card, as the Lines tab does, the lines with the same alert together ("עיקוף 126, 25"), and how late its first line usually is at your stop when Kav has seen enough. On the way's page, the ride shows the alert, and tapping it opens the whole notice.
+- A way whose lines have an alert says so on its card, the lines with the same alert together, and how late its first line usually is at your stop when Kav has seen enough. On the way's page, the ride shows the alert, and tapping it opens the whole notice. Detours aren't shown on the ways: Moovit already plans around them.
 
 ## 3.3.1: Quick pay pays
 

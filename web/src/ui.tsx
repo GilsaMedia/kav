@@ -6,7 +6,7 @@ import { operatorColour, operatorPlate, onScreen } from "./operators.ts";
 import { MapPicker } from "./mappick.tsx";
 import {
   T, api, usePrefs, getPrefs, setPrefs, remember, useHere, modeName, distanceText, metres, currentHere, locateOnce, failure,
-  clock, timeOf, isLive, isCancelled, isSeen, type Place, type Departure,
+  clock, timeOf, isLive, isCancelled, isSeen, modeColor, type Place, type Departure,
   minutesTo,
 } from "./core.ts";
 
@@ -44,16 +44,23 @@ export function Eta({ d, now, inline }: { d: Departure; now: number; inline?: bo
   );
 }
 
+// A line's own colour, as Moovit draws its route and its rail: a bus in its operator's colour (Dan's navy, Egged's
+// green), lifted or deepened to show on Kav's background; trains, light rail and the rest in their mode's.
+export function lineColour(type: number, agency?: string | null) {
+  const c = modeOf(type) === "bus" ? operatorColour(agency) : null;
+  return c ? onScreen(c, getPrefs().look === "light") : modeColor(type);
+}
+
 // As Moovit colours a time: white while the vehicle's place isn't known; once it is (it's on the map), green on
 // time, amber late, red very late, blue early.
 export function toneOf(d: Departure) {
   if (!isSeen(d)) return "";
   const delay = d.rtUtc > 0 && d.staticUtc > 0 ? d.rtUtc - d.staticUtc : 0;
-  return delay >= 300 ? " seen very-late" : delay >= 120 ? " seen late" : delay <= -120 ? " seen early" : " seen on-time";
+  return delay >= 300 ? " seen very-late" : delay >= 120 ? " seen late" : " seen on-time";
 }
 
-// The ones after the first, small: "12, 25 min". Each time in its own colour, live or by the timetable, as Moovit
-// shows them. lead: the first one too, larger, as a list of ways shows them: "19, 29, 17:35".
+// The ones after the first, small: "12, 25 min". As Moovit shows them: a bus whose place is known (it's on the map) in
+// green on time, yellow late, red very late; the rest, with no live location, grey. lead: the first one too, larger, as a list of ways shows them: "19, 29, 17:35".
 export function NextTimes({ ds, now, lead }: { ds: Departure[]; now: number; lead?: boolean }) {
   if (!ds.length) return null;
   // All within the hour: "12, 25 min". An hour or more away is its clock time: "12 min, 14:05".

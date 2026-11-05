@@ -4,7 +4,7 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { T, api, useLoad, useNow, useHere, usePrefs, getPrefs, setPrefs, moved, clock, metres, distanceText, timeOf, isLive, modeColor, modeName, MODE_FILTERS, streetViewUrl,
   type Arrival, type LatLon, type StopInfo, type LineInfo, type SavedLine } from "../core.ts";
-import { Header, SearchField, LineBadge, Spinner, Note, LiveDot, Eta, NextTimes, goBack } from "../ui.tsx";
+import { Header, SearchField, LineBadge, Spinner, Note, LiveDot, Eta, NextTimes, goBack, lineColour } from "../ui.tsx";
 import { MapView } from "../MapView.tsx";
 import { StarGlyph, ClockGlyph, BackGlyph, LiveGlyph } from "../icons.tsx";
 import { DelayNote, DelayStats } from "../delays.tsx";
@@ -181,7 +181,7 @@ export function LineDetail({ group, onBack, at, lineId }: { group: LineGroup; on
   const now = useNow(15000);
   const d = detail.data?.directions[dir];
   const type = detail.data?.agencyRouteType ?? group.routeType;
-  const color = modeColor(type);
+  const color = lineColour(type, group.agency);
   const stopIds = useMemo(() => d?.stops.map(s => s.id).slice(0, 60) ?? [], [d]);
   const poll = useRef(20);
   const live = useLoad<{ arrivals: Arrival[]; poll: number }>(stopIds.length ? `linelive:${d!.lineId}` : null,

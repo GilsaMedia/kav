@@ -5,14 +5,14 @@ import {
   timeOf, isLive, isCancelled, isSeen, inTraffic, distinctDeps, routeTypeOf, options, modeColor, modeName, MODE_FILTERS, mergeResolved, emptyResolved,
   type Place, type Favourite, type Itinerary, type Leg, type Resolved, type Arrival, type LatLon, type Departure, agencyOf,
 } from "../core.ts";
-import { lineNum, lineNote, Header, LineBadge, Spinner, Note, LiveDot, PlacePicker, SaveFavourite, HERE_NAME, Sheet, Eta, NextTimes, isLate, goBack, stayPut, liveWhy, TabShown } from "../ui.tsx";
+import { lineNum, lineNote, lineColour, Header, LineBadge, Spinner, Note, LiveDot, PlacePicker, SaveFavourite, HERE_NAME, Sheet, Eta, NextTimes, isLate, goBack, stayPut, liveWhy, TabShown } from "../ui.tsx";
 import { MapView, type MapLine, type MapPoint } from "../MapView.tsx";
 import { Home, Arrives, type Opened } from "./Home.tsx";
 import { DragSheet } from "../sheet.tsx";
 import { Velocity, FLING, SETTLE, glide, gliding, hold, liveOffset, project as coast, rubberband } from "../motion.ts";
 import { WhenButton, WhenSheet, type When } from "../when.tsx";
 import { DelayNote } from "../delays.tsx";
-import { useStatuses, StatusMark, LineAlerts, statusText, isSerious, type Statuses, type LineStatus } from "../status.tsx";
+import { useStatuses, StatusMark, LineAlerts, statusText, isSerious, isDetour, type Statuses, type LineStatus } from "../status.tsx";
 import { saveRide, clearRide, setRideStep, useRide, GRACE_MS } from "../ride.ts";
 import { canNotify, useJobs, addReminder, removeReminder, rideLines, setStepNotices, clearStepNotices } from "../remind.ts";
 import type { Notice } from "../../backend/jobs.ts";
@@ -327,7 +327,7 @@ function ItineraryCard({ it: planned, resolved, status, live, onClick }: { it: I
   for (const o of it.legs.filter(l => l.kind === "ride").flatMap(options)) {
     const line = resolved.lines[o.lineId];
     const st = line ? status[line.groupId] : undefined;
-    if (!st || seenGroups.has(line.groupId)) continue;
+    if (!st || isDetour(st) || seenGroups.has(line.groupId)) continue;
     seenGroups.add(line.groupId);
     const k = statusText(st);
     const f = flagged.get(k) ?? flagged.set(k, { st, numbers: [] }).get(k)!;
@@ -588,15 +588,15 @@ export function TripDetail({ trip: given, resolved: givenR, from, to, tripEnds, 
   const legs = trip.legs;
   const stopAt = (id: number): LatLon | null => { const s = r.stops[id]; return s && s.lat != null && s.lon != null ? [s.lat, s.lon] : null; };
   const lines: MapLine[] = legs.flatMap(l => {
-    if (l.kind === "ride") return [{ coords: l.shape.length ? l.shape : l.stops.map(stopAt).filter(Boolean) as LatLon[], color: modeColor(routeTypeOf(r, l.lineId)), width: 6 }];
+    if (l.kind === "ride") return [{ coords: l.shape.length ? l.shape : l.stops.map(stopAt).filter(Boolean) as LatLon[], color: lineColour(routeTypeOf(r, l.lineId), agencyOf(r, l.lineId)), width: 6 }];
     if (l.shape.length) return [{ coords: l.shape, color: "#9ABEFF", width: 4, dashed: l.kind === "walk" }];
     return [];
   });
   const vehicles: MapPoint[] = (live.data?.arrivals ?? []).filter(a => a.tracked && a.lat && legs.some(l => l.kind === "ride" && l.lineId === a.lineId && a.stopId === l.fromStop))
-    .map(a => ({ id: `v${a.tripId}`, at: [a.lat, a.lon] as LatLon, color: modeColor(routeTypeOf(r, a.lineId)), kind: "vehicle" as const, label: lineNum(r.lines[a.lineId]?.number ?? "") }));
+    .map(a => ({ id: `v${a.tripId}`, at: [a.lat, a.lon] as LatLon, color: lineColour(routeTypeOf(r, a.lineId), agencyOf(r, a.lineId)), kind: "vehicle" as const, label: lineNum(r.lines[a.lineId]?.number ?? "") }));
   // The stops each ride passes and stops at, small in the line's colour (their names close up), then the
   // stops you get on and off at.
-  const passing: MapPoint[] = legs.filter(l => l.kind === "ride").flatMap(l => l.stops.slice(1, -1).map(id => ({ id, at: stopAt(id), ring: modeColor(routeTypeOf(r, l.lineId)) })))
+  const passing: MapPoint[] = legs.filter(l => l.kind === "ride").flatMap(l => l.stops.slice(1, -1).map(id => ({ id, at: stopAt(id), ring: lineColour(routeTypeOf(r, l.lineId), agencyOf(r, l.lineId)) })))
     .filter(p => p.at).map(p => ({ id: `p${p.id}`, at: p.at!, color: "#ffffff", kind: "stop" as const, label: r.stops[p.id]?.name, size: 4, ring: p.ring }));
   const ends: MapPoint[] = [...passing, ...legs.filter(l => l.kind === "ride").flatMap(l => [l.fromStop, l.toStop]).map(id => ({ id: `s${id}`, at: stopAt(id), name: r.stops[id]?.name }))
     .filter(p => p.at).map(p => ({ id: p.id, at: p.at!, color: "#ffffff", kind: "end" as const, label: p.name, size: 5, ring: "#000" }))];
@@ -675,7 +675,7 @@ export function TripDetail({ trip: given, resolved: givenR, from, to, tripEnds, 
     onExit={() => resume != null ? onBack() : setNavigating(false)} onPick={pickLine} startStep={navStart} />;
 
   const mins = Math.max(1, Math.round((trip.arr - trip.dep) / 60));
-  const b = boardingOf(trip, r, now);
+  const b = boardingOf(withLiveTimes(trip, live.data?.arrivals), r, now);
   return (
     <div className="screen trip">
       {/* As Moovit shows a way: the map on top with its buttons floating on it, the steps in a sheet over it. */}
@@ -774,7 +774,7 @@ function Timeline({ trip, r, live, now, from, to, onPay, stopAt, onPick }: {
   onPay: (at?: LatLon, routeType?: number, off?: LatLon) => void; stopAt: (id: number) => LatLon | null; onPick: PickLine;
 }) {
   const legs = trip.legs.filter(l => l.kind !== "wait" && !(l.kind === "walk" && l.arr - l.dep < 30));
-  const colorOf = (l: Leg | undefined) => !l ? null : l.kind === "ride" ? modeColor(routeTypeOf(r, l.lineId)) : l.kind === "walk" ? WALK : "var(--accent)";
+  const colorOf = (l: Leg | undefined) => !l ? null : l.kind === "ride" ? lineColour(routeTypeOf(r, l.lineId), agencyOf(r, l.lineId)) : l.kind === "walk" ? WALK : "var(--accent)";
   const out: React.ReactNode[] = [];
   out.push(<Stop key="from" time={trip.dep} above={null} below={colorOf(legs[0])} title={from} big />);
   legs.forEach((l, i) => {
@@ -810,7 +810,7 @@ function RideSteps({ leg, wait, r, live, now, onPay, stopAt, prev, below, onPick
   const pick = pickOf(leg);
   const ride = leg;
   const type = routeTypeOf(r, ride.lineId);
-  const color = modeColor(type);
+  const color = lineColour(type, agencyOf(r, ride.lineId));
   const line = r.lines[ride.lineId];
   const deps = departuresFor(ride, wait, live, now);
   const mine = deps.find(d => String(d.tripId) === String(ride.tripId)) ?? deps[0];
@@ -819,7 +819,9 @@ function RideSteps({ leg, wait, r, live, now, onPay, stopAt, prev, below, onPick
   const stopName = (id: number) => r.stops[id]?.name ?? "";
   // The line's status (a detour, an alert), with its alerts under the line.
   const group = r.lines[(opts[pick] ?? leg).lineId]?.groupId ?? 0;
-  const st = useStatuses([group]).data?.status[group];
+  const status = useStatuses([group]).data?.status[group];
+  // A detour isn't shown on a way: Moovit already plans the way around it.
+  const st = status && !isDetour(status) ? status : undefined;
   return <>
     <Stop time={mine ? timeOf(mine) : ride.dep} above={prev} below={color} title={stopName(ride.fromStop)}>
       <DelayNote lineId={ride.lineId} stopId={ride.fromStop} />
@@ -1180,7 +1182,7 @@ function Navigate({ trip, r, live, here, lines, ends, vehicles, from, to, onPay,
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [comingShape.data, coming?.lat, coming?.lon, yourStop?.[0], yourStop?.[1]]);
   const approachLine: MapLine[] = approach.length && waitCard
-    ? [{ coords: approach, color: modeColor(routeTypeOf(r, waitCard.ride.lineId)), width: 3, opacity: 0.45 }] : [];
+    ? [{ coords: approach, color: lineColour(routeTypeOf(r, waitCard.ride.lineId), agencyOf(r, waitCard.ride.lineId)), width: 3, opacity: 0.45 }] : [];
 
   const stepCoords: LatLon[] = card.kind === "start" ? (lines[0]?.coords.slice(0, 2) ?? []) : card.kind === "arrive" ? (lines[lines.length - 1]?.coords.slice(-2) ?? [])
     : card.kind === "wait" ? [stopAt(card.ride.fromStop), ...approach].filter(Boolean) as LatLon[]
@@ -1398,7 +1400,7 @@ function StepCard({ card, trip, r, live, now, here, from, to, endOf, onPick, rea
   const setPick = (k: number) => onPick(trip.legs.indexOf(card.ride), k);
   const n = Math.max(1, ride.stops.length - 1);
   const mins = Math.max(1, Math.round((ride.arr - ride.dep) / 60));
-  const color = modeColor(routeTypeOf(r, ride.lineId));
+  const color = lineColour(routeTypeOf(r, ride.lineId), agencyOf(r, ride.lineId));
   return <>
     {head(T(`Ride ${n} stops to`, `נסיעה ${n} תחנות אל`), <span>{minutesText(mins)}</span>)}
     <div className="ld-body">
