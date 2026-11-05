@@ -2,11 +2,11 @@
 // by operator, and each mode's. The page of one line: its route on the map, its stops on a rail with when the line
 // is next at each, its departures, its delays and its alerts.
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { T, api, useLoad, useNow, useHere, usePrefs, getPrefs, setPrefs, moved, clock, metres, distanceText, timeOf, isLive, modeColor, modeName, MODE_FILTERS,
+import { T, api, useLoad, useNow, useHere, usePrefs, getPrefs, setPrefs, moved, clock, metres, distanceText, timeOf, isLive, modeColor, modeName, MODE_FILTERS, streetViewUrl,
   type Arrival, type LatLon, type StopInfo, type LineInfo, type SavedLine } from "../core.ts";
-import { Header, SearchField, LineBadge, Spinner, Note, LiveDot, Eta, NextTimes } from "../ui.tsx";
+import { Header, SearchField, LineBadge, Spinner, Note, LiveDot, Eta, NextTimes, goBack } from "../ui.tsx";
 import { MapView } from "../MapView.tsx";
-import { StarGlyph, ClockGlyph } from "../icons.tsx";
+import { StarGlyph, ClockGlyph, BackGlyph, LiveGlyph } from "../icons.tsx";
 import { DelayNote, DelayStats } from "../delays.tsx";
 import { useReorder, GripGlyph } from "../reorder.tsx";
 import { useAllStatuses, StatusMark, LineAlerts, statusText, isSerious, type LineStatus, type Statuses } from "../status.tsx";
@@ -20,12 +20,14 @@ function toggleSaved(l: LineGroup) {
   setPrefs({ savedLines: saved.some(x => x.id === l.id) ? saved.filter(x => x.id !== l.id) : [...saved, l] });
 }
 
-// The star that saves a line to the ★ tab.
-function SaveLine({ line }: { line: LineGroup }) {
+// The star that saves a line to the ★ tab; wide: Moovit's Favorite button along the bottom of a line.
+function SaveLine({ line, wide }: { line: LineGroup; wide?: boolean }) {
   usePrefs();
   const on = isSaved(line);
-  return <button className={"plate-btn star-btn" + (on ? " on" : "")} onClick={e => { e.stopPropagation(); toggleSaved(line); }}
-    aria-label={on ? T("Remove from saved lines", "הסרה מהקווים השמורים") : T("Save this line", "שמירת הקו")}><StarGlyph size={22} filled={on} /></button>;
+  const label = on ? T("Remove from saved lines", "הסרה מהקווים השמורים") : T("Save this line", "שמירת הקו");
+  if (wide) return <button className={"setup-btn star-btn grow" + (on ? " on" : "")} onClick={() => toggleSaved(line)} aria-label={label}>
+    <StarGlyph size={20} filled={on} />{on ? T("Saved", "שמור") : T("Favorite", "מועדף")}</button>;
+  return <button className={"plate-btn star-btn" + (on ? " on" : "")} onClick={e => { e.stopPropagation(); toggleSaved(line); }} aria-label={label}><StarGlyph size={22} filled={on} /></button>;
 }
 
 // Moovit names a line by its ends: "מסוף הטייסים-תל אביב יפו<->בית העלמין/קרית שאול-תל אביב יפו-20". Without the
@@ -38,21 +40,28 @@ function endsOf(l: LineGroup): string {
 }
 const badgeType = (l: LineGroup) => l.routeType === 7 ? 715 : l.routeType;
 
-function LineRow({ l, st, onOpen, grip }: { l: LineGroup; st?: LineStatus; onOpen: () => void; grip?: React.HTMLAttributes<HTMLButtonElement> }) {
-  const title = l.cities || l.name;
-  const ends = endsOf(l);
+// One row as Moovit lists a line: its plate, its towns, and the yellow (i) when it has an alert. On the Alerts tab, the
+// kind of alert under the towns.
+function LineRow({ l, st, onOpen, grip, why }: { l: LineGroup; st?: LineStatus; onOpen: () => void; grip?: React.HTMLAttributes<HTMLButtonElement>; why?: boolean }) {
   return (
     <li className="row line-row" data-row onClick={onOpen}>
       <LineBadge number={l.number} type={badgeType(l)} agency={l.agency} />
       <div className="row-main">
-        <div dir="auto" className="line-title">{title}</div>
-        {ends && ends !== title && <div className="dim small one-line" dir="auto">{ends}</div>}
-        {st && <div className={"small line-status" + (isSerious(st) ? " serious" : "")} dir="auto">{statusText(st)}</div>}
+        <div dir="auto" className="line-title">{l.cities || endsOf(l) || l.name}</div>
+        {why && st && <div className={"small line-status" + (isSerious(st) ? " serious" : "")} dir="auto">{statusText(st)}</div>}
       </div>
-      {grip ? <button {...grip}><GripGlyph /></button> : st && <StatusMark st={st} />}
+      {grip ? <button {...grip}><GripGlyph /></button> : st && <StatusMark st={st} size={26} />}
     </li>
   );
 }
+
+// Opened last first, a few of them, for Recent.
+function rememberLine(l: LineGroup) {
+  setPrefs({ recentLines: [l, ...(getPrefs().recentLines ?? []).filter(x => x.id !== l.id)].slice(0, 5) });
+}
+
+// Moovit's order of the mode tabs: Bus, Light rail, then the trains (Israel Railways) and the rest.
+const MODE_TABS = [0, 2, 1, 3, 4].map(k => ({ k, ...MODE_FILTERS[k], label: k === 1 ? () => T("Israel Railways", "רכבת ישראל") : MODE_FILTERS[k].label }));
 
 // "Saved", "All" and each mode the catalogue has; Alerts first, as Moovit has them.
 type Tab = "alerts" | "saved" | "all" | number;
@@ -88,8 +97,9 @@ export function LinesScreen({ head }: { head?: ReactNode }) {
   });
 
   const lines = all.data?.lines ?? [];
-  const modes = useMemo(() => MODE_FILTERS.map((f, k) => ({ ...f, k })).filter(f => lines.some(l => f.types.includes(l.routeType))), [lines]);
+  const modes = useMemo(() => MODE_TABS.filter(f => lines.some(l => f.types.includes(l.routeType))), [lines]);
   if (open) return <LineDetail group={open} onBack={() => setOpen(null)} />;
+  const openLine = (l: LineGroup) => { rememberLine(l); setOpen(l); };
 
   const saved = prefs.savedLines;
   const inTab = (l: LineGroup) => tab === "all" ? true : tab === "alerts" ? !!status[l.id] : tab === "saved" ? saved.some(x => x.id === l.id)
@@ -98,6 +108,8 @@ export function LinesScreen({ head }: { head?: ReactNode }) {
   const rows = searching ? (found.data?.lines ?? []).filter(inTab) : tab === "saved" ? saved : lines.filter(inTab);
   // By operator, as Moovit lists them: a heading wherever the operator (or its mode) changes.
   const grouped = !searching && tab !== "saved";
+  // Recent, over All and each mode's tab: the lines you opened last (of that mode).
+  const recent = !searching && (tab === "all" || typeof tab === "number") ? (prefs.recentLines ?? []).filter(inTab) : [];
 
   return (
     <div className="screen">
@@ -120,13 +132,18 @@ export function LinesScreen({ head }: { head?: ReactNode }) {
         {statuses.error && tab === "alerts" && <div className="pad"><Note tone="warn">{statuses.error}</Note></div>}
         {(searching ? found.loading && !found.data : all.loading && !all.data && tab !== "saved") && <div className="pad"><Spinner text={T("Loading Moovit's line list…", "טוענים את רשימת הקווים…")} /></div>}
         {(searching ? found.error : tab !== "saved" && all.error) && <div className="pad"><Note tone="error">{searching ? found.error : all.error}</Note></div>}
+        {recent.length > 0 && <>
+          <div className="list-head line-group"><span>{T("Recent", "אחרונים")}</span>
+            <button className="link" onClick={() => setPrefs({ recentLines: [] })}>{T("Clear", "ניקוי")}</button></div>
+          <ul className="list">{recent.map(l => <LineRow key={l.id} l={l} st={status[l.id]} onOpen={() => openLine(l)} />)}</ul>
+        </>}
         <ul className="list" ref={tab === "saved" && !searching ? list : undefined}>
           {rows.slice(0, shown).flatMap((l, i) => {
             const prev = rows[i - 1];
             const heading = grouped && (!prev || prev.agency !== l.agency || prev.routeType !== l.routeType);
             return [
               heading && <li key={`h${l.agencyId}:${l.routeType}:${i}`} className="list-head line-group"><span dir="auto">{l.agency}</span><span>{modeName(l.routeType)}</span></li>,
-              <LineRow key={l.id} l={l} st={status[l.id]} onOpen={() => { if (!editing || tab !== "saved") setOpen(l); }}
+              <LineRow key={l.id} l={l} st={status[l.id]} why={tab === "alerts"} onOpen={() => { if (!editing || tab !== "saved") openLine(l); }}
                 grip={editing && tab === "saved" && !searching ? grip(i) : undefined} />,
             ];
           })}
@@ -160,6 +177,7 @@ export function LineDetail({ group, onBack, at, lineId }: { group: LineGroup; on
   const [picked, setPicked] = useState<number | null>(null);
   const [board, setBoard] = useState<Stop | null>(null);
   const [boardNote, setBoardNote] = useState<string | null>(null);
+  const [follow, setFollow] = useState(false);
   const now = useNow(15000);
   const d = detail.data?.directions[dir];
   const type = detail.data?.agencyRouteType ?? group.routeType;
@@ -199,6 +217,8 @@ export function LineDetail({ group, onBack, at, lineId }: { group: LineGroup; on
   const openId = picked ?? yours?.stop.id ?? null;
   const openStop = d?.stops.find(s => s.id === openId) ?? null;
   const openRow = useRef<HTMLLIElement>(null);
+  // The open stop's photo, as Moovit shows one in the map's corner; it opens Street View there.
+  const photo = useLoad<{ thumb: string | null }>(openId != null && openId > 0 ? `photo:${openId}` : null, sig => api(`photos?id=${openId}`, undefined, sig));
   // Like Moovit, the list opens at your stop: once per direction.
   const scrolledTo = useRef<string | null>(null);
   useEffect(() => {
@@ -224,37 +244,46 @@ export function LineDetail({ group, onBack, at, lineId }: { group: LineGroup; on
   const origin = d ? d.info?.origin || d.stops[0]?.name || "" : "";
   const dest = d ? d.info?.destination || d.stops[d.stops.length - 1]?.name || "" : "";
   const many = (detail.data?.directions.length ?? 0) > 1;
+  // Live location: the map turns to the buses on the road, and back to the whole line.
+  const vPts = vehicles.map(v => [v.lat, v.lon] as LatLon);
+  const onBuses = follow && vPts.length > 0;
   return (
-    <div className="screen">
-      <Header title={`${modeName(type)} ${group.number}`} sub={group.agency} back={onBack} right={<div className="header-btns">
-        {st && <button className="plate-btn" onClick={() => alertsAt.current?.scrollIntoView({ behavior: "smooth", block: "start" })} aria-label={statusText(st)}><StatusMark st={st} /></button>}
-        <SaveLine line={group} />
-      </div>} />
+    <div className="screen line-page">
+      {/* As Moovit heads a line: its plate and its operator, the alert mark beside them. */}
+      <header className="header line-header">
+        <button className="plate-btn" data-back onClick={goBack(onBack)} aria-label={T("Back", "חזרה")}><BackGlyph /></button>
+        <div className="line-header-mid"><LineBadge number={group.number} type={badgeType({ ...group, routeType: type })} agency={group.agency} /><span className="dim" dir="auto">{group.agency}</span></div>
+        {st ? <button className="plate-btn" onClick={() => { setTab("stops"); requestAnimationFrame(() => alertsAt.current?.scrollIntoView({ behavior: "smooth", block: "start" })); }}
+          aria-label={statusText(st)}><StatusMark st={st} size={26} /></button> : <span className="plate-space" />}
+      </header>
       {d && <div className="line-map">
         <MapView className="map-half" lines={[{ coords: d.shape.length ? d.shape : pts, color, width: 5 }]}
           points={[
             ...d.stops.filter(s => s.lat != null).map(s => ({ id: `s${s.id}`, at: [s.lat!, s.lon!] as LatLon, color: s.id === openId ? color : "#ffffff", kind: "stop" as const, ring: color, size: s.id === openId ? 7 : undefined })),
             ...vehicles.map(v => ({ id: `v${v.tripId}`, at: [v.lat, v.lon] as LatLon, color, kind: "vehicle" as const, label: group.number })),
-          ]} fit={pts} fitKey={`${group.id}:${dir}`} />
-        {vehicles.length > 0 && <div className="map-pill"><LiveDot /> {T(`${vehicles.length} on the road`, `${vehicles.length} בדרך עכשיו`)}</div>}
+          ]} fit={onBuses ? vPts : pts} fitKey={`${group.id}:${dir}:${onBuses ? "buses" : "line"}`} />
+        <button className={"live-btn" + (onBuses ? " on" : "")} onClick={() => setFollow(f => !f)} disabled={!vehicles.length}>
+          <LiveGlyph size={20} />{vehicles.length ? T(`Live location · ${vehicles.length}`, `מיקום בזמן אמת · ${vehicles.length}`) : T("Live location", "מיקום בזמן אמת")}
+        </button>
+        {photo.data?.thumb && openStop?.lat != null && <a className="stop-photo" href={streetViewUrl(openStop.lat, openStop.lon!)} target="_blank" rel="noreferrer"
+          aria-label={T("Street View", "Street View")}><img src={photo.data.thumb} alt="" /></a>}
       </div>}
       <div className="pad stack line-head">
         {detail.loading && <Spinner text={T("Asking Moovit…", "שואלים את Moovit…")} />}
         {detail.error && <Note tone="error">{detail.error}</Note>}
         {detail.data && !detail.data.directions.length && <Note>{T("This line has no trips this week.", "לקו הזה אין נסיעות השבוע.")}</Note>}
-        {/* Where it goes, as Moovit heads a line: from → to, and the other way with Change direction. */}
+        {/* Where it goes: from → to, and the other way with Change direction under it. */}
         {d && <div className="line-dir">
           <div className="line-dir-text"><bdi>{origin}</bdi><span className="dir-arrow">{T("→", "←")}</span><bdi>{dest}</bdi></div>
           {many && <button className="link" onClick={turn}>{T("Change direction", "החלפת כיוון")}{detail.data!.directions.length > 2 && <span className="dim"> ({dir + 1}/{detail.data!.directions.length})</span>}</button>}
         </div>}
-        {d && <div className="segmented">
-          <button className={tab === "stops" ? "on" : ""} onClick={() => setTab("stops")}>{T("Stops", "תחנות")} ({d.stops.length})</button>
-          <button className={tab === "times" ? "on" : ""} onClick={() => setTab("times")}>{T("Departures", "יציאות")}</button>
-          <button className={tab === "delays" ? "on" : ""} onClick={() => setTab("delays")}>{T("Delays", "איחורים")}</button>
+        {d && tab !== "stops" && <div className="line-sub">
+          <button className="link" onClick={() => setTab("stops")}><BackGlyph size={14} />{T("Stops", "תחנות")}</button>
+          <b>{tab === "times" ? T("Full schedule", "לוח זמנים מלא") : T("Delays", "איחורים")}</b>
         </div>}
       </div>
-      <div className="scroll">
-        {st && <div className="pad" ref={alertsAt}><LineAlerts group={group.id} /></div>}
+      <div className="scroll line-scroll">
+        {st && tab === "stops" && <div className="pad" ref={alertsAt}><LineAlerts group={group.id} /></div>}
         {boardNote && <div className="pad"><Note tone="warn">{boardNote}</Note></div>}
         {d && tab === "stops" && (
           <ol className="line-rail" style={{ "--c": color } as React.CSSProperties}>
@@ -269,14 +298,14 @@ export function LineDetail({ group, onBack, at, lineId }: { group: LineGroup; on
                   <span className="rail-dot" />
                   <div className="row-main">
                     <div className="rail-name" dir="auto">{s.name}</div>
-                    {!isOpen && <div className="dim small">{isYours && <span className="here-pill">{T("Your stop", "התחנה שלך")}</span>}{s.code}</div>}
+                    {/* The stop that's open, as Moovit opens one: when the line is next here, and what you can do from it. */}
                     {isOpen && <div className="stop-open" onClick={e => e.stopPropagation()}>
                       <div className="stop-when">
                         {a ? <><span className="time-pill"><ClockGlyph size={16} /><Eta d={a} now={now} inline /></span><span className="dim">{clock(timeOf(a))}</span></>
                           : <span className="dim">{live.loading && !live.data ? T("Asking Moovit…", "שואלים את Moovit…") : T("Nothing on its way here in the next while.", "אין נסיעה בדרך לכאן בזמן הקרוב.")}</span>}
                       </div>
                       <div className="dim small">
-                        {a && (isLive(a) ? <><LiveDot /> {T("Live", "בזמן אמת")}</> : T("Timetable", "לפי לוח הזמנים"))}
+                        {a && (isLive(a) ? <><LiveDot /> {T("Live", "בזמן אמת")}</> : T("By the timetable", "לפי לוח הזמנים"))}
                         {isYours && <>{a ? " · " : ""}{T("Your stop", "התחנה שלך")}{here && yours ? ` · ${distanceText(yours.m)}` : ""}</>}
                         {s.code && <> · {T("stop", "תחנה")} {s.code}</>}
                       </div>
@@ -285,10 +314,10 @@ export function LineDetail({ group, onBack, at, lineId }: { group: LineGroup; on
                       <div className="stop-acts">
                         <button className="link" onClick={() => openBoard(s)}>{T("Stop details", "פרטי התחנה")}</button>
                         <button className="link" onClick={() => setTab("times")}>{T("Full schedule", "לוח זמנים מלא")}</button>
+                        <button className="link" onClick={() => setTab("delays")}>{T("Delays", "איחורים")}</button>
                       </div>
                     </div>}
                   </div>
-                  {!isOpen && a && <Eta d={a} now={now} inline />}
                 </li>
               );
             })}
@@ -305,6 +334,12 @@ export function LineDetail({ group, onBack, at, lineId }: { group: LineGroup; on
           </div>
         )}
       </div>
+      {/* Moovit's buttons along the bottom of a line. */}
+      {d && <div className="line-cta">
+        <button className={"setup-btn" + (onBuses ? " on" : "")} onClick={() => setFollow(f => !f)} disabled={!vehicles.length} aria-label={T("Live location", "מיקום בזמן אמת")}><LiveGlyph size={20} /></button>
+        <button className={"setup-btn" + (tab === "delays" ? " on" : "")} onClick={() => setTab(tab === "delays" ? "stops" : "delays")}><ClockGlyph size={18} />{T("Delays", "איחורים")}</button>
+        <SaveLine line={group} wide />
+      </div>}
     </div>
   );
 }

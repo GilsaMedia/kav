@@ -983,16 +983,16 @@ a.btn { text-decoration: none; }
 .dir-arrow { margin-inline: 6px; color: var(--dim); }
 .line-dir .link { flex-shrink: 0; padding: 4px 0; }
 .line-rail { list-style: none; margin: 0; padding: 4px 16px 0; }
-.line-rail li { display: flex; align-items: flex-start; gap: 12px; padding-block: 11px; padding-inline: 30px 0; position: relative; cursor: pointer; }
+.line-rail li { display: flex; align-items: flex-start; gap: 12px; padding-block: 16px; padding-inline: 34px 0; position: relative; cursor: pointer; }
 /* The rail runs through every stop, from the first to the last. */
 .line-rail li::before { content: ""; position: absolute; inset-inline-start: 7px; top: 0; bottom: 0; width: 4px; background: var(--c); }
-.line-rail li.first::before { top: 20px; }
-.line-rail li.last::before { bottom: calc(100% - 20px); }
-.rail-dot { position: absolute; inset-inline-start: 2px; top: 13px; width: 14px; height: 14px; border-radius: 50%; background: var(--bg); border: 3px solid var(--c); z-index: 1;
+.line-rail li.first::before { top: 26px; }
+.line-rail li.last::before { bottom: calc(100% - 26px); }
+.rail-dot { position: absolute; inset-inline-start: 2px; top: 19px; width: 14px; height: 14px; border-radius: 50%; background: var(--bg); border: 3px solid var(--c); z-index: 1;
   transition: transform .3s var(--spring); }
 .line-rail li.on .rail-dot { background: var(--c); transform: scale(1.2); box-shadow: 0 0 0 3px var(--bg); }
 .line-rail li > .eta { margin-top: 1px; }
-.rail-name { font-size: 16px; line-height: 21px; }
+.rail-name { font-size: 17px; line-height: 22px; }
 .line-rail li.on .rail-name { font-size: 19px; font-weight: 650; letter-spacing: -.015em; line-height: 24px; }
 .stop-open { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; cursor: default; animation: pop-in var(--t-spring) var(--spring) backwards; }
 .stop-when { display: flex; align-items: center; gap: 10px; }
@@ -1011,3 +1011,32 @@ a.btn { text-decoration: none; }
 .delay-note.short.late { color: var(--problem); }
 .tl-status { display: flex; align-items: center; gap: 6px; font-size: 14px; color: var(--problem); margin: 4px 0; }
 .tl-status.serious { font-weight: 600; }
+
+/* A line's page head, as Moovit's: back, the plate and the operator in the middle, the alert mark. */
+.line-header { gap: 12px; }
+.line-header-mid { flex: 1; min-width: 0; display: flex; align-items: center; justify-content: center; gap: 12px; }
+.line-header-mid .badge { min-width: 52px; height: 34px; font-size: 18px; }
+.line-header-mid .dim { font-size: 17px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.plate-space { width: 44px; flex-shrink: 0; }
+.live-btn { position: absolute; top: 12px; inset-inline-start: 12px; z-index: 2; display: inline-flex; align-items: center; gap: 8px; padding: 10px 16px;
+  border-radius: var(--r-pill); background: var(--accent); color: var(--on-accent); font-size: 15px; font-weight: 700; box-shadow: 0 6px 18px -6px var(--shadow);
+  transition: transform var(--t-bounce) var(--spring-bounce), opacity .2s; }
+.live-btn:disabled { opacity: .55; }
+.live-btn.on { background: var(--text); color: var(--bg); }
+.live-btn:active:not(:disabled) { transform: scale(.95); }
+.stop-photo { position: absolute; bottom: 12px; inset-inline-end: 12px; z-index: 2; width: 116px; height: 84px; border-radius: 14px; overflow: hidden;
+  border: 2px solid var(--pane-solid); box-shadow: 0 6px 18px -6px var(--shadow); }
+.stop-photo img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.line-dir { flex-direction: column; align-items: flex-start; gap: 2px; }
+.line-dir-text { font-size: 18px; line-height: 24px; }
+.line-sub { display: flex; align-items: center; gap: 14px; }
+.line-sub .link { padding: 0; }
+.line-sub .link .glyph { margin-inline-end: -2px; }
+.line-scroll { padding-bottom: calc(var(--bar-space) + 90px); }
+.line-cta { position: absolute; z-index: 4; inset-inline: 16px; bottom: calc(var(--bar-space) + 10px); display: flex; gap: 10px; animation: pop-in .6s .15s var(--spring) backwards; }
+.line-cta .setup-btn { width: auto; min-height: 50px; padding: 0 18px; gap: 8px; font-size: 16px; flex-shrink: 0;
+  background: var(--accent); color: var(--on-accent); box-shadow: 0 12px 30px -10px var(--shadow); }
+.line-cta .setup-btn.grow { flex: 1; }
+.line-cta .setup-btn:disabled { opacity: .55; }
+.line-cta .setup-btn.on, .line-cta .star-btn.on { background: var(--pane-solid); color: var(--accent-fg); }
+.line-page { position: relative; }

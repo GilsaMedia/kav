@@ -17,6 +17,8 @@ export interface Prefs {
   trips: RecentTrip[];
   // The lines and the stops you starred, in the order you put them.
   savedLines: SavedLine[]; savedStops: SavedStop[];
+  // The lines you opened last, newest first, for the Lines tab's Recent.
+  recentLines: SavedLine[];
   // Bus line plates as Moovit draws them (grey over a strip of the operator's colour) rather than in that colour.
   moovitBadges: boolean;
   // Live Directions says its alerts out loud too.
@@ -56,7 +58,7 @@ export function agoText(ms: number) {
 export const DEFAULT_ACCENT = "#9ABEFF";
 const DEFAULTS: Prefs = {
   lang: "he", look: "dark", privateSearch: true, recents: [], favourites: [], modes: [], accent: DEFAULT_ACCENT, liquid: true,
-  onboarded: false, supportShown: false, trips: [], savedLines: [], savedStops: [], moovitBadges: false, spokenAlerts: false, mapStyle: "kav",
+  onboarded: false, supportShown: false, trips: [], savedLines: [], savedStops: [], recentLines: [], moovitBadges: false, spokenAlerts: false, mapStyle: "kav",
 };
 const KEY = "kav-prefs";
 

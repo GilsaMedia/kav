@@ -2,12 +2,12 @@
 
 ### Lines
 
-- The Lines tab opens on every line, the way Moovit lists them: by operator, the operators that run around you first, each one's lines by number. Tabs across the top: Alerts, ★ (your saved lines), All, and Bus, Train, Light rail and the rest. Searching still finds any line by its number, town or operator.
-- Each line shows its towns ("בת ים ↔ פתח תקווה") and, under them, the stops it runs between, so two lines 3 in the same town no longer look the same.
-- A line with an alert has Moovit's yellow (i) beside it and the kind of alert under it, such as עיקוף (detour). The Alerts tab lists only those lines.
-- A line's page has its stops on a rail in the line's colour, under the map. Each stop shows when the line is next there, live when Moovit tracks it. The stop nearest you is open: the time, whether it's live, the times after it, how late the line usually is there, and Stop details (the stop's board) and Full schedule. Tap any other stop to open it instead.
-- Where the line goes is written over the stops ("מסוף הטייסים ← בית העלמין"), with Change direction for the other way. How many buses are on the road is on the map.
-- Delays are still there, for the stop that's open and along the whole line.
+- The Lines tab is laid out as Moovit's: tabs across the top for Alerts, ★ (your saved lines), All, Bus, Light rail and Israel Railways. All lists every line by operator, the operators that run around you first, each one's lines by number. Searching still finds any line by its number, town or operator.
+- Recent, at the top of All and each mode's tab: the lines you opened last, with Clear.
+- Each line is one row, as in Moovit: its plate, its towns ("בת ים ↔ פתח תקווה"), and Moovit's yellow (i) when it has an alert. The Alerts tab lists only those lines, with the kind of alert under each, such as עיקוף (detour).
+- A line's page is Moovit's too: its plate and operator at the top, with the (i) when there's an alert (tap it for the alerts). The map has Live location, which turns the map to the buses on the road, and a photo of the open stop that opens Street View. Under the map, where the line goes ("מסוף הטייסים ← בית העלמין/קרית שאול") with Change direction under it, then the stops on a rail in the line's colour.
+- The stop nearest you is open: when the line is next there, live or by the timetable, the times after it, how late it usually is there, and Stop details (the stop's board), Full schedule and Delays. Tap another stop to open it instead.
+- Along the bottom: Live location, Delays (for the open stop and the whole line) and Favorite, which saves the line to ★.
 
 ### Ways there
 
