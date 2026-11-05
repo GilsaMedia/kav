@@ -378,7 +378,7 @@ export const options = (l: Leg) => (l.alternatives.length ? l.alternatives : [l]
 // The first ride of a way there, from where you get on: when the vehicle is at that stop (live when
 // Moovit tracks it), how long you ride, and how long you walk before it.
 // next: the line's coming vehicles at that stop from now, soonest first, including ones too soon to walk to.
-export interface Boarding { ride: Leg; at: number; live: boolean; dep: Departure | null; stop: string; rideMin: number; walkMin: number; numbers: string[]; next: Departure[] }
+export interface Boarding { ride: Leg; at: number; live: boolean; dep: Departure | null; stop: string; rideMin: number; walkMin: number; numbers: string[]; next: Departure[]; stops: number }
 
 // One entry per vehicle, soonest first. Moovit lists a vehicle once from the stop's live times and again from
 // the plan, the times apart by a little: one trip is one vehicle (its live time kept), and two in the same
@@ -412,6 +412,8 @@ export function boardingOf(it: Itinerary, r: Resolved, now: number): Boarding | 
     next,
     ride, dep, at: dep ? timeOf(dep) : ride.dep, live: !!dep && isLive(dep), stop: r.stops[ride.fromStop]?.name ?? "",
     rideMin: Math.max(1, Math.round((ride.arr - ride.dep) / 60)), walkMin: Math.round(walk / 60),
+    // The stops it takes you, the one you get off at included: Moovit's "8 stops".
+    stops: Math.max(0, ride.stops.length - 1),
     numbers: [...new Set(options(ride).map(o => r.lines[o.lineId]?.number || o.shortName).filter(Boolean))].slice(0, 3),
   };
 }

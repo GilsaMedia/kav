@@ -8,7 +8,7 @@ import { StationMark, StarGlyph, PinGlyph, FlagGlyph } from "../icons.tsx";
 import { LineDetail } from "./Lines.tsx";
 import { useReorder, GripGlyph } from "../reorder.tsx";
 
-interface Stop extends SavedStop { metres?: number }
+export interface Stop extends SavedStop { metres?: number }
 
 const isSaved = (s: Stop) => getPrefs().savedStops.some(x => x.i === s.i);
 function toggleSaved({ metres: _, ...s }: Stop) {
@@ -86,7 +86,7 @@ function groupByLine(arrivals: Arrival[]): Arrival[][] {
 interface BoardData { stop: Stop; timetable: { route: number; short: string; long: string; type: number; agency: string; to: string; inSecs: number }[] }
 interface LiveData { moovitId: number | null; arrivals: Arrival[]; poll: number; resolved?: Resolved }
 
-function Board({ stop, onBack }: { stop: Stop; onBack: () => void }) {
+export function Board({ stop, onBack }: { stop: Stop; onBack: () => void }) {
   const now = useNow(10000);
   const board = useLoad<BoardData>(`board:${stop.i}`, s => api(`stations/board?i=${stop.i}`, undefined, s), 60000);
   const poll = useRef(20);

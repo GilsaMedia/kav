@@ -306,6 +306,28 @@ export async function serviceAlerts(s: MoovitSession, groupIds: number[]): Promi
   });
 }
 
+// Each line's status as Moovit's line list shows it, for many lines in one ask: its alerts' kind ("עיקוף", a
+// detour) and how many there are. Only lines with something to say are returned.
+export interface LineStatus { category: number; label: string; n: number }
+
+export async function lineStatuses(s: MoovitSession, groupIds: number[]): Promise<Map<number, LineStatus | null>> {
+  const groups = [...new Set(groupIds.filter(g => g > 0))];
+  const out = new Map<number, LineStatus | null>();
+  if (!groups.length) return out;
+  const [code, raw] = await post(APP5, "V4/ServiceAlert/LineGroupsServiceAlerts", new TWriter().i32ListField(1, groups).stop().bytes(), authHeaders(s));
+  if (code !== 200) throw new Error(`LineGroupsServiceAlerts HTTP ${code}`);
+  for (const g of groups) out.set(g, null);
+  for (const d of list(new TReader(raw).readStruct().get(1))) {
+    const line = m(d); if (!line) continue;
+    const group = num(m(line.get(3))?.get(1)); if (group == null) continue;
+    const status = m(line.get(2));
+    const n = list(line.get(1)).filter(x => typeof x === "string").length;
+    const category = num(status?.get(1)) ?? 0;
+    out.set(group, n || category ? { category, label: str(status?.get(2)), n } : null);
+  }
+  return out;
+}
+
 // ---- entities --------------------------------------------------------------------------------
 
 export interface LineInfo { groupId: number; number: string; agencyId: number; origin: string; destination: string; caption: string }

@@ -12,6 +12,7 @@ import { DragSheet } from "../sheet.tsx";
 import { Velocity, FLING, SETTLE, glide, gliding, hold, liveOffset, project as coast, rubberband } from "../motion.ts";
 import { WhenButton, WhenSheet, type When } from "../when.tsx";
 import { DelayNote } from "../delays.tsx";
+import { useStatuses, StatusMark, LineAlerts, statusText, isSerious, type Statuses } from "../status.tsx";
 import { saveRide, clearRide, setRideStep, useRide, GRACE_MS } from "../ride.ts";
 import { canNotify, useJobs, addReminder, removeReminder, rideLines, setStepNotices, clearStepNotices } from "../remind.ts";
 import type { Notice } from "../../backend/jobs.ts";
@@ -99,15 +100,17 @@ export function PlanScreen({ home, onPay }: { home: number; onPay: (at?: LatLon,
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [from, to, when, prefs.modes, !!here]);
 
-  // Moovit sometimes lists the same way twice, once per section.
-  const its = useMemo(() => {
-    const seen = new Set<string>();
-    return inOrder((plan.data?.itineraries ?? []).filter(it => {
-      const k = `${it.dep}:${it.arr}:${it.legs.filter(l => l.kind === "ride").map(l => `${l.lineId}@${l.fromStop}`).join()}`;
-      if (seen.has(k)) return false; seen.add(k); return true;
-    }), when);
+  // One card per way: the same lines between the same stops at another time is the same way, so it's shown once,
+  // at the time that suits best, with the other times as its "then".
+  const its = useMemo(() => onePerWay(inOrder(plan.data?.itineraries ?? [], when)),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [plan.data]);
+    [plan.data]);
+  // The status of every line the ways ride (a detour, an alert), from Moovit's line list.
+  const groups = useMemo(() => {
+    const r = plan.data?.resolved;
+    return r ? its.flatMap(it => it.legs.filter(l => l.kind === "ride").flatMap(options)).map(o => r.lines[o.lineId]?.groupId ?? 0) : [];
+  }, [its, plan.data]);
+  const status = useStatuses(groups).data?.status ?? {};
 
   // Without a position yet there's no "here" to swap to.
   const swap = () => { if (!from && !here) return; const f = from; setFrom(to); setTo(f ?? { name: HERE_NAME(), detail: "", lat: here![0], lon: here![1], type: -1 }); };
@@ -203,7 +206,7 @@ export function PlanScreen({ home, onPay }: { home: number; onPay: (at?: LatLon,
             {its.map((it, i) => (
               <div key={it.guid + i} className="it-wrap">
                 {it.section && it.section !== its[i - 1]?.section && <div className="list-head">{it.section}</div>}
-                <ItineraryCard it={it} resolved={plan.data!.resolved} onClick={() => setChosen(i)} />
+                <ItineraryCard it={it} resolved={plan.data!.resolved} status={status} onClick={() => setChosen(i)} />
               </div>
             ))}
             {to && <button className="link center" onClick={() => setSaving(to)}><StarGlyph size={16} />{T("Save this destination", "שמירת היעד")}</button>}
@@ -234,6 +237,41 @@ function inOrder(its: Itinerary[], when: When): Itinerary[] {
   return its.map(it => ({ ...it, section: "" })).sort((a, b) => riding(a) - riding(b) || away(a) - away(b) || a.arr - b.arr);
 }
 
+// The same way at different times, once: the lines (any of them, where one of several will do) and the stops you
+// get on and off at. The first in the list stays; the departures of the others become its later times, so its
+// card says "then 26, 56 min" instead of showing the way again.
+function wayKey(it: Itinerary) {
+  const rides = it.legs.filter(l => l.kind === "ride");
+  if (!rides.length) return `on:${it.legs.map(l => l.kind).join()}`;
+  return rides.map(l => `${options(l).map(o => o.lineId).sort((a, b) => a - b).join("/")}@${l.fromStop}>${l.toStop}`).join();
+}
+
+function onePerWay(its: Itinerary[]): Itinerary[] {
+  const kept = new Map<string, { it: Itinerary; more: Departure[] }>();
+  for (const it of its) {
+    const k = wayKey(it);
+    const ride = it.legs.find(l => l.kind === "ride");
+    const was = kept.get(k);
+    if (!was) { kept.set(k, { it, more: [] }); continue; }
+    if (!ride) continue;
+    // The other one's vehicle, as planned, and any it knew of live.
+    was.more.push(...ride.nextDeps, plannedDeparture(ride));
+  }
+  return [...kept.values()].map(({ it, more }) => {
+    if (!more.length) return it;
+    const i = it.legs.findIndex(l => l.kind === "ride");
+    const ride = it.legs[i];
+    const legs = it.legs.slice();
+    legs[i] = { ...ride, nextDeps: [...ride.nextDeps, ...more.filter(d => !ride.nextDeps.some(x => String(x.tripId) === String(d.tripId)))] };
+    return { ...it, legs };
+  });
+}
+
+const plannedDeparture = (ride: Leg): Departure => ({
+  tripId: ride.tripId, staticUtc: ride.dep, rtUtc: 0, statisticalUtc: 0, status: 0, certainty: 0, traffic: 0, frequency: false,
+  rtDropped: false, vehicleStatus: 0, alert: 0, platform: "",
+});
+
 // ---- one way there, at a glance --------------------------------------------------------------
 
 function legLabel(l: Leg, r: Resolved) {
@@ -259,10 +297,16 @@ function LegChain({ it, r }: { it: Itinerary; r: Resolved }) {
   );
 }
 
-function ItineraryCard({ it, resolved, onClick }: { it: Itinerary; resolved: Resolved; onClick: () => void }) {
+function ItineraryCard({ it, resolved, status, onClick }: { it: Itinerary; resolved: Resolved; status: Statuses; onClick: () => void }) {
   const now = useNow(15000);
   const b = boardingOf(it, resolved, now);
   const mins = Math.max(0, Math.round((it.arr - it.dep) / 60));
+  // Each line of the way with something to say (a detour, an alert), once.
+  const flagged = [...new Map(it.legs.filter(l => l.kind === "ride").flatMap(options).map(o => {
+    const line = resolved.lines[o.lineId];
+    const st = line ? status[line.groupId] : undefined;
+    return st ? [line.groupId, { number: line.number || o.shortName, st }] as const : null;
+  }).filter(x => !!x)).values()];
   return (
     // As Moovit lays a result out: the way there on the left, the whole trip in minutes large on the right.
     <button className="card it-card" onClick={onClick}>
@@ -273,6 +317,11 @@ function ItineraryCard({ it, resolved, onClick }: { it: Itinerary; resolved: Res
       {b && <div className="it-foot">
         <Arrives b={b} now={now} short />
         <div className="dim" dir="auto">{T("at", "ב")} {b.stop}</div>
+      </div>}
+      {/* The lines' status, as Moovit's line list marks them, and how late the first one usually is here. */}
+      {(flagged.length > 0 || b) && <div className="it-status">
+        {flagged.map(f => <span key={f.number} className={"it-flag" + (isSerious(f.st) ? " serious" : "")}><StatusMark st={f.st} size={15} /><b>{lineNum(f.number)}</b><bdi>{statusText(f.st)}</bdi></span>)}
+        {b && <DelayNote lineId={b.ride.lineId} stopId={b.ride.fromStop} short />}
       </div>}
       </div>
       <span className="eta it-total">{mins < 60 ? <><b>{mins}</b><small>{T("min", "דק׳")}</small></> : <><b>{Math.floor(mins / 60)}:{String(mins % 60).padStart(2, "0")}</b><small>{T("hours", "שעות")}</small></>}</span>
@@ -741,6 +790,9 @@ function RideSteps({ leg, wait, r, live, now, onPay, stopAt, prev, below, onPick
   const between = ride.stops.slice(1, -1);
   const payMode = PAYABLE[type];
   const stopName = (id: number) => r.stops[id]?.name ?? "";
+  // The line's status (a detour, an alert), with its alerts under the line.
+  const group = r.lines[(opts[pick] ?? leg).lineId]?.groupId ?? 0;
+  const st = useStatuses([group]).data?.status[group];
   return <>
     <Stop time={mine ? timeOf(mine) : ride.dep} above={prev} below={color} title={stopName(ride.fromStop)}>
       <DelayNote lineId={ride.lineId} stopId={ride.fromStop} />
@@ -759,6 +811,8 @@ function RideSteps({ leg, wait, r, live, now, onPay, stopAt, prev, below, onPick
       {(() => { const o = opts[pick] ?? leg, note = lineNote(r.lines[o.lineId]?.number || o.shortName); return note && <div className="tl-note" dir="auto">{note}</div>; })()}
       {opts.length > 1 && <div className="dim small">{T("Any of these lines will do: tap one to see its times and its route on the map.", "כל אחד מהקווים האלה מתאים: הקישו על אחד כדי לראות את הזמנים והמסלול שלו במפה.")}</div>}
       {wait?.alertText && <Note tone="warn">{wait.alertText}</Note>}
+      {st && <div className={"tl-status" + (isSerious(st) ? " serious" : "")}><StatusMark st={st} size={15} />{statusText(st)}</div>}
+      {st && <LineAlerts group={group} />}
       <button className="link tl-stops" onClick={() => setOpen(!open)} disabled={!between.length}>
         {between.length > 0 && <ChevronGlyph size={12} open={open} />}
         {T(`Ride ${minutesText(Math.round((ride.arr - ride.dep) / 60))}`, `נסיעה ${minutesText(Math.round((ride.arr - ride.dep) / 60))}`)} · {T(`${between.length + 1} stops`, `${between.length + 1} תחנות`)}

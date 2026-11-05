@@ -155,6 +155,9 @@ function QuickWay({ to, here, brief, onWay }: {
   );
 }
 
+// "1 stop", "8 stops".
+export const stopsText = (n: number) => n === 1 ? T("1 stop", "תחנה אחת") : T(`${n} stops`, `${n} תחנות`);
+
 // When the vehicle is at your stop, and how long you ride it. The soonest one is shown even when the walk
 // is longer than the wait ("probably too soon"), then the two after it.
 export function Arrives({ b, now, short }: { b: Boarding; now: number; short?: boolean }) {
@@ -170,14 +173,14 @@ export function Arrives({ b, now, short }: { b: Boarding; now: number; short?: b
   const soon = tooSoon && <span className="too-soon"> · {T("probably too soon", "כנראה מוקדם מדי")}</span>;
   const then = after.length > 0 && <span className="dim"> · {T("then ", "אחר כך ")}<NextTimes ds={after} now={now} /></span>;
   const traffic = inTraffic(first) && <span className={"traffic" + (first!.traffic === 3 ? " heavy" : "")}>{T("Delay due to traffic", "עיכוב בגלל עומסי תנועה")}</span>;
-  if (short) return <span className="arrives short">{lead} {when}{soon}{then}<span className="dim"> · {T(`ride ${b.rideMin} min`, `נסיעה ${b.rideMin} דק׳`)}</span>{traffic && <> · {traffic}</>}</span>;
+  if (short) return <span className="arrives short">{lead} {when}{soon}{then}<span className="dim"> · {T(`ride ${b.rideMin} min`, `נסיעה ${b.rideMin} דק׳`)}{b.stops > 0 && ` · ${stopsText(b.stops)}`}</span>{traffic && <> · {traffic}</>}</span>;
   return (
     <div className="arrives">
       <div>{m <= 0 ? T("At your stop", "בתחנה שלך") : m >= 60 ? T("At your stop at", "בתחנה שלך ב-") : T("At your stop in", "בתחנה שלך בעוד")} {when}{soon}</div>
       {after.length > 0 && <div className="dim small">{T("then ", "אחר כך ")}<NextTimes ds={after} now={now} /></div>}
       {traffic && <div className="small">{traffic}</div>}
       <div className="dim small"><bdi>{b.stop}</bdi>{b.walkMin > 0 ? T(` · ${b.walkMin} min walk`, ` · ${b.walkMin} דק׳ הליכה`) : ""}</div>
-      <div className="dim small">{T(`Ride: ${b.rideMin} min`, `זמן נסיעה: ${b.rideMin} דק׳`)}</div>
+      <div className="dim small">{T(`Ride: ${b.rideMin} min`, `זמן נסיעה: ${b.rideMin} דק׳`)}{b.stops > 0 && ` · ${stopsText(b.stops)}`}</div>
     </div>
   );
 }

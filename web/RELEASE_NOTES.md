@@ -1,3 +1,20 @@
+## 3.4: Lines as Moovit lists them, and one card per way
+
+### Lines
+
+- The Lines tab opens on every line, the way Moovit lists them: by operator, the operators that run around you first, each one's lines by number. Tabs across the top: Alerts, ★ (your saved lines), All, and Bus, Train, Light rail and the rest. Searching still finds any line by its number, town or operator.
+- Each line shows its towns ("בת ים ↔ פתח תקווה") and, under them, the stops it runs between, so two lines 3 in the same town no longer look the same.
+- A line with an alert has Moovit's yellow (i) beside it and the kind of alert under it, such as עיקוף (detour). The Alerts tab lists only those lines.
+- A line's page has its stops on a rail in the line's colour, under the map. Each stop shows when the line is next there, live when Moovit tracks it. The stop nearest you is open: the time, whether it's live, the times after it, how late the line usually is there, and Stop details (the stop's board) and Full schedule. Tap any other stop to open it instead.
+- Where the line goes is written over the stops ("מסוף הטייסים ← בית העלמין"), with Change direction for the other way. How many buses are on the road is on the map.
+- Delays are still there, for the stop that's open and along the whole line.
+
+### Ways there
+
+- The same way at another time is no longer shown again as a card of its own. The list has each way once, at the time that suits best, and the other times are its "then 26, 56 min".
+- Every way says how many stops you ride: "ride 11 min · 8 stops".
+- A way whose line has an alert says so on its card, as the Lines tab does ("126 עיקוף"), and how late its first line usually is at your stop when Kav has seen enough. On the way's page, the ride shows the alert, and tapping it opens the whole notice.
+
 ## 3.3.1: Quick pay pays
 
 - Tapping Pay now on Quick pay, or anywhere on its card, now pays for the bus you scanned, not only opens Kav on paying for it. Kav finds the fare and pays straight away, and the ticket shows when it's done.

@@ -25,9 +25,14 @@ const useReport = (lineId: number, stopId?: number) =>
 
 // One line where you wait: how late it usually is about now on this weekday, or in general. Nothing until
 // Kav has seen enough to say.
-export function DelayNote({ lineId, stopId }: { lineId: number; stopId?: number }) {
+// short: just how late, for a way in the list of ways ("usually 6 min late").
+export function DelayNote({ lineId, stopId, short }: { lineId: number; stopId?: number; short?: boolean }) {
   const r = useReport(lineId, stopId).data;
   if (!r) return null;
+  if (short) {
+    const b = r.now && r.now.n >= 2 && Math.abs(r.now.delayMin) >= 2 ? r.now.delayMin : r.n >= 3 && Math.abs(r.delayMin) >= 2 ? r.delayMin : null;
+    return b == null ? null : <span className={"delay-note short" + (b >= 3 ? " late" : "")}>{T(`usually ${lateness(b)}`, `בדרך כלל ${lateness(b)}`)}</span>;
+  }
   if (r.now && r.now.n >= 2 && Math.abs(r.now.delayMin) >= 2)
     return <div className="delay-note">{T(`Usually ${lateness(r.now.delayMin)} around this time on ${DAYS()[r.now.day]} (${r.now.n} rides seen)`,
       `${DAYS()[r.now.day]} בשעה הזו בדרך כלל ${lateness(r.now.delayMin)} (${r.now.n} נסיעות נצפו)`)}</div>;

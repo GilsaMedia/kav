@@ -252,6 +252,57 @@ route("lines/search", async q => {
   return { lines: hits.slice(0, 80), total: hits.length };
 });
 
+// Every line, as Moovit's Lines tab lists them: by operator, the operators that run near you first, each one's
+// lines by number.
+route("lines/all", async q => {
+  const all = await M.lineCatalogue(await St.browse());
+  const at = qAt(q);
+  // The operators of the lines that call at the stops around you, weighed by how many of their lines do.
+  const near = new Map<string, number>();
+  if (at) {
+    const now = israelNow();
+    const seen = new Set<number>();
+    for (const [g] of net.nearestStops(at[0], at[1], 25, 1200)) {
+      for (const [c] of net.departuresAt(g, now.secs - 3600, now.day, 40)) {
+        const r = net.tripRoute[net.tripOf(net.cST[c])];
+        if (seen.has(r)) continue;
+        seen.add(r);
+        const a = agencyKey(net.agencyOf(r));
+        near.set(a, (near.get(a) ?? 0) + 1);
+      }
+    }
+  }
+  const size = new Map<string, number>();
+  for (const l of all) size.set(l.agency, (size.get(l.agency) ?? 0) + 1);
+  const weight = (agency: string) => near.get(agencyKey(agency)) ?? 0;
+  const number = (l: M.LineGroup) => parseInt(l.number) || 1e9;
+  const lines = [...all].sort((a, b) => weight(b.agency) - weight(a.agency) || size.get(b.agency)! - size.get(a.agency)! || a.agency.localeCompare(b.agency, "he")
+    || number(a) - number(b) || a.number.localeCompare(b.number, "he"));
+  return { lines };
+});
+
+// "דן (Dan)" in Moovit's list is "דן" in the timetable.
+const agencyKey = (name: string) => name.replace(/\s*\(.*\)\s*$/, "").trim();
+
+// Each line's status (its alerts' kind, and how many), for the lines asked or for every line, kept ten minutes.
+const statusKept = new Map<string, { at: number; status: M.LineStatus | null }>();
+route("lines/status", async q => {
+  const s = await St.browse();
+  const groups = q.get("all") === "1" ? (await M.lineCatalogue(s)).map(l => l.id) : qIds(q, "groups");
+  const lang = M.settings.hebrew ? "he" : "en";
+  const fresh = (g: number) => { const k = statusKept.get(`${lang}:${g}`); return k && Date.now() - k.at < 10 * 60_000 ? k : null; };
+  const ask = groups.filter(g => !fresh(g));
+  const chunks: number[][] = [];
+  for (let i = 0; i < ask.length; i += 800) chunks.push(ask.slice(i, i + 800));
+  await M.pool(chunks, 4, async chunk => {
+    const got = await M.lineStatuses(s, chunk);
+    for (const [g, status] of got) statusKept.set(`${lang}:${g}`, { at: Date.now(), status });
+  });
+  const status: Record<number, M.LineStatus> = {};
+  for (const g of groups) { const k = fresh(g); if (k?.status) status[g] = k.status; }
+  return { status };
+});
+
 route("lines/detail", async q => {
   const groupId = qNum(q, "id") ?? 0;
   const s = await St.browse();

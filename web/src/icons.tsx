@@ -111,7 +111,8 @@ export const QrGlyph = (p: Props) => <Glyph {...p} w={8}>
     <rect x={60} y={60} width={12} height={12} /><rect x={78} y={78} width={12} height={12} /><rect x={78} y={60} width={12} height={8} /><rect x={60} y={80} width={10} height={10} /></g>
 </Glyph>;
 
-export const DotGlyph = (p: Props) => <Glyph {...p}><circle cx={50} cy={50} r={12} fill="currentColor" stroke="none" /></Glyph>;
+export const InfoGlyph = (p: Props) => <Glyph {...p} w={8}><circle cx={50} cy={50} r={40} />{L(50, 46, 50, 72)}<circle cx={50} cy={30} r={3} fill="currentColor" /></Glyph>;
+export const DotGlyph =(p: Props) => <Glyph {...p}><circle cx={50} cy={50} r={12} fill="currentColor" stroke="none" /></Glyph>;
 
 // ---- modes: the same drawings as the Android app's map and badges ----------------------------
 

@@ -1,11 +1,16 @@
-// Every line Moovit knows, the lines you saved, and the page of one: its route, stops, buses on the road and today's departures.
+// Every line Moovit knows, as Moovit's Lines tab lists them: the lines with alerts, the ones you saved, all of them
+// by operator, and each mode's. The page of one line: its route on the map, its stops on a rail with when the line
+// is next at each, its departures, its delays and its alerts.
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { T, api, useLoad, useNow, useHere, usePrefs, getPrefs, setPrefs, moved, clock, metres, distanceText, timeOf, modeColor, modeName, type Arrival, type LatLon, type StopInfo, type LineInfo, type SavedLine } from "../core.ts";
+import { T, api, useLoad, useNow, useHere, usePrefs, getPrefs, setPrefs, moved, clock, metres, distanceText, timeOf, isLive, modeColor, modeName, MODE_FILTERS,
+  type Arrival, type LatLon, type StopInfo, type LineInfo, type SavedLine } from "../core.ts";
 import { Header, SearchField, LineBadge, Spinner, Note, LiveDot, Eta, NextTimes } from "../ui.tsx";
 import { MapView } from "../MapView.tsx";
-import { ChevronGlyph, StarGlyph } from "../icons.tsx";
+import { StarGlyph, ClockGlyph } from "../icons.tsx";
 import { DelayNote, DelayStats } from "../delays.tsx";
 import { useReorder, GripGlyph } from "../reorder.tsx";
+import { useAllStatuses, StatusMark, LineAlerts, statusText, isSerious, type LineStatus, type Statuses } from "../status.tsx";
+import { Board, type Stop } from "./Stations.tsx";
 
 type LineGroup = SavedLine;
 
@@ -15,57 +20,120 @@ function toggleSaved(l: LineGroup) {
   setPrefs({ savedLines: saved.some(x => x.id === l.id) ? saved.filter(x => x.id !== l.id) : [...saved, l] });
 }
 
-// The star that saves a line to the top of the Lines tab.
-function SaveLine({ line, plate }: { line: LineGroup; plate?: boolean }) {
+// The star that saves a line to the ★ tab.
+function SaveLine({ line }: { line: LineGroup }) {
   usePrefs();
   const on = isSaved(line);
-  return <button className={(plate ? "plate-btn" : "icon-btn") + " star-btn" + (on ? " on" : "")} onClick={e => { e.stopPropagation(); toggleSaved(line); }}
-    aria-label={on ? T("Remove from saved lines", "הסרה מהקווים השמורים") : T("Save this line", "שמירת הקו")}><StarGlyph size={plate ? 22 : 18} filled={on} /></button>;
+  return <button className={"plate-btn star-btn" + (on ? " on" : "")} onClick={e => { e.stopPropagation(); toggleSaved(line); }}
+    aria-label={on ? T("Remove from saved lines", "הסרה מהקווים השמורים") : T("Save this line", "שמירת הקו")}><StarGlyph size={22} filled={on} /></button>;
 }
 
-function LineRow({ l, onOpen, grip }: { l: LineGroup; onOpen: () => void; grip?: React.HTMLAttributes<HTMLButtonElement> }) {
+// Moovit names a line by its ends: "מסוף הטייסים-תל אביב יפו<->בית העלמין/קרית שאול-תל אביב יפו-20". Without the
+// towns and the number at the end: "מסוף הטייסים ↔ בית העלמין/קרית שאול". It tells apart two lines 3 in one town.
+function endsOf(l: LineGroup): string {
+  const parts = l.name.split("<->");
+  if (parts.length !== 2) return "";
+  const [a, b] = [parts[0], parts[1].replace(/-\d+$/, "")].map(p => { const k = p.lastIndexOf("-"); return (k > 0 ? p.slice(0, k) : p).trim(); });
+  return a && b ? `${a} ↔ ${b}` : "";
+}
+const badgeType = (l: LineGroup) => l.routeType === 7 ? 715 : l.routeType;
+
+function LineRow({ l, st, onOpen, grip }: { l: LineGroup; st?: LineStatus; onOpen: () => void; grip?: React.HTMLAttributes<HTMLButtonElement> }) {
+  const title = l.cities || l.name;
+  const ends = endsOf(l);
   return (
-    <li className="row" data-row onClick={onOpen}>
-      <LineBadge number={l.number} type={l.routeType === 7 ? 715 : l.routeType} agency={l.agency} />
-      <div className="row-main"><div dir="auto">{l.cities || l.name}</div><div className="dim small" dir="auto">{l.agency}</div></div>
-      {grip ? <button {...grip}><GripGlyph /></button> : <SaveLine line={l} />}
+    <li className="row line-row" data-row onClick={onOpen}>
+      <LineBadge number={l.number} type={badgeType(l)} agency={l.agency} />
+      <div className="row-main">
+        <div dir="auto" className="line-title">{title}</div>
+        {ends && ends !== title && <div className="dim small one-line" dir="auto">{ends}</div>}
+        {st && <div className={"small line-status" + (isSerious(st) ? " serious" : "")} dir="auto">{statusText(st)}</div>}
+      </div>
+      {grip ? <button {...grip}><GripGlyph /></button> : st && <StatusMark st={st} />}
     </li>
   );
 }
 
+// "Saved", "All" and each mode the catalogue has; Alerts first, as Moovit has them.
+type Tab = "alerts" | "saved" | "all" | number;
+const PAGE = 120;
+
 export function LinesScreen({ head }: { head?: ReactNode }) {
   const prefs = usePrefs();
+  const here = useHere();
   const [q, setQ] = useState("");
   const [open, setOpen] = useState<LineGroup | null>(null);
   const [editing, setEditing] = useState(false);
+  const [tab, setTab] = useState<Tab>(() => getPrefs().savedLines.length ? "saved" : "all");
+  const [shown, setShown] = useState(PAGE);
   const { list, grip } = useReorder((from, to) => setPrefs({ savedLines: moved(getPrefs().savedLines, from, to) }));
+  // Asked once with where you are then, so the operators around you come first; not again with every fix.
+  const near = useRef<LatLon | null>(null);
+  if (!near.current && here) near.current = here;
+  const where = near.current ? `${near.current[0].toFixed(2)},${near.current[1].toFixed(2)}` : "";
+  const all = useLoad<{ lines: LineGroup[] }>(`lines:all:${where}`, s => api(`lines/all${near.current ? `?lat=${near.current[0]}&lon=${near.current[1]}` : ""}`, undefined, s), undefined, true);
+  const statuses = useAllStatuses();
+  const status: Statuses = statuses.data?.status ?? {};
   const found = useLoad<{ lines: LineGroup[]; total: number }>(q.trim() ? `lines:${q.trim()}` : null,
     s => new Promise(r => setTimeout(r, 200)).then(() => api(`lines/search?q=${encodeURIComponent(q.trim())}`, undefined, s)));
+  useEffect(() => { setShown(PAGE); }, [tab, q]);
+  // More rows as the end of the list comes into view: thousands of lines at once would be slow to draw.
+  const more = useRef<HTMLLIElement>(null);
+  useEffect(() => {
+    const el = more.current;
+    if (!el) return;
+    const io = new IntersectionObserver(es => { if (es.some(e => e.isIntersecting)) setShown(n => n + PAGE); }, { rootMargin: "600px" });
+    io.observe(el);
+    return () => io.disconnect();
+  });
+
+  const lines = all.data?.lines ?? [];
+  const modes = useMemo(() => MODE_FILTERS.map((f, k) => ({ ...f, k })).filter(f => lines.some(l => f.types.includes(l.routeType))), [lines]);
   if (open) return <LineDetail group={open} onBack={() => setOpen(null)} />;
+
   const saved = prefs.savedLines;
+  const inTab = (l: LineGroup) => tab === "all" ? true : tab === "alerts" ? !!status[l.id] : tab === "saved" ? saved.some(x => x.id === l.id)
+    : MODE_FILTERS[tab].types.includes(l.routeType);
+  const searching = !!q.trim();
+  const rows = searching ? (found.data?.lines ?? []).filter(inTab) : tab === "saved" ? saved : lines.filter(inTab);
+  // By operator, as Moovit lists them: a heading wherever the operator (or its mode) changes.
+  const grouped = !searching && tab !== "saved";
+
   return (
     <div className="screen">
       {head ?? <Header title={T("Lines", "קווים")} />}
       <div className="pad">
-        <SearchField value={q} onChange={setQ} placeholder={T("Line number, operator or city", "מספר קו, מפעיל או עיר")} inputMode="search" />
+        <SearchField value={q} onChange={setQ} placeholder={T("Search for a line", "חיפוש קו")} inputMode="search" icon />
+      </div>
+      <div className="line-tabs scroll-x" role="tablist">
+        <button role="tab" className={tab === "alerts" ? "on" : ""} onClick={() => setTab("alerts")}>{T("Alerts", "התראות")}</button>
+        <button role="tab" className={tab === "saved" ? "on" : ""} onClick={() => setTab("saved")} aria-label={T("Saved lines", "קווים שמורים")}><StarGlyph size={20} filled /></button>
+        <button role="tab" className={tab === "all" ? "on" : ""} onClick={() => setTab("all")}>{T("All", "הכל")}</button>
+        {modes.map(f => <button role="tab" key={f.k} className={tab === f.k ? "on" : ""} onClick={() => setTab(f.k)}>{f.label()}</button>)}
       </div>
       <div className="scroll">
-        {!q.trim() && <>
-          {saved.length > 0 && <div className="list-head saved-head"><span>{T("Saved lines", "קווים שמורים")}</span>
-            {saved.length > 1 && <button className="link" onClick={() => setEditing(!editing)}>{editing ? T("Done", "סיום") : T("Edit", "עריכה")}</button>}</div>}
-          <ul className="list" ref={list}>
-            {saved.map((l, i) => <LineRow key={l.id} l={l} onOpen={() => { if (!editing) setOpen(l); }} grip={editing ? grip(i) : undefined} />)}
-          </ul>
-          <div className="pad dim">{saved.length ? T("Search for another line by its number, or by a city or operator.", "חפשו קו נוסף לפי המספר שלו, או לפי עיר או מפעיל.")
-            : T("Search for a line by its number, such as 480, or by a city or operator. Tap the star to save it here.", "חפשו קו לפי המספר שלו, למשל 480, או לפי עיר או מפעיל. הקישו על הכוכב כדי לשמור אותו כאן.")}</div>
-        </>}
-        {found.loading && !found.data && <div className="pad"><Spinner text={T("Loading Moovit's line list…", "טוענים את רשימת הקווים…")} /></div>}
-        {found.error && <div className="pad"><Note tone="error">{found.error}</Note></div>}
-        {q.trim() && <ul className="list">
-          {found.data?.lines.map(l => <LineRow key={l.id} l={l} onOpen={() => setOpen(l)} />)}
-          {found.data && found.data.total > found.data.lines.length && <li className="pad dim small">{T(`and ${found.data.total - found.data.lines.length} more: narrow the search`, `ועוד ${found.data.total - found.data.lines.length}: צמצמו את החיפוש`)}</li>}
-          {found.data && !found.data.lines.length && <li className="pad dim">{T("No lines found", "לא נמצאו קווים")}</li>}
-        </ul>}
+        {tab === "saved" && !searching && saved.length > 1 && <div className="list-head saved-head"><span>{T("Saved lines", "קווים שמורים")}</span>
+          <button className="link" onClick={() => setEditing(!editing)}>{editing ? T("Done", "סיום") : T("Edit", "עריכה")}</button></div>}
+        {tab === "saved" && !searching && !saved.length && <div className="pad dim">{T("Open a line and tap the star to keep it here.", "פתחו קו והקישו על הכוכב כדי לשמור אותו כאן.")}</div>}
+        {tab === "alerts" && !searching && statuses.loading && !statuses.data && <div className="pad"><Spinner text={T("Asking Moovit about every line…", "שואלים את Moovit על כל הקווים…")} /></div>}
+        {tab === "alerts" && !searching && statuses.data && !rows.length && <div className="pad dim">{T("No line has an alert right now.", "אין כרגע התראות על אף קו.")}</div>}
+        {statuses.error && tab === "alerts" && <div className="pad"><Note tone="warn">{statuses.error}</Note></div>}
+        {(searching ? found.loading && !found.data : all.loading && !all.data && tab !== "saved") && <div className="pad"><Spinner text={T("Loading Moovit's line list…", "טוענים את רשימת הקווים…")} /></div>}
+        {(searching ? found.error : tab !== "saved" && all.error) && <div className="pad"><Note tone="error">{searching ? found.error : all.error}</Note></div>}
+        <ul className="list" ref={tab === "saved" && !searching ? list : undefined}>
+          {rows.slice(0, shown).flatMap((l, i) => {
+            const prev = rows[i - 1];
+            const heading = grouped && (!prev || prev.agency !== l.agency || prev.routeType !== l.routeType);
+            return [
+              heading && <li key={`h${l.agencyId}:${l.routeType}:${i}`} className="list-head line-group"><span dir="auto">{l.agency}</span><span>{modeName(l.routeType)}</span></li>,
+              <LineRow key={l.id} l={l} st={status[l.id]} onOpen={() => { if (!editing || tab !== "saved") setOpen(l); }}
+                grip={editing && tab === "saved" && !searching ? grip(i) : undefined} />,
+            ];
+          })}
+          {rows.length > shown && <li ref={more} className="pad"><Spinner /></li>}
+          {searching && found.data && found.data.total > found.data.lines.length && <li className="pad dim small">{T(`and ${found.data.total - found.data.lines.length} more: narrow the search`, `ועוד ${found.data.total - found.data.lines.length}: צמצמו את החיפוש`)}</li>}
+          {searching && found.data && !rows.length && <li className="pad dim">{T("No lines found", "לא נמצאו קווים")}</li>}
+        </ul>
       </div>
     </div>
   );
@@ -73,7 +141,6 @@ export function LinesScreen({ head }: { head?: ReactNode }) {
 
 interface Direction { lineId: number; info: LineInfo | null; stops: StopInfo[]; shape: LatLon[]; departures: number[] }
 interface Detail { group: LineGroup | null; directions: Direction[]; agencyRouteType: number }
-interface Alert { id: string; title: string; body: string; html: boolean; label: string }
 
 // Opened from a stop's board: at (that stop) and lineId (the direction that stops there) open the page on that
 // direction with that stop as yours.
@@ -89,6 +156,10 @@ export function LineDetail({ group, onBack, at, lineId }: { group: LineGroup; on
     if (k > 0) setDir(k);
   }
   const [tab, setTab] = useState<"stops" | "times" | "delays">("stops");
+  // The stop opened on the rail: yours until you tap another.
+  const [picked, setPicked] = useState<number | null>(null);
+  const [board, setBoard] = useState<Stop | null>(null);
+  const [boardNote, setBoardNote] = useState<string | null>(null);
   const now = useNow(15000);
   const d = detail.data?.directions[dir];
   const type = detail.data?.agencyRouteType ?? group.routeType;
@@ -98,17 +169,20 @@ export function LineDetail({ group, onBack, at, lineId }: { group: LineGroup; on
   const live = useLoad<{ arrivals: Arrival[]; poll: number }>(stopIds.length ? `linelive:${d!.lineId}` : null,
     s => api<{ arrivals: Arrival[]; poll: number }>(`arrivals?stops=${stopIds.join(",")}`, undefined, s).then(r => { poll.current = Math.min(Math.max(r.poll, 10), 60); return r; }),
     () => poll.current * 1000);
-  const alerts = useLoad<{ alerts: Alert[] }>(`alerts:${group.id}`, s => api(`alerts?groups=${group.id}`, undefined, s));
+  const statuses = useAllStatuses();
+  const st = statuses.data?.status[group.id];
+  const alertsAt = useRef<HTMLDivElement>(null);
 
   const mine = (live.data?.arrivals ?? []).filter(a => a.lineId === d?.lineId);
   // One mark per vehicle, at its latest report.
   const vehicles = [...new Map(mine.filter(a => a.tracked && a.lat).map(a => [String(a.tripId), a])).values()];
-  // The next live arrival at each stop on this direction.
-  const nextAt = new Map<number, Arrival>();
-  for (const a of mine) { const p = nextAt.get(a.stopId); if (timeOf(a) >= now - 60 && (!p || timeOf(a) < timeOf(p))) nextAt.set(a.stopId, a); }
+  // The coming arrivals at each stop on this direction, soonest first.
+  const atStop = new Map<number, Arrival[]>();
+  for (const a of mine) if (timeOf(a) >= now - 60) atStop.set(a.stopId, [...(atStop.get(a.stopId) ?? []), a]);
+  for (const xs of atStop.values()) xs.sort((a, b) => timeOf(a) - timeOf(b));
   const pts = d?.stops.filter(s => s.lat != null).map(s => [s.lat!, s.lon!] as LatLon) ?? [];
 
-  // The stop on this direction nearest to you (within 2 km), and when the line reaches it.
+  // The stop on this direction nearest to you (within 2 km).
   const here = useHere();
   const yours = useMemo(() => {
     const came = at != null ? d?.stops.find(s => s.id === at) : undefined;
@@ -122,75 +196,106 @@ export function LineDetail({ group, onBack, at, lineId }: { group: LineGroup; on
     }
     return best && best.m <= 2000 ? best : null;
   }, [here?.[0], here?.[1], d]);
-  const toYou = yours ? mine.filter(a => a.stopId === yours.stop.id && timeOf(a) >= now - 60).sort((a, b) => timeOf(a) - timeOf(b)) : [];
-  const yourRow = useRef<HTMLLIElement>(null);
+  const openId = picked ?? yours?.stop.id ?? null;
+  const openStop = d?.stops.find(s => s.id === openId) ?? null;
+  const openRow = useRef<HTMLLIElement>(null);
   // Like Moovit, the list opens at your stop: once per direction.
   const scrolledTo = useRef<string | null>(null);
   useEffect(() => {
     const key = yours ? `${dir}:${yours.stop.id}` : null;
-    if (!key || scrolledTo.current === key || !yourRow.current) return;
+    if (!key || scrolledTo.current === key || !openRow.current) return;
     scrolledTo.current = key;
-    yourRow.current.scrollIntoView({ block: "center" });
+    openRow.current.scrollIntoView({ block: "center" });
   });
+  const turn = () => { setDir(k => (k + 1) % (detail.data?.directions.length || 1)); setPicked(null); };
 
+  // The stop's own page (its board), found in the timetable by its code.
+  const openBoard = async (s: StopInfo) => {
+    setBoardNote(null);
+    try {
+      const near = s.lat != null ? `&lat=${s.lat}&lon=${s.lon}` : "";
+      const r = await api<{ stops: Stop[] }>(`stations/search?q=${encodeURIComponent(s.code || s.name)}${near}`);
+      const hit = r.stops.find(x => s.code && String(x.code) === s.code) ?? (s.lat != null ? r.stops.find(x => metres([x.lat, x.lon], [s.lat!, s.lon!]) < 150) : undefined);
+      if (hit) setBoard(hit); else setBoardNote(T("This stop isn't in the timetable.", "התחנה הזו לא נמצאת בלוח הזמנים."));
+    } catch (e) { setBoardNote((e as Error).message); }
+  };
+  if (board) return <Board stop={board} onBack={() => setBoard(null)} />;
+
+  const origin = d ? d.info?.origin || d.stops[0]?.name || "" : "";
+  const dest = d ? d.info?.destination || d.stops[d.stops.length - 1]?.name || "" : "";
+  const many = (detail.data?.directions.length ?? 0) > 1;
   return (
     <div className="screen">
-      <Header title={`${modeName(type)} ${group.number}`} sub={group.agency} back={onBack} right={<SaveLine line={group} plate />} />
-      {d && <MapView className="map-half" lines={[{ coords: d.shape.length ? d.shape : pts, color, width: 5 }]}
-        points={[
-          ...d.stops.filter(s => s.lat != null).map(s => ({ id: `s${s.id}`, at: [s.lat!, s.lon!] as LatLon, color: "#ffffff", kind: "stop" as const, ring: color })),
-          ...vehicles.map(v => ({ id: `v${v.tripId}`, at: [v.lat, v.lon] as LatLon, color, kind: "vehicle" as const, label: group.number })),
-        ]} fit={pts} fitKey={`${group.id}:${dir}`} />}
-      <div className="pad stack">
+      <Header title={`${modeName(type)} ${group.number}`} sub={group.agency} back={onBack} right={<div className="header-btns">
+        {st && <button className="plate-btn" onClick={() => alertsAt.current?.scrollIntoView({ behavior: "smooth", block: "start" })} aria-label={statusText(st)}><StatusMark st={st} /></button>}
+        <SaveLine line={group} />
+      </div>} />
+      {d && <div className="line-map">
+        <MapView className="map-half" lines={[{ coords: d.shape.length ? d.shape : pts, color, width: 5 }]}
+          points={[
+            ...d.stops.filter(s => s.lat != null).map(s => ({ id: `s${s.id}`, at: [s.lat!, s.lon!] as LatLon, color: s.id === openId ? color : "#ffffff", kind: "stop" as const, ring: color, size: s.id === openId ? 7 : undefined })),
+            ...vehicles.map(v => ({ id: `v${v.tripId}`, at: [v.lat, v.lon] as LatLon, color, kind: "vehicle" as const, label: group.number })),
+          ]} fit={pts} fitKey={`${group.id}:${dir}`} />
+        {vehicles.length > 0 && <div className="map-pill"><LiveDot /> {T(`${vehicles.length} on the road`, `${vehicles.length} בדרך עכשיו`)}</div>}
+      </div>}
+      <div className="pad stack line-head">
         {detail.loading && <Spinner text={T("Asking Moovit…", "שואלים את Moovit…")} />}
         {detail.error && <Note tone="error">{detail.error}</Note>}
         {detail.data && !detail.data.directions.length && <Note>{T("This line has no trips this week.", "לקו הזה אין נסיעות השבוע.")}</Note>}
-        {(detail.data?.directions.length ?? 0) > 1 && (
-          <div className="segmented wrap">
-            {detail.data!.directions.map((x, k) => (
-              <button key={x.lineId} className={k === dir ? "on" : ""} onClick={() => setDir(k)} dir="auto">
-                {T("to", "ל")}{x.info?.destination || x.stops[x.stops.length - 1]?.name || `#${k + 1}`}
-              </button>
-            ))}
-          </div>
-        )}
+        {/* Where it goes, as Moovit heads a line: from → to, and the other way with Change direction. */}
+        {d && <div className="line-dir">
+          <div className="line-dir-text"><bdi>{origin}</bdi><span className="dir-arrow">{T("→", "←")}</span><bdi>{dest}</bdi></div>
+          {many && <button className="link" onClick={turn}>{T("Change direction", "החלפת כיוון")}{detail.data!.directions.length > 2 && <span className="dim"> ({dir + 1}/{detail.data!.directions.length})</span>}</button>}
+        </div>}
         {d && <div className="segmented">
           <button className={tab === "stops" ? "on" : ""} onClick={() => setTab("stops")}>{T("Stops", "תחנות")} ({d.stops.length})</button>
           <button className={tab === "times" ? "on" : ""} onClick={() => setTab("times")}>{T("Departures", "יציאות")}</button>
           <button className={tab === "delays" ? "on" : ""} onClick={() => setTab("delays")}>{T("Delays", "איחורים")}</button>
         </div>}
-        {d && vehicles.length > 0 && <div className="dim small"><LiveDot /> {T(`${vehicles.length} on the road`, `${vehicles.length} בדרך עכשיו`)}</div>}
       </div>
       <div className="scroll">
-        {yours && <div className="pad"><div className="card your-stop">
-          <div className="row-main">
-            <div className="your-label">{T("Your stop", "התחנה שלך")}{here ? ` · ${distanceText(yours.m)}` : ""}</div>
-            <button className="dest link" dir="auto" onClick={() => { setTab("stops"); yourRow.current?.scrollIntoView({ behavior: "smooth", block: "center" }); }}>{yours.stop.name}</button>
-            {toYou.length > 1 && <div className="dim small">{T("then ", "אחר כך ")}<NextTimes ds={toYou.slice(1, 3)} now={now} /></div>}
-            <DelayNote lineId={d!.lineId} stopId={yours.stop.id} />
-            {!toYou.length && <div className="dim small">{live.loading && !live.data ? T("Asking Moovit…", "שואלים את Moovit…") : T("No live vehicle on its way here yet.", "עדיין אין כלי רכב בדרך לכאן בזמן אמת.")}</div>}
-          </div>
-          {toYou[0] && <Eta d={toYou[0]} now={now} />}
-        </div></div>}
-        {!!alerts.data?.alerts.length && <div className="pad stack">{alerts.data.alerts.map(a => <AlertNote key={a.id} a={a} />)}</div>}
+        {st && <div className="pad" ref={alertsAt}><LineAlerts group={group.id} /></div>}
+        {boardNote && <div className="pad"><Note tone="warn">{boardNote}</Note></div>}
         {d && tab === "stops" && (
-          <ol className="line-stops" style={{ borderColor: color }}>
-            {d.stops.map(s => {
-              const a = nextAt.get(s.id);
-              const mineHere = yours?.stop.id === s.id;
+          <ol className="line-rail" style={{ "--c": color } as React.CSSProperties}>
+            {d.stops.map((s, k) => {
+              const coming = atStop.get(s.id) ?? [];
+              const a = coming[0];
+              const isOpen = s.id === openId;
+              const isYours = yours?.stop.id === s.id;
               return (
-                <li key={s.id} ref={mineHere ? yourRow : undefined} className={mineHere ? "your" : undefined}>
-                  <span className="stop-dot" style={{ borderColor: color }} />
-                  <div className="row-main"><div dir="auto">{s.name}</div>
-                    <div className="dim small">{mineHere && <span className="here-pill">{T("Your stop", "התחנה שלך")}</span>}{s.code}</div></div>
-                  {a && <Eta d={a} now={now} inline />}
+                <li key={s.id} ref={isOpen ? openRow : undefined} className={(isOpen ? "on" : "") + (k === 0 ? " first" : "") + (k === d.stops.length - 1 ? " last" : "")}
+                  onClick={() => setPicked(isOpen ? -1 : s.id)}>
+                  <span className="rail-dot" />
+                  <div className="row-main">
+                    <div className="rail-name" dir="auto">{s.name}</div>
+                    {!isOpen && <div className="dim small">{isYours && <span className="here-pill">{T("Your stop", "התחנה שלך")}</span>}{s.code}</div>}
+                    {isOpen && <div className="stop-open" onClick={e => e.stopPropagation()}>
+                      <div className="stop-when">
+                        {a ? <><span className="time-pill"><ClockGlyph size={16} /><Eta d={a} now={now} inline /></span><span className="dim">{clock(timeOf(a))}</span></>
+                          : <span className="dim">{live.loading && !live.data ? T("Asking Moovit…", "שואלים את Moovit…") : T("Nothing on its way here in the next while.", "אין נסיעה בדרך לכאן בזמן הקרוב.")}</span>}
+                      </div>
+                      <div className="dim small">
+                        {a && (isLive(a) ? <><LiveDot /> {T("Live", "בזמן אמת")}</> : T("Timetable", "לפי לוח הזמנים"))}
+                        {isYours && <>{a ? " · " : ""}{T("Your stop", "התחנה שלך")}{here && yours ? ` · ${distanceText(yours.m)}` : ""}</>}
+                        {s.code && <> · {T("stop", "תחנה")} {s.code}</>}
+                      </div>
+                      {coming.length > 1 && <div className="dim small">{T("then ", "אחר כך ")}<NextTimes ds={coming.slice(1, 3)} now={now} /></div>}
+                      <DelayNote lineId={d.lineId} stopId={s.id} />
+                      <div className="stop-acts">
+                        <button className="link" onClick={() => openBoard(s)}>{T("Stop details", "פרטי התחנה")}</button>
+                        <button className="link" onClick={() => setTab("times")}>{T("Full schedule", "לוח זמנים מלא")}</button>
+                      </div>
+                    </div>}
+                  </div>
+                  {!isOpen && a && <Eta d={a} now={now} inline />}
                 </li>
               );
             })}
           </ol>
         )}
         {d && tab === "delays" && <div className="pad stack">
-          {yours && <DelayStats lineId={d.lineId} stopId={yours.stop.id} stopName={yours.stop.name} />}
+          {openStop && <DelayStats lineId={d.lineId} stopId={openStop.id} stopName={openStop.name} />}
           <DelayStats lineId={d.lineId} />
         </div>}
         {d && tab === "times" && (
@@ -202,16 +307,4 @@ export function LineDetail({ group, onBack, at, lineId }: { group: LineGroup; on
       </div>
     </div>
   );
-}
-
-// Collapsed to its title until tapped: Moovit's notices run long.
-function AlertNote({ a }: { a: Alert }) {
-  const [open, setOpen] = useState(false);
-  return <Note tone="warn"><button className="alert-title" onClick={() => setOpen(!open)}><ChevronGlyph size={12} open={open} /><b>{a.title || a.label}</b></button>
-    {open && a.body && <div className="alert-body">{a.html ? stripHtml(a.body) : a.body}</div>}</Note>;
-}
-
-function stripHtml(html: string) {
-  // DOMParser builds an inert document: nothing in Moovit's HTML runs.
-  return new DOMParser().parseFromString(html, "text/html").body.textContent ?? "";
 }
