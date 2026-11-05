@@ -12,7 +12,7 @@ import { DragSheet } from "../sheet.tsx";
 import { Velocity, FLING, SETTLE, glide, gliding, hold, liveOffset, project as coast, rubberband } from "../motion.ts";
 import { WhenButton, WhenSheet, type When } from "../when.tsx";
 import { DelayNote } from "../delays.tsx";
-import { useStatuses, StatusMark, LineAlerts, statusText, isSerious, type Statuses } from "../status.tsx";
+import { useStatuses, StatusMark, LineAlerts, statusText, isSerious, type Statuses, type LineStatus } from "../status.tsx";
 import { saveRide, clearRide, setRideStep, useRide, GRACE_MS } from "../ride.ts";
 import { canNotify, useJobs, addReminder, removeReminder, rideLines, setStepNotices, clearStepNotices } from "../remind.ts";
 import type { Notice } from "../../backend/jobs.ts";
@@ -111,6 +111,13 @@ export function PlanScreen({ home, onPay }: { home: number; onPay: (at?: LatLon,
     return r ? its.flatMap(it => it.legs.filter(l => l.kind === "ride").flatMap(options)).map(o => r.lines[o.lineId]?.groupId ?? 0) : [];
   }, [its, plan.data]);
   const status = useStatuses(groups).data?.status ?? {};
+  // Live times at the stops where the ways get on, so each card's times show whether they're live, as Moovit's do.
+  const boardStops = useMemo(() => [...new Set(its.flatMap(it => { const ride = it.legs.find(l => l.kind === "ride"); return ride ? options(ride).map(o => o.fromStop) : []; })
+    .filter(x => x > 0))].slice(0, 40), [its]);
+  const livePoll = useRef(20);
+  const liveAt = useLoad<{ arrivals: Arrival[]; poll: number }>(boardStops.length ? `planlive:${boardStops.join(",")}` : null,
+    sig => api<{ arrivals: Arrival[]; poll: number }>(`arrivals?stops=${boardStops.join(",")}`, undefined, sig).then(r => { livePoll.current = Math.min(Math.max(r.poll, 15), 60); return r; }),
+    () => livePoll.current * 1000, true);
 
   // Without a position yet there's no "here" to swap to.
   const swap = () => { if (!from && !here) return; const f = from; setFrom(to); setTo(f ?? { name: HERE_NAME(), detail: "", lat: here![0], lon: here![1], type: -1 }); };
@@ -206,7 +213,7 @@ export function PlanScreen({ home, onPay }: { home: number; onPay: (at?: LatLon,
             {its.map((it, i) => (
               <div key={it.guid + i} className="it-wrap">
                 {it.section && it.section !== its[i - 1]?.section && <div className="list-head">{it.section}</div>}
-                <ItineraryCard it={it} resolved={plan.data!.resolved} status={status} onClick={() => setChosen(i)} />
+                <ItineraryCard it={it} resolved={plan.data!.resolved} status={status} live={liveAt.data?.arrivals} onClick={() => setChosen(i)} />
               </div>
             ))}
             {to && <button className="link center" onClick={() => setSaving(to)}><StarGlyph size={16} />{T("Save this destination", "שמירת היעד")}</button>}
@@ -297,16 +304,36 @@ function LegChain({ it, r }: { it: Itinerary; r: Resolved }) {
   );
 }
 
-function ItineraryCard({ it, resolved, status, onClick }: { it: Itinerary; resolved: Resolved; status: Statuses; onClick: () => void }) {
+// The way with the live times Moovit has now at the stop it gets on at, for any of the lines that will do.
+function withLiveTimes(it: Itinerary, live: Arrival[] | undefined): Itinerary {
+  const i = it.legs.findIndex(l => l.kind === "ride");
+  if (i < 0 || !live?.length) return it;
+  const ride = it.legs[i];
+  const mine = live.filter(a => options(ride).some(o => o.lineId === a.lineId && o.fromStop === a.stopId));
+  if (!mine.length) return it;
+  const legs = it.legs.slice();
+  legs[i] = { ...ride, nextDeps: [...mine, ...ride.nextDeps] };
+  return { ...it, legs };
+}
+
+function ItineraryCard({ it: planned, resolved, status, live, onClick }: { it: Itinerary; resolved: Resolved; status: Statuses; live?: Arrival[]; onClick: () => void }) {
   const now = useNow(15000);
+  const it = useMemo(() => withLiveTimes(planned, live), [planned, live]);
   const b = boardingOf(it, resolved, now);
   const mins = Math.max(0, Math.round((it.arr - it.dep) / 60));
-  // Each line of the way with something to say (a detour, an alert), once.
-  const flagged = [...new Map(it.legs.filter(l => l.kind === "ride").flatMap(options).map(o => {
+  // The lines of the way with something to say, by what they say: "עיקוף 125, 126, 3".
+  const flagged = new Map<string, { st: LineStatus; numbers: string[] }>();
+  const seenGroups = new Set<number>();
+  for (const o of it.legs.filter(l => l.kind === "ride").flatMap(options)) {
     const line = resolved.lines[o.lineId];
     const st = line ? status[line.groupId] : undefined;
-    return st ? [line.groupId, { number: line.number || o.shortName, st }] as const : null;
-  }).filter(x => !!x)).values()];
+    if (!st || seenGroups.has(line.groupId)) continue;
+    seenGroups.add(line.groupId);
+    const k = statusText(st);
+    const f = flagged.get(k) ?? flagged.set(k, { st, numbers: [] }).get(k)!;
+    if (isSerious(st)) f.st = st;
+    f.numbers.push(lineNum(line.number || o.shortName));
+  }
   return (
     // As Moovit lays a result out: the way there on the left, the whole trip in minutes large on the right.
     <button className="card it-card" onClick={onClick}>
@@ -319,8 +346,8 @@ function ItineraryCard({ it, resolved, status, onClick }: { it: Itinerary; resol
         <div className="dim" dir="auto">{T("at", "ב")} {b.stop}</div>
       </div>}
       {/* The lines' status, as Moovit's line list marks them, and how late the first one usually is here. */}
-      {(flagged.length > 0 || b) && <div className="it-status">
-        {flagged.map(f => <span key={f.number} className={"it-flag" + (isSerious(f.st) ? " serious" : "")}><StatusMark st={f.st} size={15} /><b>{lineNum(f.number)}</b><bdi>{statusText(f.st)}</bdi></span>)}
+      {(flagged.size > 0 || b) && <div className="it-status">
+        {[...flagged].map(([text, f]) => <span key={text} className={"it-flag" + (isSerious(f.st) ? " serious" : "")}><StatusMark st={f.st} size={15} /><bdi>{text}</bdi><b>{f.numbers.join(", ")}</b></span>)}
         {b && <DelayNote lineId={b.ride.lineId} stopId={b.ride.fromStop} short />}
       </div>}
       </div>

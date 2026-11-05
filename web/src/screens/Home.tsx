@@ -7,7 +7,7 @@ import {
   minutesTo, timeOf, isLive, inTraffic, agencyOf,
 } from "../core.ts";
 import { LineBadge, LiveWaves, NextTimes } from "../ui.tsx";
-import { SearchGlyph, TripGlyph, BriefcaseGlyph, PinGlyph, MoreGlyph, FromToGlyph, PayGlyph, PlayGlyph } from "../icons.tsx";
+import { SearchGlyph, TripGlyph, BriefcaseGlyph, PinGlyph, MoreGlyph, FromToGlyph, PayGlyph, PlayGlyph, ClockGlyph } from "../icons.tsx";
 import type { SavedRide } from "../ride.ts";
 import { useReorder, GripGlyph } from "../reorder.tsx";
 
@@ -171,9 +171,10 @@ export function Arrives({ b, now, short }: { b: Boarding; now: number; short?: b
     <b>{m <= 0 ? T("now", "עכשיו") : m >= 60 ? clock(at) : m}</b>{m > 0 && m < 60 && " " + T("min", "דק׳")}</span>;
   const lead = m <= 0 ? T("Here", "מגיע") : m >= 60 ? T("Here at", "מגיע ב-") : T("Here in", "מגיע בעוד");
   const soon = tooSoon && <span className="too-soon"> · {T("probably too soon", "כנראה מוקדם מדי")}</span>;
-  const then = after.length > 0 && <span className="dim"> · {T("then ", "אחר כך ")}<NextTimes ds={after} now={now} /></span>;
   const traffic = inTraffic(first) && <span className={"traffic" + (first!.traffic === 3 ? " heavy" : "")}>{T("Delay due to traffic", "עיכוב בגלל עומסי תנועה")}</span>;
-  if (short) return <span className="arrives short">{lead} {when}{soon}{then}<span className="dim"> · {T(`ride ${b.rideMin} min`, `נסיעה ${b.rideMin} דק׳`)}{b.stops > 0 && ` · ${stopsText(b.stops)}`}</span>{traffic && <> · {traffic}</>}</span>;
+  // In the list of ways, as Moovit lists them: every coming time in its own colour, live or by the timetable.
+  if (short) return <span className="arrives short">{lead} <span className={"lead-mark" + (live ? " live" : "")}>{live ? <LiveWaves /> : <ClockGlyph size={14} />}</span>
+    {first ? <NextTimes ds={[first, ...after]} now={now} lead /> : when}{soon}<span className="dim"> · {T(`ride ${b.rideMin} min`, `נסיעה ${b.rideMin} דק׳`)}{b.stops > 0 && ` · ${stopsText(b.stops)}`}</span>{traffic && <> · {traffic}</>}</span>;
   return (
     <div className="arrives">
       <div>{m <= 0 ? T("At your stop", "בתחנה שלך") : m >= 60 ? T("At your stop at", "בתחנה שלך ב-") : T("At your stop in", "בתחנה שלך בעוד")} {when}{soon}</div>

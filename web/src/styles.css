@@ -1040,3 +1040,21 @@ a.btn { text-decoration: none; }
 .line-cta .setup-btn:disabled { opacity: .55; }
 .line-cta .setup-btn.on, .line-cta .star-btn.on { background: var(--pane-solid); color: var(--accent-fg); }
 .line-page { position: relative; }
+
+/* Every coming time in its own colour, as Moovit shows them: by the timetable in the text's colour, live in the live
+   colour, and once the vehicle is on the map green on time, amber late, red very late, blue early. */
+.nt.live { color: var(--live); font-weight: 600; }
+.nt.seen.on-time { color: #30D158; }
+.nt.seen.late { color: #FF9F0A; }
+.nt.seen.very-late { color: #FF453A; }
+.nt.seen.early { color: #64A8FF; }
+:root[data-look="light"] .nt.seen.on-time { color: #1E9E47; }
+:root[data-look="light"] .nt.seen.late { color: #C76E00; }
+:root[data-look="light"] .nt.seen.very-late { color: #D7261B; }
+:root[data-look="light"] .nt.seen.early { color: #1C6FD6; }
+.nt.cancelled { color: var(--critical); text-decoration: line-through; }
+.next-times.lead { color: var(--text); }
+.next-times.lead .nt { font-size: 17px; font-weight: 700; letter-spacing: -.01em; }
+.next-times.lead > span:first-child .nt { font-size: 18px; }
+.lead-mark { display: inline-flex; vertical-align: -1px; margin-inline-end: 4px; color: var(--dim); }
+.lead-mark.live { color: var(--live); }

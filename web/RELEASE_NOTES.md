@@ -11,9 +11,10 @@
 
 ### Ways there
 
+- Each way lists its next three times at your stop, every one in its own colour, as Moovit does: "Here in 19, 29, 17:35". Live times have the live mark; once the bus is on the map they're green on time, amber late, red very late and blue early, and times from the timetable stay white. The list asks Moovit for the live times at your stops and keeps them fresh while it's open.
 - The same way at another time is no longer shown again as a card of its own. The list has each way once, at the time that suits best, and the other times are its "then 26, 56 min".
 - Every way says how many stops you ride: "ride 11 min · 8 stops".
-- A way whose line has an alert says so on its card, as the Lines tab does ("126 עיקוף"), and how late its first line usually is at your stop when Kav has seen enough. On the way's page, the ride shows the alert, and tapping it opens the whole notice.
+- A way whose lines have alerts says so on its card, as the Lines tab does, the lines with the same alert together ("עיקוף 126, 25"), and how late its first line usually is at your stop when Kav has seen enough. On the way's page, the ride shows the alert, and tapping it opens the whole notice.
 
 ## 3.3.1: Quick pay pays
 

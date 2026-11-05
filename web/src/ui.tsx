@@ -32,8 +32,7 @@ export function Eta({ d, now, inline }: { d: Departure; now: number; inline?: bo
   // As Moovit colours it: white while the vehicle's place isn't known; once it is (it's on the map), green on
   // time, amber late, red very late, blue early.
   const seen = isSeen(d);
-  const delay = d.rtUtc > 0 && d.staticUtc > 0 ? d.rtUtc - d.staticUtc : 0;
-  const tone = !seen ? "" : delay >= 300 ? " seen very-late" : delay >= 120 ? " seen late" : delay <= -120 ? " seen early" : " seen on-time";
+  const tone = toneOf(d);
   const label = mins <= 0 ? T("now", "עכשיו") : mins < 60 ? T(`in ${mins} minutes`, `בעוד ${mins} דקות`) : clock(t);
   return (
     <span className={"eta" + (live ? " live" : "") + tone + (mins <= 0 ? " arriving" : "") + (inline ? " inline" : "")}
@@ -45,16 +44,31 @@ export function Eta({ d, now, inline }: { d: Departure; now: number; inline?: bo
   );
 }
 
-// The ones after the first, small: "12, 25 min".
-export function NextTimes({ ds, now }: { ds: Departure[]; now: number }) {
+// As Moovit colours a time: white while the vehicle's place isn't known; once it is (it's on the map), green on
+// time, amber late, red very late, blue early.
+export function toneOf(d: Departure) {
+  if (!isSeen(d)) return "";
+  const delay = d.rtUtc > 0 && d.staticUtc > 0 ? d.rtUtc - d.staticUtc : 0;
+  return delay >= 300 ? " seen very-late" : delay >= 120 ? " seen late" : delay <= -120 ? " seen early" : " seen on-time";
+}
+
+// The ones after the first, small: "12, 25 min". Each time in its own colour, live or by the timetable, as Moovit
+// shows them. lead: the first one too, larger, as a list of ways shows them: "19, 29, 17:35".
+export function NextTimes({ ds, now, lead }: { ds: Departure[]; now: number; lead?: boolean }) {
   if (!ds.length) return null;
   // All within the hour: "12, 25 min". An hour or more away is its clock time: "12 min, 14:05".
   const allMinutes = ds.every(d => timeOf(d) - now < 3600) && ds.some(d => minutesTo(timeOf(d), now) > 0);
+  const lastMins = minutesTo(timeOf(ds[ds.length - 1]), now);
   const parts = ds.map(d => {
     const m = minutesTo(timeOf(d), now);
-    return m <= 0 ? T("now", "עכשיו") : m >= 60 ? clock(timeOf(d)) : allMinutes ? String(m) : T(`${m} min`, `${m} דק׳`);
+    if (m <= 0) return T("now", "עכשיו");
+    if (m >= 60) return clock(timeOf(d));
+    return allMinutes || lead ? String(m) : T(`${m} min`, `${m} דק׳`);
   });
-  return <span className="next-times">{parts.join(", ")}{allMinutes ? " " + T("min", "דק׳") : ""}</span>;
+  const unit = allMinutes || (lead && lastMins > 0 && lastMins < 60);
+  return <span className={"next-times" + (lead ? " lead" : "")}>{parts.map((p, k) => <span key={k}>{k > 0 && ", "}
+    <span className={"nt" + (isLive(ds[k]) ? " live" : "") + toneOf(ds[k]) + (isCancelled(ds[k]) ? " cancelled" : "")}>{p}</span></span>)}
+    {unit ? " " + T("min", "דק׳") : ""}</span>;
 }
 
 // Going back, the screen underneath fades up where it is instead of sliding in. Tabs crossfade the same way.
